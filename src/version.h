@@ -1,0 +1,6 @@
+#ifndef EXOMIND_VERSION_H
+#define EXOMIND_VERSION_H
+
+#define EXOMIND_VERSION "0.1.0"
+
+#endif
