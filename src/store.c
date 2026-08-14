@@ -664,3 +664,105 @@ void store_stats(store_t *s, uint64_t *entries, uint64_t *log_bytes,
     *opened_at = s->opened_at;
     pthread_mutex_unlock(&s->mu);
 }
+
+int store_snapshot(store_t *s, snap_fn_t fn, void *ctx)
+{
+    pthread_mutex_lock(&s->mu);
+    int rc = 0;
+    for (size_t b = 0; b < s->nbuckets; b++) {
+        for (entry_t *e = s->buckets[b]; e; e = e->next) {
+            if (expired(e))
+                continue;
+            char *v = read_val(s, e);
+            if (!v)
+                continue;
+            if (fn(ctx, e->key, e->klen, v, e->vsize) != 0) {
+                free(v);
+                rc = -1;
+                break;
+            }
+            free(v);
+        }
+        if (rc != 0)
+            break;
+    }
+    pthread_mutex_unlock(&s->mu);
+    return rc;
+}
+
+/*
+ * Restore: write every record into a fresh temp log, fsync, rename over the
+ * live log, then drop the in-memory index and rebuild it from the new file.
+ * The store mutex is held for the whole operation, so concurrent readers and
+ * writers see either the old or the new state, never a mix.
+ */
+int store_restore(store_t *s, const kv_t *kvs, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+        if (kvs[i].klen == 0 || kvs[i].klen > MAX_KEY ||
+            kvs[i].vlen > MAX_VAL)
+            return -1;
+    pthread_mutex_lock(&s->mu);
+
+    size_t plen = strlen(s->path);
+    char *tmp = xmalloc(plen + 5);
+    memcpy(tmp, s->path, plen);
+    memcpy(tmp + plen, ".tmp", 5);
+    int tfd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (tfd < 0) {
+        fprintf(stderr, "exomind: restore open failed: %s\n", strerror(errno));
+        free(tmp);
+        pthread_mutex_unlock(&s->mu);
+        return -1;
+    }
+    uint64_t pos = 0;
+    int64_t ts = now_ms();
+    int rc = 0;
+    for (size_t i = 0; i < n && rc == 0; i++)
+        rc = write_rec_at(s, tfd, &pos, kvs[i].key, (uint32_t)kvs[i].klen,
+                          kvs[i].val, (uint32_t)kvs[i].vlen, ts, 0, 0);
+    if (rc == 0 && fdatasync(tfd) != 0) {
+        fprintf(stderr, "exomind: restore sync failed: %s\n", strerror(errno));
+        rc = -1;
+    }
+    close(tfd);
+    if (rc != 0) {
+        unlink(tmp);
+        free(tmp);
+        pthread_mutex_unlock(&s->mu);
+        return -1;
+    }
+    if (rename(tmp, s->path) != 0) {
+        fprintf(stderr, "exomind: restore rename failed: %s\n",
+                strerror(errno));
+        unlink(tmp);
+        free(tmp);
+        pthread_mutex_unlock(&s->mu);
+        return -1;
+    }
+    free(tmp);
+    close(s->fd);
+    s->fd = open(s->path, O_RDWR);
+    if (s->fd < 0) {
+        fprintf(stderr, "exomind: reopen after restore failed: %s\n",
+                strerror(errno));
+        exit(1);
+    }
+    for (size_t b = 0; b < s->nbuckets; b++) {
+        entry_t *e = s->buckets[b];
+        while (e) {
+            entry_t *next = e->next;
+            free(e->key);
+            free(e);
+            e = next;
+        }
+        s->buckets[b] = NULL;
+    }
+    s->count = 0;
+    s->dead_bytes = 0;
+    s->size = 0;
+    store_load(s);
+    s->n_writes += n;
+    pthread_mutex_unlock(&s->mu);
+    return (int)n;
+}

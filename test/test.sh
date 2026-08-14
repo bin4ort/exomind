@@ -26,6 +26,14 @@ assert_contains() { # desc needle haystack
     esac
 }
 
+assert_not_contains() { # desc needle haystack
+    case "$3" in
+        *"$2"*) printf 'FAIL %s\n  expected not to contain: %s\n  actual: %s\n' "$1" "$2" "$3"
+           FAILS=$((FAILS + 1)) ;;
+        *) printf 'PASS %s\n' "$1" ;;
+    esac
+}
+
 start_server() {
     "$BIN" --host 127.0.0.1 --port "$PORT" --data "$DATA/exomind.dat" \
         "$@" 2>"$DATA/server.log" &
@@ -151,6 +159,58 @@ for p in $CPIDS; do wait "$p"; done
 for i in $(seq 1 50); do
     assert_eq "concurrent key c$i" "v$i" "$(curl -s "$BASE/get?key=c$i")"
 done
+stop_server
+
+echo "=== session 7: snapshot/restore ==="
+start_server
+
+printf 'tab\there\nline2\n\x01\x02\xff' > "$DATA/weird"
+assert_eq "set binary value" "ok" "$(curl -s -X POST "$BASE/set?key=w:bin" --data-binary @"$DATA/weird")"
+curl -s "$BASE/get?key=w:bin" > "$DATA/back"
+cmp -s "$DATA/weird" "$DATA/back"
+assert_eq "binary value round trip" "0" "$?"
+assert_eq "set s:a" "ok" "$(curl -s -X POST "$BASE/set?key=s:a" -d 'alpha')"
+assert_eq "set s:b" "ok" "$(curl -s -X POST "$BASE/set?key=s:b" -d 'beta')"
+assert_eq "set s:gone" "ok" "$(curl -s -X POST "$BASE/set?key=s:gone" -d 'x')"
+assert_eq "del s:gone" "ok" "$(curl -s -X DELETE "$BASE/del?key=s:gone")"
+
+curl -s "$BASE/snapshot" > "$DATA/snap1"
+N=$(curl -s "$BASE/list?limit=10000" | wc -l)
+assert_contains "snapshot header" "exomind-snapshot-v1" "$(curl -s "$BASE/snapshot")"
+assert_contains "snapshot has key" "w:bin" "$(cat "$DATA/snap1")"
+assert_not_contains "snapshot no tombstones" "s:gone" "$(cat "$DATA/snap1")"
+
+assert_eq "restore count" "ok $N" "$(curl -s -X POST "$BASE/restore" --data-binary @"$DATA/snap1")"
+curl -s "$BASE/get?key=w:bin" > "$DATA/back2"
+cmp -s "$DATA/weird" "$DATA/back2"
+assert_eq "binary value after restore" "0" "$?"
+assert_eq "restored value" "beta" "$(curl -s "$BASE/get?key=s:b")"
+
+assert_eq "restore bad format" "error: bad snapshot" "$(curl -s -X POST "$BASE/restore" -d 'garbage')"
+assert_eq "store intact after bad restore" "alpha" "$(curl -s "$BASE/get?key=s:a")"
+
+printf 'exomind-snapshot-v1\n' > "$DATA/snapempty"
+assert_eq "restore to empty" "ok 0" "$(curl -s -X POST "$BASE/restore" --data-binary @"$DATA/snapempty")"
+assert_eq "store empty after restore" "missing" "$(curl -s "$BASE/get?key=s:a")"
+assert_eq "list empty after restore" "" "$(curl -s "$BASE/list")"
+
+assert_eq "restore again" "ok $N" "$(curl -s -X POST "$BASE/restore" --data-binary @"$DATA/snap1")"
+stop_server
+
+echo "=== session 8: snapshot persists, restore respects auth ==="
+start_server
+curl -s "$BASE/get?key=w:bin" > "$DATA/back3"
+cmp -s "$DATA/weird" "$DATA/back3"
+assert_eq "binary value persisted" "0" "$?"
+assert_eq "restore persisted" "alpha" "$(curl -s "$BASE/get?key=s:a")"
+stop_server
+
+start_server --token sekret
+assert_eq "snapshot denied without auth" "error: unauthorized" "$(curl -s "$BASE/snapshot")"
+curl -s -H 'Authorization: Bearer sekret' "$BASE/snapshot" > "$DATA/snap2"
+assert_contains "snapshot ok with auth" "exomind-snapshot-v1" "$(cat "$DATA/snap2")"
+assert_eq "restore denied without auth" "error: unauthorized" "$(curl -s -X POST "$BASE/restore" --data-binary @"$DATA/snap2")"
+assert_eq "restore ok with auth" "ok $N" "$(curl -s -H 'Authorization: Bearer sekret' -X POST "$BASE/restore" --data-binary @"$DATA/snap2")"
 stop_server
 
 rm -rf "$DATA"

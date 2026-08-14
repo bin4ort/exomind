@@ -349,6 +349,8 @@ static const char *help_text(void)
         "| GET    | /notes       | notes, newest first (q=, limit=, offset=)|\n"
         "| POST   | /batch       | JSON array of ops; one result line each  |\n"
         "| GET    | /stats       | counters and health                      |\n"
+        "| GET    | /snapshot    | lossless dump of all live records        |\n"
+        "| POST   | /restore     | replace entire store from a snapshot     |\n"
         "\n"
         "## writing values\n"
         "\n"
@@ -378,6 +380,20 @@ static const char *help_text(void)
         "`POST /note` accepts raw text and answers `ok <key>`. `GET /notes`\n"
         "lists newest-first; `GET /notes?q=term` filters by content.\n"
         "\n"
+        "## snapshot & restore\n"
+        "\n"
+        "`GET /snapshot` dumps every live record (no tombstones, no expired\n"
+        "keys) as a plain-text, length-prefixed dump that `/restore` reads\n"
+        "back verbatim, so values may contain tabs, newlines or binary:\n"
+        "\n"
+        "    exomind-snapshot-v1\n"
+        "    <klen>\\t<vlen>\\t<key><value>\\n    (one record per line)\n"
+        "\n"
+        "`POST /restore` with such a body atomically replaces the entire\n"
+        "store (temp file + fsync + rename) and answers `ok <n_records>`.\n"
+        "A malformed body answers `error: bad snapshot` and leaves the store\n"
+        "untouched. TTLs and write timestamps are not preserved.\n"
+        "\n"
         "## auth\n"
         "\n"
         "Start with `--token secret` (or env EXOMIND_TOKEN), then send\n"
@@ -388,6 +404,85 @@ static const char *help_text(void)
         "Append-only log with CRC32 integrity checks, crash-safe truncation\n"
         "recovery, TTL expiry and automatic compaction. Interactive writes are\n"
         "fsynced before acknowledgement; batch ops share one fsync.\n";
+}
+
+typedef struct {
+    buf_t *out;
+} snap_ctx_t;
+
+static int snap_emit(void *ctx, const char *key, size_t klen,
+                     const char *val, size_t vlen)
+{
+    snap_ctx_t *c = ctx;
+    buf_printf(c->out, "%zu\t%zu\t", klen, vlen);
+    buf_put(c->out, key, klen);
+    buf_put(c->out, val, vlen);
+    buf_puts(c->out, "\n");
+    return 0;
+}
+
+/*
+ * Parse a snapshot body: "exomind-snapshot-v1\n" then one record per line of
+ * the form <klen>\t<vlen>\t<key><value>\n with raw, length-prefixed bytes.
+ * Returns 0 and a malloc'd kv array, or -1 on any malformed input.
+ */
+static int parse_snapshot(const char *body, size_t len, kv_t **out,
+                          size_t *n_out)
+{
+    static const char hdr[] = "exomind-snapshot-v1\n";
+    if (len < sizeof hdr - 1 || memcmp(body, hdr, sizeof hdr - 1) != 0)
+        return -1;
+    const char *p = body + sizeof hdr - 1;
+    const char *end = body + len;
+    kv_t *arr = NULL;
+    size_t cnt = 0, cap = 0;
+    while (p < end) {
+        char *ep;
+        long klen = strtol(p, &ep, 10);
+        if (ep == p || *ep != '\t')
+            goto fail;
+        p = ep + 1;
+        long vlen = strtol(p, &ep, 10);
+        if (ep == p || *ep != '\t')
+            goto fail;
+        if (klen <= 0 || klen > MAX_KEY || vlen < 0 || vlen > MAX_VAL)
+            goto fail;
+        p = ep + 1;
+        size_t reclen = (size_t)klen + (size_t)vlen;
+        if ((size_t)(end - p) < reclen)
+            goto fail;
+        const char *key = p;
+        const char *val = key + (size_t)klen;
+        p += reclen;
+        if (p >= end || *p != '\n')
+            goto fail;
+        p++;
+        if (cnt == cap) {
+            cap = cap ? cap * 2 : 64;
+            arr = xrealloc(arr, cap * sizeof(kv_t));
+        }
+        arr[cnt].key = xstrndup(key, (size_t)klen);
+        arr[cnt].klen = (size_t)klen;
+        arr[cnt].val = xmalloc((size_t)vlen + 1);
+        if (vlen)
+            memcpy(arr[cnt].val, val, (size_t)vlen);
+        arr[cnt].val[vlen] = 0;
+        arr[cnt].vlen = (size_t)vlen;
+        arr[cnt].has_val = 1;
+        arr[cnt].ts = 0;
+        arr[cnt].score = 0;
+        cnt++;
+    }
+    *out = arr;
+    *n_out = cnt;
+    return 0;
+fail:
+    for (size_t i = 0; i < cnt; i++) {
+        free(arr[i].key);
+        free(arr[i].val);
+    }
+    free(arr);
+    return -1;
 }
 
 static void route(req_t *r, store_t *s, buf_t *out, int *status,
@@ -847,6 +942,41 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             return;
         }
         store_sync(s);
+        return;
+    }
+
+    if (!strcmp(path, "/snapshot")) {
+        buf_puts(out, "exomind-snapshot-v1\n");
+        snap_ctx_t ctx = {.out = out};
+        if (store_snapshot(s, snap_emit, &ctx) != 0) {
+            *status = 500;
+            out->len = 0;
+            buf_puts(out, "error: store failure");
+        }
+        return;
+    }
+
+    if (!strcmp(path, "/restore")) {
+        if (strcmp(r->method, "POST")) {
+            *status = 405;
+            buf_puts(out, "error: use POST");
+            return;
+        }
+        kv_t *kvs = NULL;
+        size_t n = 0;
+        if (parse_snapshot(r->body, r->body_len, &kvs, &n) != 0) {
+            *status = 400;
+            buf_puts(out, "error: bad snapshot");
+            return;
+        }
+        int rc = store_restore(s, kvs, n);
+        kv_free(kvs, n);
+        if (rc < 0) {
+            *status = 500;
+            buf_puts(out, "error: store failure");
+            return;
+        }
+        buf_printf(out, "ok %d", rc);
         return;
     }
 
