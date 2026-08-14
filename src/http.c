@@ -101,12 +101,12 @@ static int read_request(int fd, req_t *r)
         n += (size_t)got;
         /* scan the newly arrived region for "\r\n\r\n" or "\n\n" */
         size_t from = n > (size_t)got + 4 ? n - (size_t)got - 4 : 0;
-        for (size_t i = from; i + 4 <= n; i++) {
-            if (memcmp(buf + i, "\r\n\r\n", 4) == 0) {
+        for (size_t i = from; i + 2 <= n; i++) {
+            if (i + 4 <= n && memcmp(buf + i, "\r\n\r\n", 4) == 0) {
                 hdr_end = i + 4;
                 break;
             }
-            if (i + 2 <= n && memcmp(buf + i, "\n\n", 2) == 0) {
+            if (memcmp(buf + i, "\n\n", 2) == 0) {
                 hdr_end = i + 2;
                 break;
             }
@@ -170,8 +170,11 @@ static int read_request(int fd, req_t *r)
         char *heol = strstr(hdrline, "\r\n");
         int last = 0;
         if (!heol) {
-            heol = hdrline + strlen(hdrline);
-            last = 1;
+            heol = strchr(hdrline, '\n');
+            if (!heol) {
+                heol = hdrline + strlen(hdrline);
+                last = 1;
+            }
         }
         *heol = 0;
         if (ci_prefix(hdrline, "content-length:")) {
