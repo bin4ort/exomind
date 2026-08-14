@@ -1,4 +1,9 @@
-/* exosched schedule parser: plain text "in 90s \"msg\"" / "at <epoch> \"msg\"". */
+/* exosched schedule parser: plain text
+ *   "in 90s \"msg\""                 one-shot relative
+ *   "at <epoch> \"msg\""             one-shot absolute
+ *   "every 10m \"msg\""              recurring (s|m|h|d)
+ *   "every 10m \"msg\" until <ep>"   recurring with a last-fire epoch
+ */
 #include "exosched.h"
 
 #include <ctype.h>
@@ -6,6 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+#define MAX_DURATION 315360000LL /* 10 years, mirrors exomind's ttl cap */
 
 static void skip_ws(const char **p, const char *end)
 {
@@ -22,15 +29,15 @@ static void trim_tail(char *s)
         s[--n] = 0;
 }
 
-/* parses "in <n><unit> ..." into fire_epoch */
-static int parse_in(const char **pp, const char *end, int64_t *fire_epoch,
-                    char *err, size_t errsz)
+/* parses "<n><unit>" and returns the duration in seconds */
+static int parse_duration(const char **pp, const char *end, int64_t *secs,
+                          char *err, size_t errsz)
 {
     const char *p = *pp;
     while (p < end && isdigit((unsigned char)*p))
         p++;
     if (p == *pp) {
-        snprintf(err, errsz, "bad schedule: expected a number after 'in'");
+        snprintf(err, errsz, "bad schedule: expected a number");
         return -1;
     }
     long long n = strtoll(*pp, NULL, 10);
@@ -51,12 +58,23 @@ static int parse_in(const char **pp, const char *end, int64_t *fire_epoch,
         return -1;
     }
     p = un + 1;
-    if (n <= 0 || n > 315360000) {
+    if (n <= 0 || (long long)(n * mult) > MAX_DURATION) {
         snprintf(err, errsz, "bad schedule: duration out of range");
         return -1;
     }
     *pp = p;
-    *fire_epoch = now_epoch() + n * mult;
+    *secs = (int64_t)n * mult;
+    return 0;
+}
+
+/* parses "in <n><unit> ..." into fire_epoch */
+static int parse_in(const char **pp, const char *end, int64_t *fire_epoch,
+                    char *err, size_t errsz)
+{
+    int64_t secs = 0;
+    if (parse_duration(pp, end, &secs, err, errsz) != 0)
+        return -1;
+    *fire_epoch = now_epoch() + secs;
     return 0;
 }
 
@@ -77,19 +95,70 @@ static int parse_at(const char **pp, const char *end, int64_t *fire_epoch,
         snprintf(err, errsz, "bad schedule: epoch out of range");
         return -1;
     }
+    if (epoch < now_epoch()) {
+        snprintf(err, errsz, "bad schedule: 'at' is in the past");
+        return -1;
+    }
     *pp = p;
     *fire_epoch = epoch;
     return 0;
 }
 
+/* parses "every <n><unit> ..." into repeat_s; the first fire is now+repeat */
+static int parse_every(const char **pp, const char *end, int64_t *repeat_s,
+                       int64_t *fire_epoch, char *err, size_t errsz)
+{
+    int64_t secs = 0;
+    if (parse_duration(pp, end, &secs, err, errsz) != 0)
+        return -1;
+    *repeat_s = secs;
+    *fire_epoch = now_epoch() + secs;
+    return 0;
+}
+
+/* parses "until <epoch>" (optional suffix of the every form) */
+static int parse_until(const char **pp, const char *end, int64_t *until,
+                       char *err, size_t errsz)
+{
+    skip_ws(pp, end);
+    if (end - *pp >= 5 && strncmp(*pp, "until", 5) == 0) {
+        *pp += 5;
+        skip_ws(pp, end);
+        const char *p = *pp;
+        while (p < end && isdigit((unsigned char)*p))
+            p++;
+        if (p == *pp) {
+            snprintf(err, errsz, "bad schedule: expected an epoch after 'until'");
+            return -1;
+        }
+        long long epoch = strtoll(*pp, NULL, 10);
+        if (epoch <= 0 || epoch > 4102444800LL) {
+            snprintf(err, errsz, "bad schedule: until epoch out of range");
+            return -1;
+        }
+        *pp = p;
+        *until = epoch;
+    }
+    return 0;
+}
+
 int parse_schedule(const char *body, size_t len, int64_t *fire_epoch,
+                   int64_t *repeat_s, int64_t *until_epoch,
                    char **msg, char *err, size_t errsz)
 {
     const char *p = body;
     const char *end = body + len;
+    *repeat_s = 0;
+    *until_epoch = 0;
     skip_ws(&p, end);
 
-    if (end - p >= 2 && p[0] == 'i' && p[1] == 'n') {
+    if (end - p >= 5 && strncmp(p, "every", 5) == 0 &&
+        (p + 5 >= end || p[5] == ' ' || p[5] == '\t')) {
+        p += 5;
+        skip_ws(&p, end);
+        if (parse_every(&p, end, repeat_s, fire_epoch, err, errsz) != 0)
+            return -1;
+    } else if (end - p >= 2 && p[0] == 'i' && p[1] == 'n') {
         p += 2;
         skip_ws(&p, end);
         if (parse_in(&p, end, fire_epoch, err, errsz) != 0)
@@ -101,8 +170,8 @@ int parse_schedule(const char *body, size_t len, int64_t *fire_epoch,
             return -1;
     } else {
         snprintf(err, errsz,
-                 "bad schedule: expected 'in <n><s|m|h|d> \"msg\"' or "
-                 "'at <epoch> \"msg\"'");
+                 "bad schedule: expected 'in <n><s|m|h|d> \"msg\"', "
+                 "'at <epoch> \"msg\"' or 'every <n><s|m|h|d> \"msg\"'");
         return -1;
     }
 
@@ -144,14 +213,37 @@ int parse_schedule(const char *body, size_t len, int64_t *fire_epoch,
             snprintf(err, errsz, "bad schedule: unterminated quote");
             return -1;
         }
+        *msg = b.p ? b.p : xstrdup("");
         skip_ws(&p, end);
         if (p < end) {
-            buf_free(&b);
-            snprintf(err, errsz, "bad schedule: trailing garbage after quote");
+            if (*repeat_s > 0 && strncmp(p, "until", 5) == 0 &&
+                (p + 5 >= end || p[5] == ' ' || p[5] == '\t')) {
+                if (parse_until(&p, end, until_epoch, err, errsz) != 0) {
+                    free(*msg);
+                    *msg = NULL;
+                    return -1;
+                }
+                skip_ws(&p, end);
+                if (p < end) {
+                    free(*msg);
+                    *msg = NULL;
+                    snprintf(err, errsz,
+                             "bad schedule: trailing garbage after 'until'");
+                    return -1;
+                }
+            } else {
+                free(*msg);
+                *msg = NULL;
+                snprintf(err, errsz, "bad schedule: trailing garbage after quote");
+                return -1;
+            }
+        }
+    } else {
+        if (*repeat_s > 0 && (end - p >= 5 && strncmp(p, "until", 5) == 0)) {
+            snprintf(err, errsz,
+                     "bad schedule: 'until' requires a quoted message");
             return -1;
         }
-        *msg = b.p ? b.p : xstrdup("");
-    } else {
         if (p >= end) {
             snprintf(err, errsz, "bad schedule: missing message");
             return -1;
@@ -169,6 +261,13 @@ int parse_schedule(const char *body, size_t len, int64_t *fire_epoch,
             return -1;
         }
         *msg = m;
+    }
+
+    if (*repeat_s > 0 && *until_epoch > 0 && *until_epoch < *fire_epoch) {
+        free(*msg);
+        *msg = NULL;
+        snprintf(err, errsz, "bad schedule: 'until' is before the first fire");
+        return -1;
     }
     return 0;
 }

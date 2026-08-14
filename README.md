@@ -16,6 +16,7 @@ from zero. exomind gives agents:
 - **Durable memory** — key/value facts, decisions, and state that survive restarts
 - **A knowledge feed** — timestamped notes that accumulate into a searchable log
 - **Ranked search** — substring search across all keys *and* values in milliseconds
+- **Semantic recall** — `/sim` finds the nearest stored vectors to any text, embedded locally (no model, no network)
 - **Batch operations** — 10,000 ops in one round trip, one line of result each
 - **TTLs** — facts that expire on their own
 
@@ -57,6 +58,10 @@ Self-describing: `curl localhost:7654/` prints the full spec. In short:
 | DELETE | `/del?key=k` | delete |
 | GET | `/list` | keys (`prefix=`, `limit=`, `offset=`, `sort=desc`) |
 | GET | `/search?q=t` | ranked substring search over keys and values |
+| GET | `/embed?key=k` | read a stored vector (`dim 256 i:v ...`) |
+| POST | `/embed?key=k` | embed raw body, store as `vec:<k>` |
+| DELETE | `/embed?key=k` | delete a vector |
+| POST | `/sim?k=10` | nearest vectors to the body, one `key<TAB>sim` per line |
 | POST | `/note` | store body as a timestamped note, answers `ok <key>` |
 | GET | `/notes` | notes newest-first (`q=`, `limit=`, `offset=`) |
 | POST | `/batch` | JSON array of ops; one result line per op |
@@ -127,6 +132,37 @@ exomind-snapshot-v1
 
 TTLs and write timestamps are not preserved.
 
+### Vectors (exovec)
+
+`POST /embed?key=k` hashes the raw body into a fixed 256-dimension count
+vector and stores it durably under the ordinary key `vec:<k>` — vectors are
+ordinary keys, so TTLs (`ttl=60`), scoping, snapshots, restore and crash
+recovery all apply to them as-is. Answer: `ok <k> 256`.
+
+Embedding is local and deterministic — no model, no network, no deps: the
+text is lowercased and split into words on any non-alphanumeric byte; every
+character 3-gram of a word is FNV-1a-hashed mod 256 into the count vector,
+and words shorter than 3 characters are hashed whole. Counts are clamped to
+255; cosine similarity divides by both norms, so the raw counts need no
+normalization. The same text always produces the same vector.
+
+`GET /embed?key=k` answers `dim 256` followed by each nonzero dimension as
+`index:count` pairs, ascending by index: `dim 256 12:3 45:1`. A value under
+`vec:k` that is not a well-formed vector answers `error: bad vector`.
+
+`POST /sim` embeds the body and answers the top-k nearest stored vectors
+(default 10, `k=` up to 1000), one per line, best first:
+`key<TAB>similarity` — cosine in [0,1] at 6 decimals, `vec:` stripped from
+the output key. Vectors sharing no dimension, and an empty query, match
+nothing. `json=1` switches to `{"results":[{"key":"k","sim":0.934512},...]}`.
+An in-memory index (rebuilt at load, kept in sync with writes) makes the
+scan cover only vectors: ~15 ms over 10,000 of them.
+
+`DELETE /embed?key=k` removes the vector. `DELETE /del?key=k` also drops the
+vector for `k` when the token may write it (the reply reflects only the main
+key). `/batch` supports `embed` ops: `["embed","k","text"]` or
+`{"embed":"k","value":"text"}` → `embed k ok 256`.
+
 ### Scoped access tokens
 
 With `--tokens <file>` (or alongside `--token`/`EXOMIND_TOKEN`), each line of
@@ -140,11 +176,14 @@ logro:ro:scope=logs/*    # read-only + prefix-scoped
 ```
 
 Prefix scopes are enforced on `/get /set /append /del /list /search /notes
-/batch /snapshot`; violations answer `error: denied` (403). Read-only tokens
-are blocked on `/set /append /del /note /restore` and write elements of
-`/batch` (per-element `error: denied`-style `<op> <key> denied` lines).
-`/restore` additionally requires a full-access token. Without `--token`/
-`--tokens` auth stays off and everything is allowed.
+/batch /snapshot /embed /sim`; violations answer `error: denied` (403).
+Vectors live under `vec:` keys, so a scope like `logs:scope=logs/*` covers
+vectors only as `vlogs:scope=vec:logs/*` (`scope=vec:*` for all vectors).
+Read-only tokens are blocked on `/set /append /del /note /restore`,
+POST/DELETE `/embed`, and write elements of `/batch` (per-element
+`error: denied`-style `<op> <key> denied` lines), but may GET `/embed` and
+POST `/sim`. `/restore` additionally requires a full-access token. Without
+`--token`/`--tokens` auth stays off and everything is allowed.
 
 ## Internals
 
@@ -162,6 +201,11 @@ are blocked on `/set /append /del /note /restore` and write elements of
   until the rename succeeds).
 - **Auth scopes** — extra tokens from a `--tokens` file can be read-only and/or
   prefix-scoped; every endpoint enforces the scope before touching the store.
+- **Vector index (exovec)** — every `vec:` key with a well-formed vector is
+  mirrored in an in-memory index (rebuilt at load from the log, updated
+  incrementally on write/delete, dropped on tombstone and expiry), so `/sim`
+  scans only vectors, never the log. Sparse storage: a vector with n nonzero
+  dims costs 7 + 2n bytes under its `vec:` key.
 - **TTLs** — expiry is checked lazily on read/query and skipped during
   compaction; expired keys never leak back.
 - **Concurrency** — thread per connection, one mutex over the store. The test
@@ -176,19 +220,24 @@ Measured on a desktop Linux box, 10,000 records of 100 bytes each:
 | operation | time |
 |-----------|------|
 | 10,000 sets (one batch request, one fsync) | ~1.1 s |
+| 10,000 embeds (one batch request, one fsync) | ~0.6 s |
 | 10,000 gets (one batch request) | ~32 ms |
 | substring search across 10k records | ~31 ms |
+| /sim nearest-vectors over 10k vectors | ~15 ms |
 
 ## Tests
 
 `make test` covers every endpoint, persistence across restarts, tombstone
 survival, TTL expiry, bearer auth, SIGKILL crash recovery, concurrent writers,
 snapshot round-trips (including binary values), restore atomicity and
-malformed-input safety, and scoped/read-only token enforcement.
+malformed-input safety, scoped/read-only token enforcement, and the vector
+layer (embed round-trips, /sim ranking, TTLs on vectors, /del cascade,
+snapshot/restore of vectors, SIGKILL mid-embed-batch).
 
 ## Roadmap
 
-- Vector-ish embedding storage for semantic recall
+Delivered: exovec (vector-ish embedding storage for semantic recall) landed
+in 0.3.0. The 0.2.0 roadmap is complete.
 
 ## The stack so far
 

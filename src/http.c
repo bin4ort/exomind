@@ -99,24 +99,28 @@ int http_load_tokens(const char *path)
         char *prefix = NULL;
         int bad = 0;
         while (mod && *mod) {
-            char *next = strchr(mod, ':');
-            if (next)
-                *next = 0;
-            if (!strcmp(mod, "ro")) {
-                readonly = 1;
-            } else if (strncmp(mod, "scope=", 6) == 0) {
+            if (strncmp(mod, "scope=", 6) == 0) {
                 prefix = xstrdup(mod + 6);
                 size_t pl = strlen(prefix);
                 if (pl && prefix[pl - 1] == '*')
                     prefix[pl - 1] = 0;
+                mod = NULL; /* scope value may itself contain ':' */
             } else if (strncmp(mod, "prefix=", 7) == 0) {
                 prefix = xstrdup(mod + 7);
+                mod = NULL;
             } else {
-                fprintf(stderr, "exomind: tokens: bad modifier %s, skipping\n",
-                        mod);
-                bad = 1;
+                char *next = strchr(mod, ':');
+                if (next)
+                    *next = 0;
+                if (!strcmp(mod, "ro")) {
+                    readonly = 1;
+                } else {
+                    fprintf(stderr, "exomind: tokens: bad modifier %s, skipping\n",
+                            mod);
+                    bad = 1;
+                }
+                mod = next ? next + 1 : NULL;
             }
-            mod = next ? next + 1 : NULL;
         }
         if (bad) {
             free(prefix);
@@ -523,6 +527,51 @@ static char *snippet(const char *v, size_t n)
     return e;
 }
 
+/*
+ * Delete key and, when the token may write it, also drop the associated
+ * vector (vec:<key>). Returns whether the main key existed.
+ */
+static int del_key_cascade(store_t *s, const tok_t *tok, const char *key,
+                           size_t klen)
+{
+    int existed = store_del(s, key, klen);
+    if (klen + EXO_VEC_KEY_PREFIX_LEN <= MAX_KEY) {
+        char vkey[MAX_KEY + 1];
+        memcpy(vkey, EXO_VEC_KEY_PREFIX, EXO_VEC_KEY_PREFIX_LEN);
+        memcpy(vkey + EXO_VEC_KEY_PREFIX_LEN, key, klen);
+        size_t vklen = klen + EXO_VEC_KEY_PREFIX_LEN;
+        if (tok_can_write(tok, vkey, vklen))
+            store_del(s, vkey, vklen);
+    }
+    return existed;
+}
+
+/*
+ * Compute the embedding of body and store it durably under vec:<k>.
+ * Returns 1 stored, 0 denied, -1 key too long or store failure.
+ * The caller formats the reply line.
+ */
+static int http_embed(store_t *s, const tok_t *tok, const char *k, size_t klen,
+                      const char *body, size_t blen, long ttl)
+{
+    if (klen == 0 || klen + EXO_VEC_KEY_PREFIX_LEN > MAX_KEY)
+        return -1;
+    char vkey[MAX_KEY + 1];
+    memcpy(vkey, EXO_VEC_KEY_PREFIX, EXO_VEC_KEY_PREFIX_LEN);
+    memcpy(vkey + EXO_VEC_KEY_PREFIX_LEN, k, klen);
+    size_t vklen = klen + EXO_VEC_KEY_PREFIX_LEN;
+    if (!tok_can_write(tok, vkey, vklen))
+        return 0;
+    uint8_t idx[EXO_VEC_DIM], val[EXO_VEC_DIM], nnz;
+    vec_embed(body, blen, idx, val, &nnz);
+    char *enc = NULL;
+    size_t elen = 0;
+    vec_encode(nnz, idx, val, &enc, &elen);
+    int rc = store_set(s, vkey, vklen, enc, elen, ttl, 0);
+    free(enc);
+    return rc == 0 ? 1 : -1;
+}
+
 static const char *help_text(void)
 {
     return
@@ -544,6 +593,10 @@ static const char *help_text(void)
         "| DELETE | /del?key=k    | delete key                               |\n"
         "| GET    | /list         | keys (prefix=, limit=, offset=, sort=)   |\n"
         "| GET    | /search?q=t   | ranked substring search over keys+values |\n"
+        "| GET    | /embed?key=k  | read stored vector (`dim 256 i:v ...`)   |\n"
+        "| POST   | /embed?key=k  | embed raw body, store as `vec:<k>`       |\n"
+        "| DELETE | /embed?key=k  | delete vector                            |\n"
+        "| POST   | /sim?k=10     | nearest vectors to body, one per line    |\n"
         "| POST   | /note        | store body as a timestamped note         |\n"
         "| GET    | /notes       | notes, newest first (q=, limit=, offset=)|\n"
         "| POST   | /batch       | JSON array of ops; one result line each  |\n"
@@ -567,9 +620,9 @@ static const char *help_text(void)
         "\n"
         "One round-trip for many operations. Elements are arrays\n"
         "`[\"set\",\"k\",\"v\"]`, `[\"get\",\"k\"]`, `[\"del\",\"k\"]`,\n"
-        "`[\"append\",\"k\",\"v\"]` or objects\n"
+        "`[\"append\",\"k\",\"v\"]`, `[\"embed\",\"k\",\"text\"]` or objects\n"
         "`{\"set\":\"k\",\"value\":\"v\",\"ttl\":60}`. Result lines look like\n"
-        "`set k ok`, `get k <value>`, `del k ok|missing`.\n"
+        "`set k ok`, `get k <value>`, `del k ok|missing`, `embed k ok <dim>`.\n"
         "`note` is not a batch op; store notes with POST /note.\n"
         "\n"
         "    curl -X POST localhost:7654/batch \\\n"
@@ -594,6 +647,41 @@ static const char *help_text(void)
         "A malformed body answers `error: bad snapshot` and leaves the store\n"
         "untouched. TTLs and write timestamps are not preserved.\n"
         "\n"
+        "## vectors (exovec)\n"
+        "\n"
+        "`POST /embed?key=k` hashes the raw body into a fixed 256-dimension\n"
+        "count vector and stores it durably under the ordinary key `vec:<k>`\n"
+        "(vectors are ordinary keys: TTLs, snapshots, restore, scoping and\n"
+        "crash recovery all apply to them as-is). Answer: `ok <k> 256`.\n"
+        "`ttl=` works: `POST /embed?key=k&ttl=60`.\n"
+        "\n"
+        "Embedding is local and deterministic, no model or network: the text\n"
+        "is lowercased and split into words on any non-alphanumeric byte;\n"
+        "each character 3-gram of a word is FNV-1a-hashed mod 256 into the\n"
+        "count vector, and words shorter than 3 characters are hashed whole.\n"
+        "Counts are clamped to 255; cosine similarity divides by both norms,\n"
+        "so raw counts need no normalization step. The same text always\n"
+        "produces the same vector.\n"
+        "\n"
+        "`GET /embed?key=k` answers `dim 256` followed by each nonzero\n"
+        "dimension as `index:count`, ascending by index:\n"
+        "`dim 256 12:3 45:1`. A key whose value is not a well-formed vector\n"
+        "answers `error: bad vector`; vectors stored under other keys are\n"
+        "never fed into the sim index (and /append on a vec: key corrupts\n"
+        "it, so don't).\n"
+        "\n"
+        "`POST /sim` embeds the body and answers the top-k nearest stored\n"
+        "vectors (default 10, `k=` up to 1000), one per line, best first:\n"
+        "`key<TAB>similarity` where similarity is cosine in [0,1] with 6\n"
+        "decimals and the `vec:` prefix is stripped. Vectors with no shared\n"
+        "dimension and an empty query match nothing. `json=1` switches to\n"
+        "`{\"results\":[{\"key\":\"k\",\"sim\":0.934512},...]}`. An\n"
+        "in-memory index (rebuilt at load, kept in sync with writes) makes\n"
+        "the scan cover only vectors.\n"
+        "\n"
+        "`DELETE /embed?key=k` removes the vector. `DELETE /del?key=k` also\n"
+        "drops the vector for `k` when the token is allowed to write it.\n"
+        "\n"
         "## auth\n"
         "\n"
         "Start with `--token secret` (or env EXOMIND_TOKEN) to require\n"
@@ -608,11 +696,15 @@ static const char *help_text(void)
         "\n"
         "Prefix-scoped tokens can only read and write keys matching their\n"
         "prefix; enforced on /get /set /append /del /list /search /notes\n"
-        "/batch /snapshot. Read-only tokens are denied on /set /append /del\n"
-        "/note /restore and any write element of /batch. Violations answer\n"
-        "`error: denied` (403). /restore additionally requires a full-access\n"
-        "token; a scoped /snapshot dumps only in-scope records. Without\n"
-        "--token/--tokens auth stays off and everything is allowed.\n"
+        "/batch /snapshot /embed /sim. Vectors live under `vec:` keys, so a\n"
+        "scope like `logs:scope=logs/*` covers vectors only with\n"
+        "`scope=vec:logs/*`; scope `vec:*` for all vectors. Read-only tokens\n"
+        "are denied on /set /append /del /note /restore, POST and DELETE\n"
+        "/embed, and any write element of /batch, but may GET /embed and\n"
+        "POST /sim. Violations answer `error: denied` (403). /restore\n"
+        "additionally requires a full-access token; a scoped /snapshot dumps\n"
+        "only in-scope records. Without --token/--tokens auth stays off and\n"
+        "everything is allowed.\n"
         "\n"
         "## durability\n"
         "\n"
@@ -988,7 +1080,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             buf_puts(out, "error: denied");
             return;
         }
-        int existed = store_del(s, key, strlen(key));
+        int existed = del_key_cascade(s, tok, key, strlen(key));
         store_sync(s);
         if (existed < 0) {
             *status = 500;
@@ -999,6 +1091,133 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
         } else {
             buf_puts(out, "ok");
         }
+        return;
+    }
+
+    if (!strcmp(path, "/embed")) {
+        int kr = qp_key(r->query, key, sizeof key);
+        if (kr == 2) {
+            *status = 400;
+            buf_puts(out, "error: key too long");
+            return;
+        }
+        if (!kr) {
+            *status = 400;
+            buf_puts(out, "error: missing key");
+            return;
+        }
+        if (!key[0]) {
+            *status = 400;
+            buf_puts(out, "error: empty key");
+            return;
+        }
+        if (strlen(key) + EXO_VEC_KEY_PREFIX_LEN > MAX_KEY) {
+            *status = 400;
+            buf_puts(out, "error: key too long");
+            return;
+        }
+        char vkey[MAX_KEY + 1];
+        size_t vklen = strlen(key) + EXO_VEC_KEY_PREFIX_LEN;
+        memcpy(vkey, EXO_VEC_KEY_PREFIX, EXO_VEC_KEY_PREFIX_LEN);
+        memcpy(vkey + EXO_VEC_KEY_PREFIX_LEN, key, strlen(key));
+
+        if (!strcmp(r->method, "POST")) {
+            int rc = http_embed(s, tok, key, strlen(key), r->body,
+                                r->body_len, qp_int(r->query, "ttl", 0));
+            if (rc == 0) {
+                *status = 403;
+                buf_puts(out, "error: denied");
+            } else if (rc < 0) {
+                *status = 500;
+                buf_puts(out, "error: store failure");
+            } else {
+                store_sync(s);
+                buf_printf(out, "ok %s %d", key, EXO_VEC_DIM);
+            }
+            return;
+        }
+        if (!strcmp(r->method, "DELETE")) {
+            if (!tok_can_write(tok, vkey, vklen)) {
+                *status = 403;
+                buf_puts(out, "error: denied");
+                return;
+            }
+            int existed = store_del(s, vkey, vklen);
+            store_sync(s);
+            if (existed < 0) {
+                *status = 500;
+                buf_puts(out, "error: store failure");
+            } else if (!existed) {
+                *status = 404;
+                buf_puts(out, "missing");
+            } else {
+                buf_puts(out, "ok");
+            }
+            return;
+        }
+        if (!tok_allows_key(tok, vkey, vklen)) {
+            *status = 403;
+            buf_puts(out, "error: denied");
+            return;
+        }
+        size_t vlen = 0;
+        char *v = store_get(s, vkey, vklen, &vlen, NULL);
+        if (!v) {
+            *status = 404;
+            buf_puts(out, "missing");
+            return;
+        }
+        uint8_t idx[EXO_VEC_DIM], val[EXO_VEC_DIM], nnz;
+        if (vec_parse(v, vlen, idx, val, &nnz) != 0) {
+            free(v);
+            *status = 500;
+            buf_puts(out, "error: bad vector");
+            return;
+        }
+        free(v);
+        buf_printf(out, "dim %d", EXO_VEC_DIM);
+        for (uint8_t i = 0; i < nnz; i++)
+            buf_printf(out, " %u:%u", (unsigned)idx[i], (unsigned)val[i]);
+        return;
+    }
+
+    if (!strcmp(path, "/sim")) {
+        if (strcmp(r->method, "POST")) {
+            *status = 405;
+            buf_puts(out, "error: use POST");
+            return;
+        }
+        long k = qp_int(r->query, "k", 10);
+        if (k <= 0 || k > 1000)
+            k = 10;
+        uint8_t idx[EXO_VEC_DIM], val[EXO_VEC_DIM], nnz;
+        vec_embed(r->body, r->body_len, idx, val, &nnz);
+        kv_t *kvs = NULL;
+        size_t n = 0;
+        store_vec_sim(s, idx, val, nnz, (int)k, &kvs, &n);
+        filter_scope(kvs, &n, tok);
+        if (qp_str(r->query, "json", tmp, sizeof tmp)) {
+            *ctype = "application/json; charset=utf-8";
+            buf_puts(out, "{\"results\":[");
+            for (size_t i = 0; i < n; i++) {
+                if (i)
+                    buf_puts(out, ",");
+                char *jk = json_escape(kvs[i].key + EXO_VEC_KEY_PREFIX_LEN,
+                                       kvs[i].klen - EXO_VEC_KEY_PREFIX_LEN);
+                buf_printf(out, "{\"key\":%s,\"sim\":%lld.%06lld}", jk,
+                           (long long)(kvs[i].score / 1000000),
+                           (long long)(kvs[i].score % 1000000));
+                free(jk);
+            }
+            buf_puts(out, "]}");
+        } else {
+            for (size_t i = 0; i < n; i++)
+                buf_printf(out, "%s\t%lld.%06lld\n",
+                           kvs[i].key + EXO_VEC_KEY_PREFIX_LEN,
+                           (long long)(kvs[i].score / 1000000),
+                           (long long)(kvs[i].score % 1000000));
+        }
+        kv_free(kvs, n);
         return;
     }
 
@@ -1206,10 +1425,20 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
                         if (!tok_can_write(tok, k, strlen(k))) {
                             buf_printf(out, "del %s denied\n", k);
                         } else {
-                            int existed = store_del(s, k, strlen(k));
+                            int existed = del_key_cascade(s, tok, k, strlen(k));
                             buf_printf(out, "del %s %s\n", k,
                                        existed > 0 ? "ok" : "missing");
                         }
+                    } else if (!strcmp(op, "embed") && nstr >= 3) {
+                        int rc = http_embed(s, tok, k, strlen(k), strs[2],
+                                            strlen(strs[2]),
+                                            nstr >= 4 ? strtol(strs[3], NULL, 10) : 0);
+                        if (rc == 1)
+                            buf_printf(out, "embed %s ok %d\n", k, EXO_VEC_DIM);
+                        else if (rc == 0)
+                            buf_printf(out, "embed %s denied\n", k);
+                        else
+                            buf_printf(out, "embed %s error\n", k);
                     } else {
                         buf_puts(out, "error: bad batch op\n");
                     }
@@ -1224,6 +1453,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
                 char *op_get = json_field(elem, elen, "get");
                 char *op_del = json_field(elem, elen, "del");
                 char *op_app = json_field(elem, elen, "append");
+                char *op_emb = json_field(elem, elen, "embed");
                 char *val = json_field(elem, elen, "value");
                 char *ttls = json_field(elem, elen, "ttl");
                 long ttl = ttls ? strtol(ttls, NULL, 10) : 0;
@@ -1247,6 +1477,16 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
                         buf_printf(out, "append %s %s\n", op_app,
                                    rc == 0 ? "ok" : "error");
                     }
+                } else if (op_emb) {
+                    int rc = http_embed(s, tok, op_emb, strlen(op_emb),
+                                        val ? val : "",
+                                        val ? strlen(val) : 0, ttl);
+                    if (rc == 1)
+                        buf_printf(out, "embed %s ok %d\n", op_emb, EXO_VEC_DIM);
+                    else if (rc == 0)
+                        buf_printf(out, "embed %s denied\n", op_emb);
+                    else
+                        buf_printf(out, "embed %s error\n", op_emb);
                 } else if (op_get) {
                     if (!tok_allows_key(tok, op_get, strlen(op_get))) {
                         buf_printf(out, "get %s denied\n", op_get);
@@ -1267,7 +1507,8 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
                     if (!tok_can_write(tok, op_del, strlen(op_del))) {
                         buf_printf(out, "del %s denied\n", op_del);
                     } else {
-                        int existed = store_del(s, op_del, strlen(op_del));
+                        int existed = del_key_cascade(s, tok, op_del,
+                                                      strlen(op_del));
                         buf_printf(out, "del %s %s\n", op_del,
                                    existed > 0 ? "ok" : "missing");
                     }
@@ -1278,6 +1519,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
                 free(op_get);
                 free(op_del);
                 free(op_app);
+                free(op_emb);
                 free(val);
                 free(ttls);
             } else {
