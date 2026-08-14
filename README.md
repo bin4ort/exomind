@@ -188,8 +188,16 @@ malformed-input safety, and scoped/read-only token enforcement.
 
 ## Roadmap
 
-- Multi-client WebSocket/push for timers and scheduled reminders
 - Vector-ish embedding storage for semantic recall
+
+## The stack so far
+
+- **exomind** — durable external memory (this repo). Passive: agents pull.
+- **exosched** — `exosched/` in this repo. The alarm clock for AI agents:
+  scheduled reminders (`POST /remind`) that fire and push to every connected
+  WebSocket client (`GET /ws`), with all timer state persisted inside exomind
+  (`exosched:timer:*` keys, TTL'd) and fired/missed events logged as notes.
+  Build with `make exosched`, test with `make test-exosched`.
 
 ## License
 
