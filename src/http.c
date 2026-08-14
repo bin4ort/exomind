@@ -421,6 +421,7 @@ static const char *help_text(void)
         "`[\"append\",\"k\",\"v\"]` or objects\n"
         "`{\"set\":\"k\",\"value\":\"v\",\"ttl\":60}`. Result lines look like\n"
         "`set k ok`, `get k <value>`, `del k ok|missing`.\n"
+        "`note` is not a batch op; store notes with POST /note.\n"
         "\n"
         "    curl -X POST localhost:7654/batch \\\n"
         "      -d '[{\"set\":\"a\",\"value\":\"1\"},{\"get\":\"a\"},{\"del\":\"a\"}]'\n"
