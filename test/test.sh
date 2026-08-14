@@ -383,6 +383,178 @@ assert_contains "spec documents note limit" "not a batch op" "$(curl -s "$BASE/"
 
 stop_server
 
+echo "=== session 15: vectors (exovec) core ==="
+start_server
+
+assert_eq "sim with no vectors" "" "$(curl -s -X POST "$BASE/sim" -d 'nothing here yet')"
+
+assert_eq "embed post" "ok doc:alpha 256" "$(curl -s -X POST "$BASE/embed?key=doc:alpha" -d 'the quick brown fox jumps over the lazy dog')"
+assert_contains "embed get dim" "dim 256" "$(curl -s "$BASE/embed?key=doc:alpha")"
+assert_contains "embed get pairs" ":" "$(curl -s "$BASE/embed?key=doc:alpha")"
+assert_eq "embed get missing" "missing" "$(curl -s "$BASE/embed?key=doc:nope")"
+assert_eq "embed get missing status" "404" "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/embed?key=doc:nope")"
+assert_eq "embed missing key" "error: missing key" "$(curl -s -X POST "$BASE/embed" -d 'hi')"
+assert_eq "embed empty key" "error: empty key" "$(curl -s -X POST "$BASE/embed?key=" -d 'hi')"
+assert_eq "embed get status" "200" "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/embed?key=doc:alpha")"
+
+v1=$(curl -s "$BASE/embed?key=doc:alpha")
+curl -s -X POST "$BASE/embed?key=doc:alpha" -d 'the quick brown fox jumps over the lazy dog' > /dev/null
+v2=$(curl -s "$BASE/embed?key=doc:alpha")
+assert_eq "embed deterministic" "$v1" "$v2"
+
+curl -s -X POST "$BASE/embed?key=doc:cat1" -d 'the cat sat on the mat' > /dev/null
+curl -s -X POST "$BASE/embed?key=doc:cat2" -d 'a cat was sitting on the mat' > /dev/null
+curl -s -X POST "$BASE/embed?key=doc:dog" -d 'the dog barked at the mailman' > /dev/null
+sim=$(curl -s -X POST "$BASE/sim" -d 'cats sit on mats')
+assert_contains "sim has cat2" "doc:cat2" "$sim"
+assert_contains "sim has cat1" "doc:cat1" "$sim"
+assert_not_contains "sim excludes dog" "doc:dog" "$sim"
+sim_first=$(printf '%s\n' "$sim" | head -1)
+assert_eq "sim best first" "doc:cat2" "$(printf '%s' "$sim_first" | cut -f1)"
+assert_contains "sim line format" "doc:cat2	0." "$sim"
+
+assert_eq "sim k=1 count" "1" "$(curl -s -X POST "$BASE/sim?k=1" -d 'cats sit on mats' | wc -l)"
+assert_eq "sim k=1 top" "doc:cat2" "$(curl -s -X POST "$BASE/sim?k=1" -d 'cats sit on mats' | cut -f1)"
+assert_contains "sim json" '"results"' "$(curl -s -X POST "$BASE/sim?k=1&json=1" -d 'cats sit on mats')"
+assert_contains "sim json key" '"key":"doc:cat2"' "$(curl -s -X POST "$BASE/sim?k=1&json=1" -d 'cats sit on mats')"
+assert_contains "sim json sim" '"sim":0.426401' "$(curl -s -X POST "$BASE/sim?k=2&json=1" -d 'cats sit on mats')"
+
+assert_eq "sim empty body" "" "$(curl -s -X POST "$BASE/sim" -d '')"
+assert_eq "sim unrelated" "" "$(curl -s -X POST "$BASE/sim" -d 'zzz qqq vvv')"
+
+assert_eq "embed ttl set" "ok doc:ttl 256" "$(curl -s -X POST "$BASE/embed?key=doc:ttl&ttl=1" -d 'temporary thought')"
+assert_contains "embed ttl alive" "dim 256" "$(curl -s "$BASE/embed?key=doc:ttl")"
+sleep 2
+assert_eq "embed ttl expired" "missing" "$(curl -s "$BASE/embed?key=doc:ttl")"
+assert_not_contains "sim skips expired" "doc:ttl" "$(curl -s -X POST "$BASE/sim" -d 'temporary thought')"
+
+assert_eq "embed del" "ok" "$(curl -s -X DELETE "$BASE/embed?key=doc:cat1")"
+assert_eq "embed get after del" "missing" "$(curl -s "$BASE/embed?key=doc:cat1")"
+assert_eq "embed del missing" "missing" "$(curl -s -X DELETE "$BASE/embed?key=doc:cat1")"
+assert_eq "embed del status" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/embed?key=doc:cat1")"
+assert_not_contains "sim after del" "doc:cat1" "$(curl -s -X POST "$BASE/sim" -d 'cats sit on mats')"
+
+curl -s -X POST "$BASE/set?key=doc:dog" -d 'the dog barked at the mailman' > /dev/null
+curl -s -X POST "$BASE/embed?key=doc:dog" -d 'the dog barked at the mailman' > /dev/null
+assert_eq "del main key" "ok" "$(curl -s -X DELETE "$BASE/del?key=doc:dog")"
+assert_eq "del drops vector" "missing" "$(curl -s "$BASE/embed?key=doc:dog")"
+assert_eq "del keeps other vectors" "dim 256" "$(curl -s "$BASE/embed?key=doc:cat2" | cut -d' ' -f1-2)"
+curl -s -X POST "$BASE/embed?key=doc:ghost" -d 'vector without a main key' > /dev/null
+assert_eq "del vector-only key" "missing" "$(curl -s -X DELETE "$BASE/del?key=doc:ghost")"
+assert_eq "del vector-only drops vec" "missing" "$(curl -s "$BASE/embed?key=doc:ghost")"
+
+assert_eq "batch embed array" "embed b:1 ok 256" "$(curl -s -X POST "$BASE/batch" -d '[["embed","b:1","hello vector world"]]')"
+assert_eq "batch embed object" "embed b:2 ok 256" "$(curl -s -X POST "$BASE/batch" -d '[{"embed":"b:2","value":"second vector here"}]')"
+assert_eq "batch embed stored" "dim 256" "$(curl -s "$BASE/embed?key=b:1" | cut -d' ' -f1-2)"
+assert_eq "batch embed bad" "error: bad batch op" "$(curl -s -X POST "$BASE/batch" -d '[["embed","b:3"]]')"
+assert_eq "batch del cascades" "del b:1 missing" "$(curl -s -X POST "$BASE/batch" -d '[["del","b:1"]]')"
+assert_eq "batch del dropped vector" "missing" "$(curl -s "$BASE/embed?key=b:1")"
+assert_eq "sim finds batch vector" "b:2" "$(curl -s -X POST "$BASE/sim" -d 'second vector here' | cut -f1)"
+
+assert_contains "spec documents vectors" "exovec" "$(curl -s "$BASE/")"
+assert_contains "spec embeds endpoints" "/embed" "$(curl -s "$BASE/")"
+assert_contains "spec documents batch embed" "embed k ok" "$(curl -s "$BASE/")"
+
+stop_server
+
+echo "=== session 16: vector persistence across restart ==="
+start_server
+assert_contains "persist embed get" "dim 256" "$(curl -s "$BASE/embed?key=doc:alpha")"
+assert_eq "persist del cascade" "missing" "$(curl -s "$BASE/embed?key=doc:dog")"
+assert_eq "persist batch vector" "dim 256" "$(curl -s "$BASE/embed?key=b:2" | cut -d' ' -f1-2)"
+sim=$(curl -s -X POST "$BASE/sim" -d 'a cat on a mat')
+assert_contains "persist sim ranking" "doc:cat2" "$sim"
+assert_not_contains "persist sim excludes deleted" "doc:dog" "$sim"
+stop_server
+
+echo "=== session 17: scoped tokens and vectors ==="
+cat > "$DATA/tokens2" <<'EOF'
+# vector scope test tokens
+reader:ro
+vecs:scope=vec:*
+vlogs:scope=vec:logs/*
+logs:scope=logs/*
+EOF
+start_server --token master --tokens "$DATA/tokens2"
+MASTER="Authorization: Bearer master"
+READER="Authorization: Bearer reader"
+VECS="Authorization: Bearer vecs"
+VLOGS="Authorization: Bearer vlogs"
+LOGS="Authorization: Bearer logs"
+
+assert_eq "master embed" "ok scoped 256" "$(curl -s -H "$MASTER" -X POST "$BASE/embed?key=scoped" -d 'scope test text')"
+assert_eq "vecs embed allowed" "ok scoped 256" "$(curl -s -H "$VECS" -X POST "$BASE/embed?key=scoped" -d 'scope test text')"
+assert_eq "vecs get allowed" "dim 256" "$(curl -s -H "$VECS" "$BASE/embed?key=scoped" | cut -d' ' -f1-2)"
+assert_eq "vecs del allowed" "ok" "$(curl -s -H "$VECS" -X DELETE "$BASE/embed?key=scoped")"
+assert_eq "vecs get after del" "missing" "$(curl -s -H "$VECS" "$BASE/embed?key=scoped")"
+
+assert_eq "ro embed denied" "error: denied" "$(curl -s -H "$READER" -X POST "$BASE/embed?key=x" -d 'nope')"
+assert_eq "ro embed denied status" "403" "$(curl -s -o /dev/null -w '%{http_code}' -H "$READER" -X POST "$BASE/embed?key=x" -d 'nope')"
+assert_eq "ro embed del denied" "error: denied" "$(curl -s -H "$READER" -X DELETE "$BASE/embed?key=doc:alpha")"
+assert_eq "ro embed get allowed" "dim 256" "$(curl -s -H "$READER" "$BASE/embed?key=doc:alpha" | cut -d' ' -f1-2)"
+assert_contains "ro sim allowed" "doc:alpha" "$(curl -s -H "$READER" -X POST "$BASE/sim" -d 'quick brown fox')"
+
+assert_eq "logs embed denied" "error: denied" "$(curl -s -H "$LOGS" -X POST "$BASE/embed?key=logs/a" -d 'x')"
+assert_eq "logs sim sees nothing" "" "$(curl -s -H "$LOGS" -X POST "$BASE/sim" -d 'quick brown fox')"
+assert_eq "vlogs embed allowed" "ok logs/a 256" "$(curl -s -H "$VLOGS" -X POST "$BASE/embed?key=logs/a" -d 'log entry one')"
+assert_eq "vlogs get own" "dim 256" "$(curl -s -H "$VLOGS" "$BASE/embed?key=logs/a" | cut -d' ' -f1-2)"
+assert_contains "vlogs sim sees own" "logs/a" "$(curl -s -H "$VLOGS" -X POST "$BASE/sim" -d 'log entry one')"
+assert_not_contains "vlogs sim hides other" "doc:alpha" "$(curl -s -H "$VLOGS" -X POST "$BASE/sim" -d 'log entry one')"
+
+assert_eq "batch embed ro denied" "embed nope denied" "$(curl -s -H "$READER" -X POST "$BASE/batch" -d '[["embed","nope","v"]]')"
+assert_eq "batch embed scoped denied" "embed other/x denied" "$(curl -s -H "$LOGS" -X POST "$BASE/batch" -d '[["embed","other/x","v"]]')"
+assert_eq "batch embed logs denied" "embed logs/b denied" "$(curl -s -H "$LOGS" -X POST "$BASE/batch" -d '[["embed","logs/b","v"]]')"
+assert_eq "batch embed vlogs allowed" "embed logs/b ok 256" "$(curl -s -H "$VLOGS" -X POST "$BASE/batch" -d '[["embed","logs/b","log entry two"]]')"
+stop_server
+
+echo "=== session 18: snapshot and restore round-trip vectors ==="
+start_server
+vexp=$(curl -s "$BASE/embed?key=doc:alpha")
+curl -s "$BASE/snapshot" > "$DATA/snap18"
+assert_contains "snapshot has vec key" "vec:doc:alpha" "$(cat "$DATA/snap18")"
+assert_contains "snapshot has vec prefix" "vec:" "$(cat "$DATA/snap18")"
+N=$(curl -s "$BASE/list?limit=10000" | wc -l)
+assert_eq "restore with vectors" "ok $N" "$(curl -s -X POST "$BASE/restore" --data-binary @"$DATA/snap18")"
+assert_eq "restored vec byte-exact" "$vexp" "$(curl -s "$BASE/embed?key=doc:alpha")"
+assert_contains "restored sim works" "doc:cat2" "$(curl -s -X POST "$BASE/sim" -d 'a cat on a mat')"
+assert_contains "restored batch vec" "dim 256" "$(curl -s "$BASE/embed?key=b:2" | cut -d' ' -f1-2)"
+stop_server
+
+echo "=== session 19: vector crash safety (SIGKILL mid-embed-batch) ==="
+start_server
+for i in $(seq 1 40); do
+    curl -s -X POST "$BASE/embed?key=vc:$i" -d "the cat sat on the mat number $i" > /dev/null
+done
+curl -s "$BASE/embed?key=vc:7" > "$DATA/vec7"
+{
+    printf '['
+    for i in $(seq 1 400); do
+        [ "$i" -gt 1 ] && printf ','
+        printf '["embed","vb:%d","batch vector number %d"]' "$i" "$i"
+    done
+    printf ']'
+} > "$DATA/bigembed.json"
+curl -s -X POST "$BASE/batch" --data-binary @"$DATA/bigembed.json" > /dev/null &
+BGP=$!
+sleep 0.05
+kill -9 "$SRV" 2>/dev/null
+wait "$SRV" 2>/dev/null
+wait "$BGP" 2>/dev/null
+
+start_server
+assert_eq "crash store loads" "pong" "$(curl -s "$BASE/ping")"
+assert_eq "crash vector preserved" "$(cat "$DATA/vec7")" "$(curl -s "$BASE/embed?key=vc:7")"
+assert_eq "crash sim ranks unique" "vc:7" "$(curl -s -X POST "$BASE/sim" -d 'cat sat on the mat number 7' | head -1 | cut -f1)"
+BROKEN=0
+for k in $(curl -s "$BASE/list?prefix=vec:"); do
+    case "$(curl -s "$BASE/embed?key=${k#vec:}")" in
+        dim*) ;;
+        *) BROKEN=1 ;;
+    esac
+done
+assert_eq "crash no corrupt vectors" "0" "$BROKEN"
+stop_server
+
 rm -rf "$DATA"
 
 if [ "$FAILS" -eq 0 ]; then

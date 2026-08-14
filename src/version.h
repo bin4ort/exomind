@@ -1,6 +1,6 @@
 #ifndef EXOMIND_VERSION_H
 #define EXOMIND_VERSION_H
 
-#define EXOMIND_VERSION "0.2.0"
+#define EXOMIND_VERSION "0.3.0"
 
 #endif

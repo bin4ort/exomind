@@ -46,6 +46,15 @@ typedef struct entry {
     int64_t expires_at;/* ms epoch, 0 = never */
 } entry_t;
 
+typedef struct vec_ent {
+    char *key;          /* full stored key, e.g. "vec:doc1" */
+    uint32_t klen;
+    uint8_t nnz;
+    uint8_t idx[EXO_VEC_DIM];
+    uint8_t val[EXO_VEC_DIM];
+    int64_t expires_at;
+} vec_ent_t;
+
 struct store {
     char *path;
     int fd;
@@ -57,6 +66,8 @@ struct store {
     int64_t opened_at;
     pthread_mutex_t mu;
     uint64_t n_reads, n_writes, n_deletes, n_misses;
+    vec_ent_t **vecs;
+    size_t nvecs, vecs_cap;
 };
 
 /* ---------------- primitives ---------------- */
@@ -213,10 +224,76 @@ static char *read_val(store_t *s, const entry_t *e)
     return v;
 }
 
+/* ---------------- vector index (exovec) ---------------- */
+
+static int is_vec_key(const char *key, size_t klen)
+{
+    return klen > EXO_VEC_KEY_PREFIX_LEN &&
+           memcmp(key, EXO_VEC_KEY_PREFIX, EXO_VEC_KEY_PREFIX_LEN) == 0;
+}
+
+static void vec_index_reset(store_t *s)
+{
+    for (size_t i = 0; i < s->nvecs; i++) {
+        free(s->vecs[i]->key);
+        free(s->vecs[i]);
+    }
+    s->nvecs = 0;
+}
+
+/* mirror a vec: record into the in-memory index; malformed vectors are
+ * silently skipped (the key stays, /embed reports them as bad) */
+static void vec_index_add(store_t *s, const char *key, size_t klen,
+                          const char *val, size_t vlen, int64_t expires_at)
+{
+    if (!is_vec_key(key, klen))
+        return;
+    uint8_t idx[EXO_VEC_DIM], vv[EXO_VEC_DIM], nnz;
+    if (vec_parse(val, vlen, idx, vv, &nnz) != 0)
+        return;
+    vec_ent_t *e = NULL;
+    for (size_t i = 0; i < s->nvecs; i++)
+        if (s->vecs[i]->klen == klen &&
+            memcmp(s->vecs[i]->key, key, klen) == 0) {
+            e = s->vecs[i];
+            break;
+        }
+    if (!e) {
+        if (s->nvecs == s->vecs_cap) {
+            s->vecs_cap = s->vecs_cap ? s->vecs_cap * 2 : 64;
+            s->vecs = xrealloc(s->vecs, s->vecs_cap * sizeof(*s->vecs));
+        }
+        e = xcalloc(1, sizeof(*e));
+        e->key = xstrndup(key, klen);
+        e->klen = (uint32_t)klen;
+        s->vecs[s->nvecs++] = e;
+    }
+    memcpy(e->idx, idx, nnz);
+    memcpy(e->val, vv, nnz);
+    e->nnz = nnz;
+    e->expires_at = expires_at;
+}
+
+static void vec_index_del(store_t *s, const char *key, size_t klen)
+{
+    if (!is_vec_key(key, klen))
+        return;
+    for (size_t i = 0; i < s->nvecs; i++)
+        if (s->vecs[i]->klen == klen &&
+            memcmp(s->vecs[i]->key, key, klen) == 0) {
+            free(s->vecs[i]->key);
+            free(s->vecs[i]);
+            s->vecs[i] = s->vecs[s->nvecs - 1];
+            s->nvecs--;
+            return;
+        }
+}
+
 /* ---------------- load & compaction ---------------- */
 
 static void store_load(store_t *s)
 {
+    vec_index_reset(s);
     struct stat st;
     if (fstat(s->fd, &st) != 0)
         return;
@@ -263,6 +340,7 @@ static void store_load(store_t *s)
         if (flags & FLAG_TOMB) {
             entry_t **slot = find_slot(s, kbuf, klen, fnv1a(kbuf, klen));
             if (*slot) {
+                vec_index_del(s, kbuf, klen);
                 s->dead_bytes += HDR_SIZE + (*slot)->klen + (*slot)->vsize;
                 entry_t *e = *slot;
                 *slot = e->next;
@@ -273,6 +351,7 @@ static void store_load(store_t *s)
         } else {
             s->dead_bytes +=
                 upsert(s, kbuf, klen, pos, vlen, ts, ttl);
+            vec_index_add(s, kbuf, klen, vbuf, vlen, ttl ? ts + ttl : 0);
         }
         free(kbuf);
         free(vbuf);
@@ -385,6 +464,11 @@ void store_close(store_t *s)
         }
     }
     free(s->buckets);
+    for (size_t i = 0; i < s->nvecs; i++) {
+        free(s->vecs[i]->key);
+        free(s->vecs[i]);
+    }
+    free(s->vecs);
     free(s->path);
     pthread_mutex_unlock(&s->mu);
     pthread_mutex_destroy(&s->mu);
@@ -434,6 +518,8 @@ int store_set(store_t *s, const char *key, size_t klen, const char *val,
         s->dead_bytes +=
             upsert(s, key, (uint32_t)klen, base, (uint32_t)wlen, ts,
                    ttl_sec * 1000);
+        vec_index_add(s, key, klen, wv, wlen,
+                      ttl_sec ? ts + ttl_sec * 1000 : 0);
         s->n_writes++;
         rc = 0;
         maybe_compact(s);
@@ -490,6 +576,7 @@ int store_del(store_t *s, const char *key, size_t klen)
         s->count--;
     }
     int64_t ts = now_ms();
+    vec_index_del(s, key, klen);
     int rc = write_rec_at(s, s->fd, &s->size, key, (uint32_t)klen, "", 0, ts, 0,
                           FLAG_TOMB);
     s->n_deletes++;
@@ -644,6 +731,73 @@ void kv_free(kv_t *kvs, size_t n)
         free(kvs[i].val);
     }
     free(kvs);
+}
+
+/* Newton-Raphson sqrt: avoids a libm dependency */
+static double vec_sqrt(double x)
+{
+    if (x <= 0)
+        return 0;
+    double r = x > 1 ? x : 1;
+    for (int i = 0; i < 64; i++) {
+        double n = (r + x / r) * 0.5;
+        if (n == r || (n > r ? n - r : r - n) < 1e-15)
+            break;
+        r = n;
+    }
+    return r;
+}
+
+int store_vec_sim(store_t *s, const uint8_t *qidx, const uint8_t *qval,
+                  uint8_t qnnz, int topk, kv_t **out, size_t *n_out)
+{
+    if (topk <= 0)
+        topk = 10;
+    double qnorm = 0;
+    for (uint8_t i = 0; i < qnnz; i++)
+        qnorm += (double)qval[i] * qval[i];
+    qnorm = vec_sqrt(qnorm);
+
+    pthread_mutex_lock(&s->mu);
+    kv_t *arr = NULL;
+    size_t cnt = 0, cap = 0;
+    int64_t now = now_ms();
+    for (size_t i = 0; i < s->nvecs; i++) {
+        vec_ent_t *e = s->vecs[i];
+        if (e->expires_at && now > e->expires_at)
+            continue;
+        double dot = 0;
+        uint8_t a = 0, b = 0;
+        while (a < qnnz && b < e->nnz) {
+            if (qidx[a] < e->idx[b])
+                a++;
+            else if (qidx[a] > e->idx[b])
+                b++;
+            else {
+                dot += (double)qval[a] * e->val[b];
+                a++;
+                b++;
+            }
+        }
+        if (dot == 0 || qnorm == 0)
+            continue;
+        double en = 0;
+        for (uint8_t k = 0; k < e->nnz; k++)
+            en += (double)e->val[k] * e->val[k];
+        double sim = dot / (qnorm * vec_sqrt(en));
+        if (sim > 1.0)
+            sim = 1.0;
+        push_kv(&arr, &cnt, &cap, e->key, e->klen, NULL, 0, 0, 0,
+                (int64_t)(sim * 1000000.0));
+    }
+    pthread_mutex_unlock(&s->mu);
+
+    if (cnt > 1)
+        qsort(arr, cnt, sizeof(*arr), cmp_search);
+    size_t n = (size_t)topk < cnt ? (size_t)topk : cnt;
+    *out = arr;
+    *n_out = n;
+    return 0;
 }
 
 size_t store_count(store_t *s)

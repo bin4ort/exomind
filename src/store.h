@@ -75,4 +75,15 @@ int store_snapshot(store_t *s, snap_fn_t fn, void *ctx);
  */
 int store_restore(store_t *s, const kv_t *kvs, size_t n);
 
+/*
+ * Vector index (exovec): every live `vec:` key with a well-formed vector is
+ * mirrored in an in-memory index, rebuilt at load and kept in sync with
+ * writes, so similarity scans never touch the log. qidx/qval/qnnz form the
+ * sparse query vector (as produced by vec_embed). Returns up to topk keys
+ * with positive cosine similarity, best first (ties by key), as kv_t rows
+ * whose score is cosine * 1e6. Expired vectors are skipped.
+ */
+int store_vec_sim(store_t *s, const uint8_t *qidx, const uint8_t *qval,
+                  uint8_t qnnz, int topk, kv_t **out, size_t *n_out);
+
 #endif

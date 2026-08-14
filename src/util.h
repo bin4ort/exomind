@@ -35,4 +35,29 @@ char *escape_line(const char *s, size_t n);
 /* escape for embedding in a JSON string; returns malloc'd string */
 char *json_escape(const char *s, size_t n);
 
+/* ---------------- vectors (exovec) ---------------- */
+
+#define EXO_VEC_DIM 256
+#define EXO_VEC_KEY_PREFIX "vec:"
+#define EXO_VEC_KEY_PREFIX_LEN 4
+
+/*
+ * Deterministic local embedding: lowercase the text, split into words on any
+ * non-alphanumeric byte, hash every character 3-gram of each word (FNV-1a,
+ * mod 256) into a fixed 256-dim count vector; words shorter than 3 chars are
+ * hashed whole. Counts are clamped to 255. idx/val must hold EXO_VEC_DIM
+ * bytes each; on return *nnz_out pairs (index, count) are filled ascending
+ * by index. Same text always yields the same vector.
+ */
+void vec_embed(const char *text, size_t len, uint8_t *idx, uint8_t *val,
+               uint8_t *nnz_out);
+
+/* compact binary codec for stored vectors: 'V' | dim[2 LE] | nnz[4 LE]
+ * | nnz * (idx[1] val[1]). vec_encode returns a malloc'd buffer;
+ * vec_parse validates and returns 0, or -1 if the value is malformed. */
+int vec_encode(uint8_t nnz, const uint8_t *idx, const uint8_t *val,
+               char **out, size_t *outlen);
+int vec_parse(const char *v, size_t vlen, uint8_t *idx, uint8_t *val,
+              uint8_t *nnz_out);
+
 #endif

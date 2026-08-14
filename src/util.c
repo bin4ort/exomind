@@ -485,3 +485,100 @@ char *json_escape(const char *s, size_t n)
     out[j] = 0;
     return out;
 }
+
+/* ---------------- vectors (exovec) ---------------- */
+
+static uint64_t vec_hash(const uint8_t *p, size_t n)
+{
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (size_t i = 0; i < n; i++) {
+        h ^= (uint64_t)p[i];
+        h *= 0x100000001b3ull;
+    }
+    return h;
+}
+
+void vec_embed(const char *text, size_t len, uint8_t *idx, uint8_t *val,
+               uint8_t *nnz_out)
+{
+    uint32_t counts[EXO_VEC_DIM] = {0};
+    size_t i = 0;
+    while (i < len) {
+        unsigned char c = (unsigned char)text[i];
+        if (!isalnum(c)) {
+            i++;
+            continue;
+        }
+        size_t start = i;
+        while (i < len && isalnum((unsigned char)text[i]))
+            i++;
+        size_t wlen = i - start;
+        if (wlen < 3) {
+            unsigned char wb[2];
+            for (size_t p = 0; p < wlen; p++)
+                wb[p] = (unsigned char)tolower((unsigned char)text[start + p]);
+            counts[vec_hash(wb, wlen) & (EXO_VEC_DIM - 1)]++;
+        } else {
+            unsigned char tb[3];
+            for (size_t p = start; p + 3 <= i; p++) {
+                tb[0] = (unsigned char)tolower((unsigned char)text[p]);
+                tb[1] = (unsigned char)tolower((unsigned char)text[p + 1]);
+                tb[2] = (unsigned char)tolower((unsigned char)text[p + 2]);
+                counts[vec_hash(tb, 3) & (EXO_VEC_DIM - 1)]++;
+            }
+        }
+    }
+    uint8_t n = 0;
+    for (size_t d = 0; d < EXO_VEC_DIM; d++) {
+        if (counts[d]) {
+            idx[n] = (uint8_t)d;
+            val[n] = counts[d] > 255 ? 255 : (uint8_t)counts[d];
+            n++;
+        }
+    }
+    *nnz_out = n;
+}
+
+int vec_encode(uint8_t nnz, const uint8_t *idx, const uint8_t *val,
+               char **out, size_t *outlen)
+{
+    size_t len = 7 + (size_t)nnz * 2;
+    char *p = xmalloc(len);
+    p[0] = 'V';
+    p[1] = (char)(EXO_VEC_DIM & 0xFF);
+    p[2] = (char)((EXO_VEC_DIM >> 8) & 0xFF);
+    p[3] = (char)(nnz & 0xFF);
+    p[4] = (char)((nnz >> 8) & 0xFF);
+    p[5] = (char)((nnz >> 16) & 0xFF);
+    p[6] = (char)((nnz >> 24) & 0xFF);
+    for (size_t i = 0; i < nnz; i++) {
+        p[7 + i * 2] = (char)idx[i];
+        p[8 + i * 2] = (char)val[i];
+    }
+    *out = p;
+    *outlen = len;
+    return 0;
+}
+
+int vec_parse(const char *v, size_t vlen, uint8_t *idx, uint8_t *val,
+              uint8_t *nnz_out)
+{
+    if (!v || vlen < 7 || (unsigned char)v[0] != 'V')
+        return -1;
+    uint32_t dim = (uint32_t)(unsigned char)v[1] |
+                   ((uint32_t)(unsigned char)v[2] << 8);
+    if (dim != EXO_VEC_DIM)
+        return -1;
+    uint32_t nnz = (uint32_t)(unsigned char)v[3] |
+                   ((uint32_t)(unsigned char)v[4] << 8) |
+                   ((uint32_t)(unsigned char)v[5] << 16) |
+                   ((uint32_t)(unsigned char)v[6] << 24);
+    if (nnz > EXO_VEC_DIM || vlen != 7 + (size_t)nnz * 2)
+        return -1;
+    for (size_t i = 0; i < nnz; i++) {
+        idx[i] = (uint8_t)v[7 + i * 2];
+        val[i] = (uint8_t)v[8 + i * 2];
+    }
+    *nnz_out = (uint8_t)nnz;
+    return 0;
+}
