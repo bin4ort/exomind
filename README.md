@@ -40,6 +40,7 @@ bash test/bench.sh  # optional benchmark
 ./build/exomind                     # listens on 127.0.0.1:7654, data in exomind.dat
 ./build/exomind --port 9999 --data ~/.exomind/exomind.dat
 EXOMIND_TOKEN=secret ./build/exomind   # require Bearer token auth
+./build/exomind --tokens tokens.txt    # extra scoped tokens (see below)
 ```
 
 ## API
@@ -126,6 +127,25 @@ exomind-snapshot-v1
 
 TTLs and write timestamps are not preserved.
 
+### Scoped access tokens
+
+With `--tokens <file>` (or alongside `--token`/`EXOMIND_TOKEN`), each line of
+the file defines an extra token; `#` comments and blank lines are ignored:
+
+```
+agent2                   # full access
+reader:ro                # read-only (no writes, no restore)
+logs:scope=logs/*        # only keys under the logs/ prefix
+logro:ro:scope=logs/*    # read-only + prefix-scoped
+```
+
+Prefix scopes are enforced on `/get /set /append /del /list /search /notes
+/batch /snapshot`; violations answer `error: denied` (403). Read-only tokens
+are blocked on `/set /append /del /note /restore` and write elements of
+`/batch` (per-element `error: denied`-style `<op> <key> denied` lines).
+`/restore` additionally requires a full-access token. Without `--token`/
+`--tokens` auth stays off and everything is allowed.
+
 ## Internals
 
 - **Storage** — append-only log (Bitcask-style) with an in-memory hash index.
@@ -140,6 +160,8 @@ TTLs and write timestamps are not preserved.
   dump; `POST /restore` rebuilds the store through temp file + fsync + rename,
   so a torn restore never damages the live log (the old index stays valid
   until the rename succeeds).
+- **Auth scopes** — extra tokens from a `--tokens` file can be read-only and/or
+  prefix-scoped; every endpoint enforces the scope before touching the store.
 - **TTLs** — expiry is checked lazily on read/query and skipped during
   compaction; expired keys never leak back.
 - **Concurrency** — thread per connection, one mutex over the store. The test
@@ -161,14 +183,13 @@ Measured on a desktop Linux box, 10,000 records of 100 bytes each:
 
 `make test` covers every endpoint, persistence across restarts, tombstone
 survival, TTL expiry, bearer auth, SIGKILL crash recovery, concurrent writers,
-and snapshot round-trips (including binary values), restore atomicity and
-malformed-input safety.
+snapshot round-trips (including binary values), restore atomicity and
+malformed-input safety, and scoped/read-only token enforcement.
 
 ## Roadmap
 
 - Multi-client WebSocket/push for timers and scheduled reminders
 - Vector-ish embedding storage for semantic recall
-- Namespaced access tokens
 
 ## License
 

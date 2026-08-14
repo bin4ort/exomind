@@ -9,6 +9,7 @@
 #include "version.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,12 +23,124 @@
 #define MAX_KEY 4096
 #define MAX_VAL (8u * 1024u * 1024u)
 #define SNIPPET_MAX 120
+#define MAX_TOKENS 64
 
-static char g_token[128];
+typedef struct {
+    char token[256];
+    size_t tlen;
+    int readonly;
+    char *prefix;
+    size_t plen;
+} tok_t;
+
+static tok_t g_toks[MAX_TOKENS];
+static size_t g_ntoks = 0;
+
+static int find_tok(const char *tok, size_t len)
+{
+    for (size_t i = 0; i < g_ntoks; i++)
+        if (g_toks[i].tlen == len && memcmp(g_toks[i].token, tok, len) == 0)
+            return (int)i;
+    return -1;
+}
 
 void http_set_token(const char *token)
 {
-    snprintf(g_token, sizeof g_token, "%s", token);
+    int idx = find_tok(token, strlen(token));
+    if (idx < 0) {
+        if (g_ntoks >= MAX_TOKENS)
+            return;
+        idx = (int)g_ntoks++;
+        snprintf(g_toks[idx].token, sizeof g_toks[idx].token, "%s", token);
+        g_toks[idx].tlen = strlen(g_toks[idx].token);
+    }
+    g_toks[idx].readonly = 0;
+    free(g_toks[idx].prefix);
+    g_toks[idx].prefix = NULL;
+    g_toks[idx].plen = 0;
+}
+
+/*
+ * Token file syntax: one token per line, `#` comments and blank lines
+ * ignored. A line is `token` optionally followed by colon-separated
+ * modifiers: `ro` makes the token read-only, `scope=<prefix>*` (or
+ * `prefix=<prefix>`) restricts it to keys under that prefix.
+ */
+int http_load_tokens(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        fprintf(stderr, "exomind: cannot open tokens file %s: %s\n", path,
+                strerror(errno));
+        return -1;
+    }
+    char line[1024];
+    int added = 0;
+    while (fgets(line, sizeof line, f)) {
+        size_t l = strlen(line);
+        while (l && (line[l - 1] == '\n' || line[l - 1] == '\r'))
+            line[--l] = 0;
+        if (l == sizeof line - 1) {
+            fprintf(stderr, "exomind: tokens: line too long, skipping\n");
+            continue;
+        }
+        if (!l || line[0] == '#')
+            continue;
+        char *mod = strchr(line, ':');
+        if (mod) {
+            *mod = 0;
+            mod++;
+        }
+        if (!line[0] || strlen(line) >= sizeof g_toks[0].token) {
+            fprintf(stderr, "exomind: tokens: bad token, skipping\n");
+            continue;
+        }
+        int readonly = 0;
+        char *prefix = NULL;
+        int bad = 0;
+        while (mod && *mod) {
+            char *next = strchr(mod, ':');
+            if (next)
+                *next = 0;
+            if (!strcmp(mod, "ro")) {
+                readonly = 1;
+            } else if (strncmp(mod, "scope=", 6) == 0) {
+                prefix = xstrdup(mod + 6);
+                size_t pl = strlen(prefix);
+                if (pl && prefix[pl - 1] == '*')
+                    prefix[pl - 1] = 0;
+            } else if (strncmp(mod, "prefix=", 7) == 0) {
+                prefix = xstrdup(mod + 7);
+            } else {
+                fprintf(stderr, "exomind: tokens: bad modifier %s, skipping\n",
+                        mod);
+                bad = 1;
+            }
+            mod = next ? next + 1 : NULL;
+        }
+        if (bad) {
+            free(prefix);
+            continue;
+        }
+        int idx = find_tok(line, strlen(line));
+        if (idx < 0) {
+            if (g_ntoks >= MAX_TOKENS) {
+                fprintf(stderr, "exomind: tokens: too many tokens, skipping\n");
+                free(prefix);
+                continue;
+            }
+            idx = (int)g_ntoks++;
+            snprintf(g_toks[idx].token, sizeof g_toks[idx].token, "%s", line);
+            g_toks[idx].tlen = strlen(g_toks[idx].token);
+        }
+        g_toks[idx].readonly = readonly;
+        free(g_toks[idx].prefix);
+        g_toks[idx].prefix = prefix;
+        g_toks[idx].plen = prefix ? strlen(prefix) : 0;
+        added++;
+    }
+    fclose(f);
+    return added;
 }
 
 typedef struct {
@@ -38,6 +151,7 @@ typedef struct {
     size_t body_len;
     char auth[512];
     int has_ct_json;
+    int tok_idx; /* matched token in g_toks, -1 if auth is off */
 } req_t;
 
 typedef struct {
@@ -225,6 +339,7 @@ static const char *status_text(int st)
     case 204: return "No Content";
     case 400: return "Bad Request";
     case 401: return "Unauthorized";
+    case 403: return "Forbidden";
     case 404: return "Not Found";
     case 405: return "Method Not Allowed";
     case 413: return "Payload Too Large";
@@ -285,19 +400,51 @@ static long qp_int(const char *qs, const char *name, long def)
     return v;
 }
 
-static int auth_ok(const req_t *r)
+static int auth_ok(req_t *r)
 {
-    if (!g_token[0])
+    r->tok_idx = -1;
+    if (g_ntoks == 0)
         return 1;
     const char *got = r->auth;
     if (!ci_prefix(got, "Bearer "))
         return 0;
     got += 7;
-    size_t l1 = strlen(g_token), l2 = strlen(got);
-    int diff = (int)(l1 ^ l2);
-    for (size_t i = 0; i < l1 && i < l2; i++)
-        diff |= g_token[i] ^ got[i];
-    return diff == 0;
+    size_t l1 = strlen(got);
+    int idx = find_tok(got, l1);
+    if (idx < 0)
+        return 0;
+    r->tok_idx = idx;
+    return 1;
+}
+
+static int tok_allows_key(const tok_t *t, const char *key, size_t klen)
+{
+    return !t || !t->prefix ||
+           (klen >= t->plen && memcmp(key, t->prefix, t->plen) == 0);
+}
+
+static int tok_can_write(const tok_t *t, const char *key, size_t klen)
+{
+    return tok_allows_key(t, key, klen) && (!t || !t->readonly);
+}
+
+/* drop every record whose key falls outside the token's prefix scope */
+static void filter_scope(kv_t *kvs, size_t *n, const tok_t *t)
+{
+    if (!t || !t->prefix)
+        return;
+    size_t w = 0;
+    for (size_t i = 0; i < *n; i++) {
+        if (tok_allows_key(t, kvs[i].key, kvs[i].klen)) {
+            if (w != i)
+                kvs[w] = kvs[i];
+            w++;
+        } else {
+            free(kvs[i].key);
+            free(kvs[i].val);
+        }
+    }
+    *n = w;
 }
 
 static uint32_t rand16(void)
@@ -396,8 +543,23 @@ static const char *help_text(void)
         "\n"
         "## auth\n"
         "\n"
-        "Start with `--token secret` (or env EXOMIND_TOKEN), then send\n"
-        "`Authorization: Bearer secret`. Binds to 127.0.0.1 by default.\n"
+        "Start with `--token secret` (or env EXOMIND_TOKEN) to require\n"
+        "`Authorization: Bearer secret` on every request. Additional tokens\n"
+        "can be loaded from a file with `--tokens <file>`; one token per\n"
+        "line (`#` comments and blank lines ignored):\n"
+        "\n"
+        "    agent2                   full access\n"
+        "    reader:ro                read-only (no writes, no restore)\n"
+        "    logs:scope=logs/*        only keys under the `logs/` prefix\n"
+        "    logro:ro:scope=logs/*    read-only and prefix-scoped\n"
+        "\n"
+        "Prefix-scoped tokens can only read and write keys matching their\n"
+        "prefix; enforced on /get /set /append /del /list /search /notes\n"
+        "/batch /snapshot. Read-only tokens are denied on /set /append /del\n"
+        "/note /restore and any write element of /batch. Violations answer\n"
+        "`error: denied` (403). /restore additionally requires a full-access\n"
+        "token; a scoped /snapshot dumps only in-scope records. Without\n"
+        "--token/--tokens auth stays off and everything is allowed.\n"
         "\n"
         "## durability\n"
         "\n"
@@ -408,12 +570,15 @@ static const char *help_text(void)
 
 typedef struct {
     buf_t *out;
+    const tok_t *tok;
 } snap_ctx_t;
 
 static int snap_emit(void *ctx, const char *key, size_t klen,
                      const char *val, size_t vlen)
 {
     snap_ctx_t *c = ctx;
+    if (!tok_allows_key(c->tok, key, klen))
+        return 0;
     buf_printf(c->out, "%zu\t%zu\t", klen, vlen);
     buf_put(c->out, key, klen);
     buf_put(c->out, val, vlen);
@@ -491,6 +656,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
     const char *path = r->path;
     char key[MAX_KEY + 1];
     char tmp[4096];
+    const tok_t *tok = r->tok_idx >= 0 ? &g_toks[r->tok_idx] : NULL;
 
     if (!strcmp(path, "/") || !strcmp(path, "/help") ||
         !strcmp(path, "/spec")) {
@@ -544,6 +710,11 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
         if (!qp_str(r->query, "key", key, sizeof key)) {
             *status = 400;
             buf_puts(out, "error: missing key");
+            return;
+        }
+        if (!tok_allows_key(tok, key, strlen(key))) {
+            *status = 403;
+            buf_puts(out, "error: denied");
             return;
         }
         size_t vlen = 0;
@@ -639,6 +810,12 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             free(v);
             return;
         }
+        if (!tok_can_write(tok, key, strlen(key))) {
+            *status = 403;
+            buf_puts(out, "error: denied");
+            free(v);
+            return;
+        }
         if (vlen > MAX_VAL) {
             *status = 413;
             buf_puts(out, "error: value too large");
@@ -663,6 +840,11 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             buf_puts(out, "error: missing key");
             return;
         }
+        if (!tok_can_write(tok, key, strlen(key))) {
+            *status = 403;
+            buf_puts(out, "error: denied");
+            return;
+        }
         if (store_set(s, key, strlen(key), r->body, r->body_len, 0, 1) != 0) {
             *status = 500;
             buf_puts(out, "error: store failure");
@@ -682,6 +864,11 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
         if (!qp_str(r->query, "key", key, sizeof key)) {
             *status = 400;
             buf_puts(out, "error: missing key");
+            return;
+        }
+        if (!tok_can_write(tok, key, strlen(key))) {
+            *status = 403;
+            buf_puts(out, "error: denied");
             return;
         }
         int existed = store_del(s, key, strlen(key));
@@ -713,6 +900,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
         size_t n = 0;
         store_query(s, Q_LIST, has_prefix ? prefix : NULL, NULL, desc, &kvs,
                     &n);
+        filter_scope(kvs, &n, tok);
         size_t total = n;
         size_t start = (size_t)off, end = start + (size_t)lim;
         if (end > n)
@@ -751,6 +939,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
         kv_t *kvs = NULL;
         size_t n = 0;
         store_query(s, Q_SEARCH, NULL, q, 0, &kvs, &n);
+        filter_scope(kvs, &n, tok);
         size_t m = (size_t)lim < n ? (size_t)lim : n;
         if (qp_str(r->query, "json", tmp, sizeof tmp)) {
             *ctype = "application/json; charset=utf-8";
@@ -784,6 +973,11 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
         char nkey[64];
         snprintf(nkey, sizeof nkey, "note:%lld:%08x", (long long)now_ms(),
                  (unsigned)rand16());
+        if (!tok_can_write(tok, nkey, strlen(nkey))) {
+            *status = 403;
+            buf_puts(out, "error: denied");
+            return;
+        }
         if (store_set(s, nkey, strlen(nkey), r->body, r->body_len, 0, 0) != 0) {
             *status = 500;
             buf_puts(out, "error: store failure");
@@ -806,6 +1000,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
         kv_t *kvs = NULL;
         size_t n = 0;
         store_query(s, Q_NOTES, NULL, has_q ? q : NULL, 0, &kvs, &n);
+        filter_scope(kvs, &n, tok);
         size_t total = n;
         size_t start = (size_t)off, end = start + (size_t)lim;
         if (end > n)
@@ -856,31 +1051,48 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
                     const char *op = strs[0];
                     const char *k = strs[1];
                     if (!strcmp(op, "set") && nstr >= 3) {
-                        long ttl = nstr >= 4 ? strtol(strs[3], NULL, 10) : 0;
-                        int rc = store_set(s, k, strlen(k), strs[2],
-                                           strlen(strs[2]), ttl, 0);
-                        buf_printf(out, "set %s %s\n", k,
-                                   rc == 0 ? "ok" : "error");
-                    } else if (!strcmp(op, "append") && nstr >= 3) {
-                        int rc = store_set(s, k, strlen(k), strs[2],
-                                           strlen(strs[2]), 0, 1);
-                        buf_printf(out, "append %s %s\n", k,
-                                   rc == 0 ? "ok" : "error");
-                    } else if (!strcmp(op, "get")) {
-                        size_t vlen = 0;
-                        char *v = store_get(s, k, strlen(k), &vlen, NULL);
-                        if (v) {
-                            char *e = escape_line(v, vlen);
-                            buf_printf(out, "get %s %s\n", k, e);
-                            free(e);
-                            free(v);
+                        if (!tok_can_write(tok, k, strlen(k))) {
+                            buf_printf(out, "set %s denied\n", k);
                         } else {
-                            buf_printf(out, "get %s missing\n", k);
+                            long ttl = nstr >= 4 ? strtol(strs[3], NULL, 10)
+                                                 : 0;
+                            int rc = store_set(s, k, strlen(k), strs[2],
+                                               strlen(strs[2]), ttl, 0);
+                            buf_printf(out, "set %s %s\n", k,
+                                       rc == 0 ? "ok" : "error");
+                        }
+                    } else if (!strcmp(op, "append") && nstr >= 3) {
+                        if (!tok_can_write(tok, k, strlen(k))) {
+                            buf_printf(out, "append %s denied\n", k);
+                        } else {
+                            int rc = store_set(s, k, strlen(k), strs[2],
+                                               strlen(strs[2]), 0, 1);
+                            buf_printf(out, "append %s %s\n", k,
+                                       rc == 0 ? "ok" : "error");
+                        }
+                    } else if (!strcmp(op, "get")) {
+                        if (!tok_allows_key(tok, k, strlen(k))) {
+                            buf_printf(out, "get %s denied\n", k);
+                        } else {
+                            size_t vlen = 0;
+                            char *v = store_get(s, k, strlen(k), &vlen, NULL);
+                            if (v) {
+                                char *e = escape_line(v, vlen);
+                                buf_printf(out, "get %s %s\n", k, e);
+                                free(e);
+                                free(v);
+                            } else {
+                                buf_printf(out, "get %s missing\n", k);
+                            }
                         }
                     } else if (!strcmp(op, "del")) {
-                        int existed = store_del(s, k, strlen(k));
-                        buf_printf(out, "del %s %s\n", k,
-                                   existed > 0 ? "ok" : "missing");
+                        if (!tok_can_write(tok, k, strlen(k))) {
+                            buf_printf(out, "del %s denied\n", k);
+                        } else {
+                            int existed = store_del(s, k, strlen(k));
+                            buf_printf(out, "del %s %s\n", k,
+                                       existed > 0 ? "ok" : "missing");
+                        }
                     } else {
                         buf_puts(out, "error: bad batch op\n");
                     }
@@ -899,30 +1111,49 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
                 char *ttls = json_field(elem, elen, "ttl");
                 long ttl = ttls ? strtol(ttls, NULL, 10) : 0;
                 if (op_set) {
-                    int rc = store_set(s, op_set, strlen(op_set), val ? val : "",
-                                       val ? strlen(val) : 0, ttl, 0);
-                    buf_printf(out, "set %s %s\n", op_set,
-                               rc == 0 ? "ok" : "error");
-                } else if (op_app) {
-                    int rc = store_set(s, op_app, strlen(op_app), val ? val : "",
-                                       val ? strlen(val) : 0, 0, 1);
-                    buf_printf(out, "append %s %s\n", op_app,
-                               rc == 0 ? "ok" : "error");
-                } else if (op_get) {
-                    size_t vlen = 0;
-                    char *v = store_get(s, op_get, strlen(op_get), &vlen, NULL);
-                    if (v) {
-                        char *e = escape_line(v, vlen);
-                        buf_printf(out, "get %s %s\n", op_get, e);
-                        free(e);
-                        free(v);
+                    if (!tok_can_write(tok, op_set, strlen(op_set))) {
+                        buf_printf(out, "set %s denied\n", op_set);
                     } else {
-                        buf_printf(out, "get %s missing\n", op_get);
+                        int rc = store_set(s, op_set, strlen(op_set),
+                                           val ? val : "",
+                                           val ? strlen(val) : 0, ttl, 0);
+                        buf_printf(out, "set %s %s\n", op_set,
+                                   rc == 0 ? "ok" : "error");
+                    }
+                } else if (op_app) {
+                    if (!tok_can_write(tok, op_app, strlen(op_app))) {
+                        buf_printf(out, "append %s denied\n", op_app);
+                    } else {
+                        int rc = store_set(s, op_app, strlen(op_app),
+                                           val ? val : "",
+                                           val ? strlen(val) : 0, 0, 1);
+                        buf_printf(out, "append %s %s\n", op_app,
+                                   rc == 0 ? "ok" : "error");
+                    }
+                } else if (op_get) {
+                    if (!tok_allows_key(tok, op_get, strlen(op_get))) {
+                        buf_printf(out, "get %s denied\n", op_get);
+                    } else {
+                        size_t vlen = 0;
+                        char *v = store_get(s, op_get, strlen(op_get), &vlen,
+                                            NULL);
+                        if (v) {
+                            char *e = escape_line(v, vlen);
+                            buf_printf(out, "get %s %s\n", op_get, e);
+                            free(e);
+                            free(v);
+                        } else {
+                            buf_printf(out, "get %s missing\n", op_get);
+                        }
                     }
                 } else if (op_del) {
-                    int existed = store_del(s, op_del, strlen(op_del));
-                    buf_printf(out, "del %s %s\n", op_del,
-                               existed > 0 ? "ok" : "missing");
+                    if (!tok_can_write(tok, op_del, strlen(op_del))) {
+                        buf_printf(out, "del %s denied\n", op_del);
+                    } else {
+                        int existed = store_del(s, op_del, strlen(op_del));
+                        buf_printf(out, "del %s %s\n", op_del,
+                                   existed > 0 ? "ok" : "missing");
+                    }
                 } else {
                     buf_puts(out, "error: bad batch element\n");
                 }
@@ -947,7 +1178,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
 
     if (!strcmp(path, "/snapshot")) {
         buf_puts(out, "exomind-snapshot-v1\n");
-        snap_ctx_t ctx = {.out = out};
+        snap_ctx_t ctx = {.out = out, .tok = tok};
         if (store_snapshot(s, snap_emit, &ctx) != 0) {
             *status = 500;
             out->len = 0;
@@ -960,6 +1191,11 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
         if (strcmp(r->method, "POST")) {
             *status = 405;
             buf_puts(out, "error: use POST");
+            return;
+        }
+        if (tok && (tok->readonly || tok->prefix)) {
+            *status = 403;
+            buf_puts(out, "error: denied");
             return;
         }
         kv_t *kvs = NULL;
@@ -991,6 +1227,7 @@ void http_handle_conn(int fd, store_t *s)
 
     req_t r;
     memset(&r, 0, sizeof r);
+    r.tok_idx = -1;
     int rc = read_request(fd, &r);
     if (rc == -2) {
         send_response(fd, 413, "text/plain; charset=utf-8",

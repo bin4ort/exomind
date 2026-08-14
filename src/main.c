@@ -74,6 +74,7 @@ static void usage(const char *argv0)
            "  --port <n>       port (default 7654)\n"
            "  --data <file>    data file (default exomind.dat)\n"
            "  --token <t>      require 'Authorization: Bearer <t>'\n"
+           "  --tokens <file>  load extra tokens (token[:ro][:scope=<p>*])\n"
            "  --help           show this help\n"
            "  --version        show version\n"
            "env: EXOMIND_TOKEN same as --token\n",
@@ -86,6 +87,7 @@ int main(int argc, char **argv)
     int port = 7654;
     const char *data = "exomind.dat";
     const char *token = getenv("EXOMIND_TOKEN");
+    const char *tokens_file = NULL;
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
@@ -97,6 +99,8 @@ int main(int argc, char **argv)
             data = argv[++i];
         else if (!strcmp(a, "--token") && i + 1 < argc)
             token = argv[++i];
+        else if (!strcmp(a, "--tokens") && i + 1 < argc)
+            tokens_file = argv[++i];
         else if (!strcmp(a, "--help") || !strcmp(a, "-h")) {
             usage(argv[0]);
             return 0;
@@ -126,6 +130,15 @@ int main(int argc, char **argv)
     store_t *s = store_open(data);
     if (token)
         http_set_token(token);
+    if (tokens_file) {
+        int n = http_load_tokens(tokens_file);
+        if (n < 0) {
+            store_close(s);
+            return 1;
+        }
+        fprintf(stderr, "exomind: loaded %d scoped token(s) from %s\n", n,
+                tokens_file);
+    }
 
     int lfd = socket(AF_INET, SOCK_STREAM, 0);
     if (lfd < 0) {
@@ -166,9 +179,10 @@ int main(int argc, char **argv)
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
-    fprintf(stderr, "exomind v%s listening on http://%s:%d (data: %s%s)\n",
+    fprintf(stderr, "exomind v%s listening on http://%s:%d (data: %s%s%s)\n",
             EXOMIND_VERSION, host, port, data,
-            token ? ", auth: bearer token" : "");
+            token ? ", auth: bearer token" : "",
+            tokens_file ? ", scoped tokens: yes" : "");
 
     while (!g_stop) {
         struct pollfd pfd = {.fd = lfd, .events = POLLIN};
