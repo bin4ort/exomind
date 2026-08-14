@@ -135,7 +135,7 @@ int timer_cancel(const char *id)
 
 /* writes the fired/missed timer into the exomind note feed and drops the
  * durable key; the TTL is the safety net if we are down at fire time */
-static void fire_cleanup(const timer_rec_t *t, const char *kind)
+static void fire_cleanup(exo_t *e, const timer_rec_t *t, const char *kind)
 {
     char err[256];
     buf_t note = {0};
@@ -146,13 +146,13 @@ static void fire_cleanup(const timer_rec_t *t, const char *kind)
     else
         buf_printf(&note, "fired timer %s: %s at %lld", t->id, t->msg,
                    (long long)t->wall_fire);
-    if (exo_note(g_exo, note.p, err, sizeof err) != 0)
+    if (exo_note(e, note.p, err, sizeof err) != 0)
         fprintf(stderr, "exosched: note failed: %s\n", err);
     buf_free(&note);
     char key[512];
     snprintf(key, sizeof key, EXO_KEY_PREFIX "%s", t->id);
     int existed = 0;
-    if (exo_del(g_exo, key, &existed, err, sizeof err) != 0)
+    if (exo_del(e, key, &existed, err, sizeof err) != 0)
         fprintf(stderr, "exosched: del %s failed: %s (ttl will expire it)\n",
                 key, err);
 }
@@ -173,7 +173,7 @@ void *timer_loop(void *arg)
             t->next = NULL;
             pthread_mutex_unlock(&g_mu);
             ws_broadcast(t->id, t->wall_fire, t->msg);
-            fire_cleanup(t, "fired");
+            fire_cleanup(g_exo, t, "fired");
             free(t->msg);
             free(t);
             pthread_mutex_lock(&g_mu);
@@ -198,7 +198,7 @@ void *timer_loop(void *arg)
     return NULL;
 }
 
-static void reload_one(const char *key, const char *value)
+static void reload_one(exo_t *e, const char *key, const char *value)
 {
     const char *sep = strchr(value, '\t');
     if (!sep) {
@@ -229,7 +229,7 @@ static void reload_one(const char *key, const char *value)
         snprintf(fake.id, sizeof fake.id, "%s", id);
         fake.wall_fire = fire;
         fake.msg = (char *)msg;
-        fire_cleanup(&fake, "missed");
+        fire_cleanup(e, &fake, "missed");
     }
 }
 
@@ -257,7 +257,7 @@ int timers_reload(exo_t *e)
         return -1;
     }
     for (size_t i = 0; i < n; i++) {
-        reload_one(keys[i], vals[i]);
+        reload_one(e, keys[i], vals[i]);
         free(keys[i]);
         free(vals[i]);
     }

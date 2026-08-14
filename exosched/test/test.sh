@@ -185,6 +185,24 @@ r=$(curl -s -m 3 "$XM_URL/list?prefix=exosched:timer:")
 check "fired/cancelled keys cleaned up in exomind" \
     "$(printf '%s' "$r" | grep -qE "^exosched:timer:($id1|$idc|$idp|$idw)$" && echo 1 || echo 0)" "$r"
 
+# --- missed timer logged on reload -------------------------------------------------
+r=$(curl -s -m 3 -X POST "$XS_URL/remind" -d 'in 3s "missed-check"')
+idm2=$(echo "$r" | awk '{print $2}')
+kill "$XS_PID" 2>/dev/null
+stop_port $XS_PORT
+sleep 0.2
+sleep 4
+setsid nohup "$XS_BIN" --port $XS_PORT --exomind "$XM_URL" \
+    >"$XS_LOG" 2>&1 < /dev/null &
+XS_PID=$!
+sleep 1.5
+r=$(curl -s -m 3 "$XM_URL/notes?q=missed-check")
+check "overdue timer logged as missed note on reload" \
+    "$(printf '%s' "$r" | grep -q "missed timer $idm2" && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 "$XM_URL/list?prefix=exosched:timer:")
+check "missed timer's key dropped" \
+    "$(printf '%s' "$r" | grep -q "$idm2" && echo 1 || echo 0)"
+
 # --- garbage / robustness ------------------------------------------------------
 g1=$(curl -s -m 3 -o /dev/null -w '%{http_code}' -X POST "$XS_URL/remind" -d 'garbage')
 g2=$(curl -s -m 3 -o /dev/null -w '%{http_code}' -X POST "$XS_URL/remind" -d 'in xyz "bad"')
