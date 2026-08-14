@@ -26,6 +26,14 @@ assert_contains() { # desc needle haystack
     esac
 }
 
+assert_not_contains() { # desc needle haystack
+    case "$3" in
+        *"$2"*) printf 'FAIL %s\n  expected not to contain: %s\n  actual: %s\n' "$1" "$2" "$3"
+           FAILS=$((FAILS + 1)) ;;
+        *) printf 'PASS %s\n' "$1" ;;
+    esac
+}
+
 start_server() {
     "$BIN" --host 127.0.0.1 --port "$PORT" --data "$DATA/exomind.dat" \
         "$@" 2>"$DATA/server.log" &
@@ -151,6 +159,120 @@ for p in $CPIDS; do wait "$p"; done
 for i in $(seq 1 50); do
     assert_eq "concurrent key c$i" "v$i" "$(curl -s "$BASE/get?key=c$i")"
 done
+stop_server
+
+echo "=== session 7: snapshot/restore ==="
+start_server
+
+printf 'tab\there\nline2\n\x01\x02\xff' > "$DATA/weird"
+assert_eq "set binary value" "ok" "$(curl -s -X POST "$BASE/set?key=w:bin" --data-binary @"$DATA/weird")"
+curl -s "$BASE/get?key=w:bin" > "$DATA/back"
+cmp -s "$DATA/weird" "$DATA/back"
+assert_eq "binary value round trip" "0" "$?"
+assert_eq "set s:a" "ok" "$(curl -s -X POST "$BASE/set?key=s:a" -d 'alpha')"
+assert_eq "set s:b" "ok" "$(curl -s -X POST "$BASE/set?key=s:b" -d 'beta')"
+assert_eq "set s:gone" "ok" "$(curl -s -X POST "$BASE/set?key=s:gone" -d 'x')"
+assert_eq "del s:gone" "ok" "$(curl -s -X DELETE "$BASE/del?key=s:gone")"
+
+curl -s "$BASE/snapshot" > "$DATA/snap1"
+N=$(curl -s "$BASE/list?limit=10000" | wc -l)
+assert_contains "snapshot header" "exomind-snapshot-v1" "$(curl -s "$BASE/snapshot")"
+assert_contains "snapshot has key" "w:bin" "$(cat "$DATA/snap1")"
+assert_not_contains "snapshot no tombstones" "s:gone" "$(cat "$DATA/snap1")"
+
+assert_eq "restore count" "ok $N" "$(curl -s -X POST "$BASE/restore" --data-binary @"$DATA/snap1")"
+curl -s "$BASE/get?key=w:bin" > "$DATA/back2"
+cmp -s "$DATA/weird" "$DATA/back2"
+assert_eq "binary value after restore" "0" "$?"
+assert_eq "restored value" "beta" "$(curl -s "$BASE/get?key=s:b")"
+
+assert_eq "restore bad format" "error: bad snapshot" "$(curl -s -X POST "$BASE/restore" -d 'garbage')"
+assert_eq "store intact after bad restore" "alpha" "$(curl -s "$BASE/get?key=s:a")"
+
+printf 'exomind-snapshot-v1\n' > "$DATA/snapempty"
+assert_eq "restore to empty" "ok 0" "$(curl -s -X POST "$BASE/restore" --data-binary @"$DATA/snapempty")"
+assert_eq "store empty after restore" "missing" "$(curl -s "$BASE/get?key=s:a")"
+assert_eq "list empty after restore" "" "$(curl -s "$BASE/list")"
+
+assert_eq "restore again" "ok $N" "$(curl -s -X POST "$BASE/restore" --data-binary @"$DATA/snap1")"
+stop_server
+
+echo "=== session 8: snapshot persists, restore respects auth ==="
+start_server
+curl -s "$BASE/get?key=w:bin" > "$DATA/back3"
+cmp -s "$DATA/weird" "$DATA/back3"
+assert_eq "binary value persisted" "0" "$?"
+assert_eq "restore persisted" "alpha" "$(curl -s "$BASE/get?key=s:a")"
+stop_server
+
+start_server --token sekret
+assert_eq "snapshot denied without auth" "error: unauthorized" "$(curl -s "$BASE/snapshot")"
+curl -s -H 'Authorization: Bearer sekret' "$BASE/snapshot" > "$DATA/snap2"
+assert_contains "snapshot ok with auth" "exomind-snapshot-v1" "$(cat "$DATA/snap2")"
+assert_eq "restore denied without auth" "error: unauthorized" "$(curl -s -X POST "$BASE/restore" --data-binary @"$DATA/snap2")"
+assert_eq "restore ok with auth" "ok $N" "$(curl -s -H 'Authorization: Bearer sekret' -X POST "$BASE/restore" --data-binary @"$DATA/snap2")"
+stop_server
+
+echo "=== session 9: scoped tokens ==="
+cat > "$DATA/tokens" <<'EOF'
+# scoped token test file
+reader:ro
+logs:scope=logs/*
+logro:ro:scope=logs/*
+EOF
+start_server --token master --tokens "$DATA/tokens"
+MASTER="Authorization: Bearer master"
+LOGS="Authorization: Bearer logs"
+READER="Authorization: Bearer reader"
+LOGRO="Authorization: Bearer logro"
+
+assert_eq "master set logs/a" "ok" "$(curl -s -H "$MASTER" -X POST "$BASE/set?key=logs/a" -d 'la')"
+assert_eq "master set logs/b" "ok" "$(curl -s -H "$MASTER" -X POST "$BASE/set?key=logs/b" -d 'lb')"
+assert_eq "master set other/c" "ok" "$(curl -s -H "$MASTER" -X POST "$BASE/set?key=other/c" -d 'oc')"
+
+assert_eq "scoped get allowed" "la" "$(curl -s -H "$LOGS" "$BASE/get?key=logs/a")"
+assert_eq "scoped get denied" "error: denied" "$(curl -s -H "$LOGS" "$BASE/get?key=other/c")"
+assert_eq "scoped get denied status" "403" "$(curl -s -o /dev/null -w '%{http_code}' -H "$LOGS" "$BASE/get?key=other/c")"
+assert_eq "scoped set allowed" "ok" "$(curl -s -H "$LOGS" -X POST "$BASE/set?key=logs/c" -d 'lc')"
+assert_eq "scoped set denied" "error: denied" "$(curl -s -H "$LOGS" -X POST "$BASE/set?key=other/d" -d 'x')"
+assert_eq "scoped append denied" "error: denied" "$(curl -s -H "$LOGS" -X POST "$BASE/append?key=other/e" -d 'x')"
+assert_eq "scoped del denied" "error: denied" "$(curl -s -H "$LOGS" -X DELETE "$BASE/del?key=other/f")"
+assert_eq "scoped note denied" "error: denied" "$(curl -s -H "$LOGS" -X POST "$BASE/note" -d 'nope')"
+assert_contains "scoped list shows own" "logs/a" "$(curl -s -H "$LOGS" "$BASE/list")"
+assert_not_contains "scoped list hides outside" "other/c" "$(curl -s -H "$LOGS" "$BASE/list")"
+assert_contains "scoped list prefix" "logs/b" "$(curl -s -H "$LOGS" "$BASE/list?prefix=logs")"
+assert_eq "scoped list prefix outside" "" "$(curl -s -H "$LOGS" "$BASE/list?prefix=other")"
+assert_eq "scoped search denied key" "" "$(curl -s -H "$LOGS" "$BASE/search?q=oc")"
+assert_eq "scoped search own key" "logs/c	lc" "$(curl -s -H "$LOGS" "$BASE/search?q=lc")"
+
+assert_eq "ro get allowed" "alpha" "$(curl -s -H "$READER" "$BASE/get?key=s:a")"
+assert_eq "ro set denied" "error: denied" "$(curl -s -H "$READER" -X POST "$BASE/set?key=nk" -d 'x')"
+assert_eq "ro append denied" "error: denied" "$(curl -s -H "$READER" -X POST "$BASE/append?key=nk" -d 'x')"
+assert_eq "ro del denied" "error: denied" "$(curl -s -H "$READER" -X DELETE "$BASE/del?key=s:a")"
+assert_eq "ro note denied" "error: denied" "$(curl -s -H "$READER" -X POST "$BASE/note" -d 'nope')"
+assert_eq "ro restore denied" "error: denied" "$(curl -s -H "$READER" -X POST "$BASE/restore" --data-binary @"$DATA/snap2")"
+assert_eq "ro snapshot allowed" "exomind-snapshot-v1" "$(curl -s -H "$READER" "$BASE/snapshot" | head -1)"
+
+assert_eq "logro write denied" "error: denied" "$(curl -s -H "$LOGRO" -X POST "$BASE/set?key=logs/z" -d 'x')"
+assert_eq "logro read allowed" "la" "$(curl -s -H "$LOGRO" "$BASE/get?key=logs/a")"
+assert_eq "logro restore denied" "error: denied" "$(curl -s -H "$LOGRO" -X POST "$BASE/restore" --data-binary @"$DATA/snap2")"
+
+assert_eq "batch scoped" 'set logs/x ok
+set other/y denied
+get logs/x v
+get other/z denied' "$(curl -s -H "$LOGS" -X POST "$BASE/batch" -d '[["set","logs/x","v"],["set","other/y","v"],["get","logs/x"],["get","other/z"]]')"
+assert_eq "batch ro" 'set nk denied
+del s:a denied
+get s:a alpha' "$(curl -s -H "$READER" -X POST "$BASE/batch" -d '[["set","nk","v"],["del","s:a"],["get","s:a"]]')"
+assert_eq "batch objects scoped" 'set logs/o ok
+get other/q denied' "$(curl -s -H "$LOGS" -X POST "$BASE/batch" -d '[{"set":"logs/o","value":"z"},{"get":"other/q"}]')"
+
+assert_contains "scoped snapshot shows own" "logs/a" "$(curl -s -H "$LOGS" "$BASE/snapshot")"
+assert_not_contains "scoped snapshot hides outside" "other/c" "$(curl -s -H "$LOGS" "$BASE/snapshot")"
+assert_eq "scoped restore denied" "error: denied" "$(curl -s -H "$LOGS" -X POST "$BASE/restore" --data-binary @"$DATA/snap2")"
+
+assert_eq "master still full access" "oc" "$(curl -s -H "$MASTER" "$BASE/get?key=other/c")"
+assert_eq "wrong token" "error: unauthorized" "$(curl -s -H 'Authorization: Bearer nope' "$BASE/get?key=logs/a")"
 stop_server
 
 rm -rf "$DATA"

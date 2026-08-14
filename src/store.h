@@ -59,4 +59,20 @@ void store_stats(store_t *s, uint64_t *entries, uint64_t *log_bytes,
                  uint64_t *dead_bytes, uint64_t *reads, uint64_t *writes,
                  uint64_t *deletes, uint64_t *misses, int64_t *opened_at);
 
+/* callback invoked per live record (no tombstones, no expired) */
+typedef int (*snap_fn_t)(void *ctx, const char *key, size_t klen,
+                         const char *val, size_t vlen);
+
+/* iterate all live records in hash order; returns 0, or -1 if the callback
+ * aborted. No fsync; the caller decides how the stream is consumed. */
+int store_snapshot(store_t *s, snap_fn_t fn, void *ctx);
+
+/*
+ * Atomically replace the entire store with the given records: the new log is
+ * written to a temp file, fsynced, and renamed over the live log before the
+ * in-memory index is rebuilt. On any failure the old store stays intact.
+ * Returns the number of records stored, or -1 on error.
+ */
+int store_restore(store_t *s, const kv_t *kvs, size_t n);
+
 #endif
