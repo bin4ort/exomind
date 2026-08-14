@@ -762,7 +762,7 @@ int store_vec_sim(store_t *s, const uint8_t *qidx, const uint8_t *qval,
     kv_t *arr = NULL;
     size_t cnt = 0, cap = 0;
     int64_t now = now_ms();
-    for (size_t i = 0; i < s->nvecs; i++) {
+    for (size_t i = 0; i < s->nvecs && cnt < MAX_QUERY; i++) {
         vec_ent_t *e = s->vecs[i];
         if (e->expires_at && now > e->expires_at)
             continue;
