@@ -23,7 +23,7 @@
 #define MAX_VAL (8u * 1024u * 1024u)
 #define SNIPPET_MAX 120
 
-static char g_token[128];
+static char g_token[512];
 
 void http_set_token(const char *token)
 {
@@ -185,13 +185,16 @@ static int read_request(int fd, req_t *r)
             while (*v == ' ')
                 v++;
             snprintf(r->auth, sizeof r->auth, "%s", v);
+            char *at = r->auth + strlen(r->auth);
+            while (at > r->auth && (at[-1] == ' ' || at[-1] == '\t'))
+                *--at = 0;
         } else if (ci_prefix(hdrline, "content-type:")) {
             if (strstr(hdrline + 13, "json"))
                 r->has_ct_json = 1;
         }
         if (last)
             break;
-        hdrline = heol + 2;
+        hdrline = heol + (heol[1] == '\n' ? 2 : 1);
     }
 
     if (have_cl && content_len > 0) {
