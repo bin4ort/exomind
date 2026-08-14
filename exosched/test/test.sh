@@ -203,7 +203,211 @@ r=$(curl -s -m 3 "$XM_URL/list?prefix=exosched:timer:")
 check "missed timer's key dropped" \
     "$(printf '%s' "$r" | grep -q "$idm2" && echo 1 || echo 0)"
 
+# --- recurring timers (0.2.0): every / until / cancel / restart -------------
+r=$(curl -s -m 3 -X POST "$XS_URL/remind" -d 'every 2s "cadence-check"')
+idr=$(echo "$r" | awk '{print $2}')
+epr=$(echo "$r" | awk '{print $3}')
+now=$(date +%s)
+check "every 2s replies 'ok <id> <epoch ~now+2>'" \
+    "$(printf '%s' "$r" | grep -qE '^ok [0-9]+:[0-9a-f]+ [0-9]+$' && [ $((epr - now)) -ge 1 ] && [ $((epr - now)) -le 3 ] && echo 0 || echo 1)" "$r"
+sleep 5.5
+r=$(curl -s -m 3 "$XM_URL/notes?q=cadence-check")
+nf=$(printf '%s' "$r" | grep -c "fired timer $idr")
+check "every 2s fires at least twice in 5.5s" \
+    "$([ "$nf" -ge 2 ] && echo 0 || echo 1)" "fires=$nf"
+ep1=$(printf '%s' "$r" | grep "fired timer $idr" | grep -oP 'at \K[0-9]+(?= \()' | head -1)
+ep2=$(printf '%s' "$r" | grep "fired timer $idr" | grep -oP 'at \K[0-9]+(?= \()' | tail -1)
+gap=$((ep1 - ep2))
+check "recurring fires keep ~2s cadence (measured from note epochs)" \
+    "$([ "$gap" -ge 1 ] && [ "$gap" -le 3 ] && echo 0 || echo 1)" "gap=$gap (ep1=$ep1 ep2=$ep2)"
+
+r=$(curl -s -m 3 -X POST "$XS_URL/remind" -d 'in 60s "tsv-oneshot"')
+ido=$(echo "$r" | awk '{print $2}')
+r=$(curl -s -m 3 "$XS_URL/timers")
+l1=$(printf '%s\n' "$r" | grep "$idr")
+l2=$(printf '%s\n' "$r" | grep "$ido")
+check "recurring /timers tsv: repeat_s+until appended (6 fields)" \
+    "$(printf '%s' "$l1" | awk -F '\t' -v id="$idr" 'NF==6 && $1==id && $5==2 && $6==0 {ok=1} END {exit ok?0:1}' && echo 0 || echo 1)" "$l1"
+check "one-shot /timers tsv stays 4 fields" \
+    "$(printf '%s' "$l2" | awk -F '\t' -v id="$ido" 'NF==4 && $1==id && $4=="tsv-oneshot" {ok=1} END {exit ok?0:1}' && echo 0 || echo 1)" "$l2"
+r=$(curl -s -m 3 "$XS_URL/timers?json=1")
+check "/timers?json=1 carries repeat_s/until (2/0 recurring, 0/0 one-shot)" \
+    "$(printf '%s' "$r" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+rec=[t for t in d if t['id']=='$idr']
+one=[t for t in d if t['id']=='$ido']
+sys.exit(0 if rec and one and rec[0]['repeat_s']==2 and rec[0]['until']==0 and one[0]['repeat_s']==0 and one[0]['until']==0 else 1)" && echo 0 || echo 1)" "$r"
+
+now=$(date +%s)
+u=$((now + 5))
+r=$(curl -s -m 3 -X POST "$XS_URL/remind" -d "every 2s \"until-check\" until $u")
+idu=$(echo "$r" | awk '{print $2}')
+sleep 8
+r=$(curl -s -m 3 "$XM_URL/notes?q=until-check")
+nu=$(printf '%s' "$r" | grep -c "fired timer $idu")
+check "every 2s until now+5 fires exactly twice, then stops" \
+    "$([ "$nu" -eq 2 ] && echo 0 || echo 1)" "fires=$nu"
+r=$(curl -s -m 3 "$XS_URL/timers")
+check "until-reached timer leaves /timers" \
+    "$(printf '%s' "$r" | grep -q "$idu" && echo 1 || echo 0)"
+r=$(curl -s -m 3 "$XM_URL/list?prefix=exosched:timer:")
+check "until-reached timer's key dropped" \
+    "$(printf '%s' "$r" | grep -q "$idu" && echo 1 || echo 0)"
+
+h1=$(curl -s -m 3 -o /dev/null -w '%{http_code}' -X POST "$XS_URL/remind" -d "every 2s \"x\" until $((now - 10))")
+check "every ... until <past> -> 400" "$([ "$h1" = "400" ] && echo 0 || echo 1)" "h1=$h1"
+h2=$(curl -s -m 3 -o /dev/null -w '%{http_code}' -X POST "$XS_URL/remind" -d "at $((now - 10)) \"x\"")
+check "at <past> -> 400 (pinned)" "$([ "$h2" = "400" ] && echo 0 || echo 1)" "h2=$h2"
+
+r=$(curl -s -m 3 -X POST "$XS_URL/remind" -d 'every 2s "cancel-recur"')
+idcr=$(echo "$r" | awk '{print $2}')
+sleep 2.5
+d=$(curl -s -m 3 -X DELETE "$XS_URL/timer?id=$idcr")
+check "DELETE /timer?id= cancels a recurring timer" \
+    "$([ "$d" = "ok" ] && echo 0 || echo 1)" "$d"
+sleep 3.5
+r=$(curl -s -m 3 "$XM_URL/notes?q=cancel-recur")
+ncr=$(printf '%s' "$r" | grep -c "fired timer $idcr")
+check "cancelled recurring fires exactly once before cancel, never after" \
+    "$([ "$ncr" -eq 1 ] && echo 0 || echo 1)" "fires=$ncr"
+r=$(curl -s -m 3 "$XM_URL/list?prefix=exosched:timer:")
+check "cancelled recurring timer's exomind key gone" \
+    "$(printf '%s' "$r" | grep -q "$idcr" && echo 1 || echo 0)"
+
+r=$(curl -s -m 3 -X POST "$XS_URL/remind" -d 'every 2s "recur-restart"')
+idp2=$(echo "$r" | awk '{print $2}')
+kill -9 "$XS_PID" 2>/dev/null
+stop_port $XS_PORT
+sleep 0.3
+setsid nohup "$XS_BIN" --port $XS_PORT --exomind "$XM_URL" \
+    >"$XS_LOG" 2>&1 < /dev/null &
+XS_PID=$!
+sleep 1
+r=$(curl -s -m 3 "$XS_URL/timers")
+check "recurring timer survives SIGKILL restart, repeat col intact" \
+    "$(printf '%s' "$r" | awk -F '\t' -v id="$idp2" '$1==id && NF==6 && $5==2 {ok=1} END {exit ok?0:1}' && echo 0 || echo 1)" "$r"
+python3 wsclient.py $XS_PORT recur-restart 8 >"$WS_LOG" 2>&1 &
+WS_PID=$!
+wait "$WS_PID" 2>/dev/null
+check "restarted recurring timer still fires + ws push" \
+    "$( [ $? -eq 0 ] && grep -q "timer $idp2 .* recur-restart" "$WS_LOG" && echo 0 || echo 1)" "$(cat "$WS_LOG")"
+
+r=$(curl -s -m 3 -X POST "$XS_URL/remind" -d 'every 2s "catchup-check"')
+idq=$(echo "$r" | awk '{print $2}')
+kill -9 "$XS_PID" 2>/dev/null
+stop_port $XS_PORT
+sleep 5.5
+setsid nohup "$XS_BIN" --port $XS_PORT --exomind "$XM_URL" \
+    >"$XS_LOG" 2>&1 < /dev/null &
+XS_PID=$!
+sleep 1.2
+check "overdue recurring timer logs catch-up on reload (not 'missed')" \
+    "$(grep -q "caught up" "$XS_LOG" && echo 0 || echo 1)" "$(grep -E 'caught up|missed' "$XS_LOG" | tail -2)"
+sleep 3
+r=$(curl -s -m 3 "$XM_URL/notes?q=catchup-check")
+check "overdue recurring catches up and fires after restart, no missed note" \
+    "$(printf '%s' "$r" | grep -q "fired timer $idq" && printf '%s' "$r" | grep -q "missed timer $idq" && echo 1 || echo 0)" "$r"
+
+kill -9 "$XS_PID" 2>/dev/null
+stop_port $XS_PORT
+now=$(date +%s)
+curl -s -m 3 -X POST "$XM_URL/set" -H 'Content-Type: application/json' \
+    -d "{\"key\":\"exosched:timer:legacy-wire\",\"value\":\"$((now + 6))\tlegacy-wire-msg\",\"ttl\":600}" \
+    >/dev/null
+setsid nohup "$XS_BIN" --port $XS_PORT --exomind "$XM_URL" \
+    >"$XS_LOG" 2>&1 < /dev/null &
+XS_PID=$!
+sleep 1.2
+r=$(curl -s -m 3 "$XS_URL/timers")
+check "0.1.0 wire value (fire\\tmsg, no repeat cols) loads as one-shot" \
+    "$(printf '%s' "$r" | awk -F '\t' -v id="legacy-wire" '$1==id && NF==4 && $4=="legacy-wire-msg" {ok=1} END {exit ok?0:1}' && echo 0 || echo 1)" "$r"
+python3 wsclient.py $XS_PORT legacy-wire 10 >"$WS_LOG" 2>&1 &
+WS_PID=$!
+wait "$WS_PID" 2>/dev/null
+check "legacy one-shot fires with ws push" \
+    "$( [ $? -eq 0 ] && grep -q "timer legacy-wire" "$WS_LOG" && echo 0 || echo 1)" "$(cat "$WS_LOG")"
+
+r=$(curl -s -m 3 -X POST "$XS_URL/remind" -d 'in 2s "one-shot-still-ok"')
+id2s=$(echo "$r" | awk '{print $2}')
+sleep 3
+r=$(curl -s -m 3 "$XM_URL/notes?q=one-shot-still-ok")
+check "in 2s one-shot still fires (no regression)" \
+    "$(printf '%s' "$r" | grep -q "fired timer $id2s" && echo 0 || echo 1)" "$r"
+
+# --- reload/cancel race: a stale reload snapshot must not resurrect a timer
+#     cancelled while the reload was in flight (Agent E report) -------------
+# Degraded startup (exomind down) puts reloads in a background thread that
+# runs concurrently with the HTTP API; 6000 overdue keys stretch the reload's
+# apply phase so the window is deterministic.
+kill -9 "$XS_PID" 2>/dev/null
+stop_port $XS_PORT
+kill -9 "$XM_PID" 2>/dev/null
+stop_port $XM_PORT
+setsid nohup "$XM_BIN" --port $XM_PORT --data "$XM_DATA" \
+    >"$XM_LOG" 2>&1 < /dev/null &
+XM_PID=$!
+sleep 0.6
+XM_PORT=$XM_PORT python3 - <<'EOF'
+import json, os, urllib.request
+port = os.environ["XM_PORT"]
+ops = [["set", "exosched:timer:0000-%04d" % i, "1700000000\tstale-%04d" % i, "3600"] for i in range(6000)]
+req = urllib.request.Request("http://127.0.0.1:%s/batch" % port,
+                             data=json.dumps(ops).encode(),
+                             headers={"Content-Type": "application/json"})
+urllib.request.urlopen(req, timeout=30).read()
+EOF
+kill -9 "$XM_PID" 2>/dev/null
+stop_port $XM_PORT
+setsid nohup "$XS_BIN" --port $XS_PORT --exomind "$XM_URL" \
+    >"$XS_LOG" 2>&1 < /dev/null &
+XS_PID=$!
+fails=0
+for _ in $(seq 1 80); do
+    fails=$(grep -c "reload failed" "$XS_LOG" 2>/dev/null || true)
+    [ "${fails:-0}" -ge 11 ] && break
+    sleep 0.25
+done
+check "degraded startup: reload thread running (>=11 failed attempts)" \
+    "$([ "${fails:-0}" -ge 11 ] && echo 0 || echo 1)" "fails=${fails:-0}"
+target=$((fails + 1))
+for _ in $(seq 1 30); do
+    fails=$(grep -c "reload failed" "$XS_LOG" 2>/dev/null || true)
+    [ "${fails:-0}" -ge "$target" ] && break
+    sleep 0.2
+done
+setsid nohup "$XM_BIN" --port $XM_PORT --data "$XM_DATA" \
+    >"$XM_LOG" 2>&1 < /dev/null &
+XM_PID=$!
+sleep 0.3
+r=$(curl -s -m 3 -X POST "$XS_URL/remind" -d 'every 2s "race-victim"')
+idrv=$(echo "$r" | awk '{print $2}')
+sleep 0.8
+dok=0
+t0=$(date +%s)
+while [ $(( $(date +%s) - t0 )) -lt 20 ]; do
+    grep -qE "reload complete|no timers to reload" "$XS_LOG" 2>/dev/null && break
+    d=$(curl -s -m 3 -X DELETE "$XS_URL/timer?id=$idrv")
+    [ "$d" = "ok" ] && dok=$((dok + 1))
+    sleep 0.05
+done
+check "cancelled mid-reload (DELETE answered ok at least once)" \
+    "$([ "$dok" -ge 1 ] && echo 0 || echo 1)" "ok-deletes=$dok"
+sleep 5
+r=$(curl -s -m 3 "$XM_URL/notes?q=race-victim")
+check "cancelled mid-reload timer does NOT fire again (no resurrection)" \
+    "$(printf '%s' "$r" | grep -q "fired timer $idrv" && echo 1 || echo 0)" "$r"
+r=$(curl -s -m 3 "$XS_URL/timers")
+check "cancelled mid-reload timer not re-added to /timers" \
+    "$(printf '%s' "$r" | grep -q "$idrv" && echo 1 || echo 0)"
+r=$(curl -s -m 3 "$XM_URL/list?prefix=exosched:timer:")
+check "cancelled mid-reload timer's exomind key not re-created" \
+    "$(printf '%s' "$r" | grep -q "$idrv" && echo 1 || echo 0)"
+r=$(curl -s -m 3 "$XS_URL/ping")
+check "daemon alive after reload race" "$([ "$r" = "pong" ] && echo 0 || echo 1)"
+
 # --- garbage / robustness ------------------------------------------------------
+
 g1=$(curl -s -m 3 -o /dev/null -w '%{http_code}' -X POST "$XS_URL/remind" -d 'garbage')
 g2=$(curl -s -m 3 -o /dev/null -w '%{http_code}' -X POST "$XS_URL/remind" -d 'in xyz "bad"')
 g3=$(curl -s -m 3 -o /dev/null -w '%{http_code}' -X POST "$XS_URL/remind" -d 'in 5m')

@@ -9,7 +9,7 @@ every fire grows exomind's searchable note feed.
 
 ```
 make exosched        # builds exosched/build/exosched (from the repo root)
-make test-exosched   # runs exosched/test/test.sh (25 checks, ~35s)
+make test-exosched   # runs exosched/test/test.sh (54 checks, ~2.5min)
 ```
 
 ## usage
@@ -95,3 +95,13 @@ dead clients are purged on the next broadcast, pings get pongs.
 /tmp/exosched_test) and exosched (port 7661); it never touches a
 shared exomind. Needs `curl`, `python3` (the WebSocket client) and
 `ss`.
+
+Coverage includes the 0.2.0 recurring-timer surface: `every`
+cadence (measured from note epochs), persistence across SIGKILL
+restarts, `until` semantics (stops after the last fire, past `until`
+rejected, past `at` rejected), DELETE of a recurring timer, the
+6-column `/timers` TSV and `json=1` `repeat_s`/`until` fields, reload
+catch-up of overdue recurring timers, 0.1.0 one-shot wire values
+(`fire\tmsg`) loading and firing, and the reload/cancel race: a timer
+cancelled while a degraded-startup background reload is in flight is
+never resurrected by the stale snapshot.

@@ -25,6 +25,10 @@ static pthread_cond_t g_cv;
 static timer_rec_t *g_head = NULL;
 static volatile int g_stop = 0;
 static exo_t *g_exo = NULL;
+/* bumped under g_mu whenever the registry is changed by a request (add /
+ * cancel); a reload snapshot taken before a bump is stale and must be
+ * re-run instead of being applied on top of the newer state */
+static int64_t g_reload_gen = 0;
 
 void timers_init(void)
 {
@@ -45,11 +49,15 @@ void timers_shutdown(void)
 
 timer_rec_t *timer_find(const char *id)
 {
-    timer_rec_t *t;
-    for (t = g_head; t; t = t->next)
-        if (strcmp(t->id, id) == 0)
-            return t;
-    return NULL;
+    timer_rec_t *found = NULL;
+    pthread_mutex_lock(&g_mu);
+    for (timer_rec_t *t = g_head; t; t = t->next)
+        if (strcmp(t->id, id) == 0) {
+            found = t;
+            break;
+        }
+    pthread_mutex_unlock(&g_mu);
+    return found;
 }
 
 size_t timer_count(void)
@@ -137,6 +145,7 @@ int timer_add(const char *id, int64_t wall_fire, int64_t repeat,
         return -1;
     }
     insert_locked(t);
+    g_reload_gen++;
     pthread_mutex_unlock(&g_mu);
     return 0;
 }
@@ -157,8 +166,10 @@ int timer_cancel(const char *id)
         }
         pp = &(*pp)->next;
     }
-    if (found)
+    if (found) {
+        g_reload_gen++;
         pthread_cond_signal(&g_cv);
+    }
     pthread_mutex_unlock(&g_mu);
     return found;
 }
@@ -323,7 +334,17 @@ static void drop_missed(exo_t *e, const char *id, const char *msg,
                 key, err);
 }
 
-static void reload_one(exo_t *e, const char *key, const char *value)
+/* sentinel reason for a plain overdue one-shot (note keeps its original
+ * form, without the "; <reason>" suffix) */
+#define REASON_OVERDUE_ONE_SHOT ((const char *)1)
+
+/* parses one timer value into an add or a drop; never touches the registry.
+ * returns 0 on success (add: *out_* set; drop: *out_reason set), -1 on a
+ * bad value (skipped, already logged). */
+static int reload_parse(const char *key, const char *value, char *id,
+                        size_t idcap, int64_t *out_fire, int64_t *out_repeat,
+                        int64_t *out_until, char **out_msg,
+                        const char **out_reason)
 {
     int64_t fire = 0, repeat = 0, until = 0;
     const char *p = value;
@@ -331,7 +352,7 @@ static void reload_one(exo_t *e, const char *key, const char *value)
     fire = strtoll(p, &end, 10);
     if (end == p || *end != '\t' || fire <= 0) {
         fprintf(stderr, "exosched: reload: bad timer value for %s\n", key);
-        return;
+        return -1;
     }
     p = end + 1;
     char *end2 = NULL;
@@ -345,54 +366,55 @@ static void reload_one(exo_t *e, const char *key, const char *value)
         if (end3 == end2 + 1 || *end3 != '\t' || until < 0) {
             fprintf(stderr, "exosched: reload: bad recurring value for %s\n",
                     key);
-            return;
+            return -1;
         }
         msg = unesc_line(end3 + 1);
     } else {
         /* one-shot: <fire>\t<msg> */
         msg = unesc_line(p);
     }
-    const char *id = key + strlen(EXO_KEY_PREFIX);
-    int64_t orig_fire = fire;
+    snprintf(id, idcap, "%s", key + strlen(EXO_KEY_PREFIX));
+    *out_fire = fire;
+    *out_repeat = repeat;
+    *out_until = until;
+    *out_msg = msg;
+    *out_reason = NULL;
+    return 0;
+}
 
-    if (repeat > 0) {
-        if (until > 0 && fire >= until) {
-            drop_missed(e, id, msg, orig_fire, "recurring: until already reached");
-            free(msg);
-            return;
-        }
-        while (fire <= now_epoch() && (until == 0 || fire + repeat <= until))
-            fire += repeat;
-        if (fire <= now_epoch()) {
-            drop_missed(e, id, msg, orig_fire, "recurring: until reached while down");
-            free(msg);
-            return;
-        }
-        if (fire != orig_fire)
-            fprintf(stderr,
-                    "exosched: reloaded recurring timer %s (caught up to %lld, "
-                    "repeat %llds)\n",
-                    id, (long long)fire, (long long)repeat);
-    } else if (fire <= now_epoch()) {
-        drop_missed(e, id, msg, orig_fire, NULL);
-        free(msg);
-        return;
-    }
-
-    if (timer_add(id, fire, repeat, until, msg) != 0)
-        fprintf(stderr, "exosched: reload: duplicate id %s\n", id);
-    else
-        fprintf(stderr, "exosched: reloaded timer %s (fires in %llds%s)\n",
-                id, (long long)(fire - now_epoch()),
-                repeat > 0 ? ", recurring" : "");
-    free(msg);
+/* inserts a reloaded timer; caller holds g_mu. returns 0 added, 1 already
+ * present (skip), -1 registry changed since the snapshot was taken (the
+ * whole reload must be aborted and re-run against fresh state). */
+static int reload_add_locked(const char *id, int64_t wall_fire, int64_t repeat,
+                             int64_t until, const char *msg, int64_t gen)
+{
+    if (gen != g_reload_gen)
+        return -1;
+    for (timer_rec_t *t = g_head; t; t = t->next)
+        if (strcmp(t->id, id) == 0)
+            return 1;
+    timer_rec_t *t = xmalloc(sizeof *t);
+    snprintf(t->id, sizeof t->id, "%s", id);
+    t->wall_fire = wall_fire;
+    t->repeat = repeat;
+    t->until = until;
+    t->retry_mono = 0;
+    t->msg = xstrdup(msg);
+    int64_t delta_ns = (wall_fire - now_epoch()) * 1000000000L;
+    t->mono_fire = mono_ns() + delta_ns;
+    insert_locked(t);
+    return 0;
 }
 
 /* reloads timers from exomind at startup: /list then one /batch of /gets.
- * returns 0 on success (even with zero timers), -1 if exomind is down */
+ * returns 0 on success (even with zero timers), -1 if exomind is down or
+ * the snapshot went stale (registry changed mid-reload; caller retries). */
 int timers_reload(exo_t *e)
 {
     char err[256];
+    pthread_mutex_lock(&g_mu);
+    int64_t gen = g_reload_gen;
+    pthread_mutex_unlock(&g_mu);
     char **keys = NULL;
     size_t n = 0;
     if (exo_list(e, EXO_KEY_PREFIX, &keys, &n, err, sizeof err) != 0) {
@@ -411,13 +433,107 @@ int timers_reload(exo_t *e)
         free(keys);
         return -1;
     }
+
+    /* phase 1: parse the snapshot into pending adds / drops (pure CPU) */
+    char **ids = xcalloc(n, sizeof *ids);
+    int64_t *fires = xcalloc(n, sizeof *fires);
+    int64_t *repeats = xcalloc(n, sizeof *repeats);
+    int64_t *untils = xcalloc(n, sizeof *untils);
+    char **msgs = xcalloc(n, sizeof *msgs);
+    const char **reasons = xcalloc(n, sizeof *reasons);
+    size_t np = 0;
     for (size_t i = 0; i < n; i++) {
-        reload_one(e, keys[i], vals[i]);
+        char *id = xmalloc(TIMER_ID_MAX);
+        int64_t fire, repeat, until;
+        char *msg;
+        const char *reason = NULL;
+        if (reload_parse(keys[i], vals[i], id, TIMER_ID_MAX, &fire, &repeat,
+                         &until, &msg, &reason) != 0) {
+            free(id);
+            continue;
+        }
+        if (repeat > 0) {
+            int64_t orig_fire = fire;
+            if (until > 0 && fire >= until) {
+                reason = "recurring: until already reached";
+            } else {
+                while (fire <= now_epoch() &&
+                       (until == 0 || fire + repeat <= until))
+                    fire += repeat;
+                if (fire <= now_epoch())
+                    reason = "recurring: until reached while down";
+            }
+            if (fire != orig_fire)
+                fprintf(stderr,
+                        "exosched: reloaded recurring timer %s (caught up to "
+                        "%lld, repeat %llds)\n",
+                        id, (long long)fire, (long long)repeat);
+        } else if (fire <= now_epoch()) {
+            reason = REASON_OVERDUE_ONE_SHOT;
+        }
+        ids[np] = id;
+        fires[np] = fire;
+        repeats[np] = repeat;
+        untils[np] = until;
+        msgs[np] = msg;
+        reasons[np] = reason;
+        np++;
+    }
+
+    /* phase 2: drops (missed-timer notes + key cleanup): HTTP, no lock */
+    for (size_t i = 0; i < np; i++) {
+        if (reasons[i])
+            drop_missed(e, ids[i], msgs[i], fires[i],
+                        reasons[i] == REASON_OVERDUE_ONE_SHOT ? NULL
+                                                             : reasons[i]);
+    }
+
+    /* phase 3: adds, under the lock, re-validating the snapshot per key so
+     * a timer cancelled (or added) while we were reading cannot be
+     * resurrected by this stale snapshot */
+    pthread_mutex_lock(&g_mu);
+    int stale = 0;
+    for (size_t i = 0; i < np; i++) {
+        if (reasons[i])
+            continue;
+        int rc = reload_add_locked(ids[i], fires[i], repeats[i], untils[i],
+                                   msgs[i], gen);
+        if (rc == -1) {
+            stale = 1;
+            break;
+        }
+        if (rc == 1)
+            fprintf(stderr, "exosched: reload: duplicate id %s\n", ids[i]);
+        else
+            fprintf(stderr, "exosched: reloaded timer %s (fires in %llds%s)\n",
+                    ids[i], (long long)(fires[i] - now_epoch()),
+                    repeats[i] > 0 ? ", recurring" : "");
+    }
+    pthread_mutex_unlock(&g_mu);
+
+    for (size_t i = 0; i < n; i++) {
         free(keys[i]);
         free(vals[i]);
     }
     free(keys);
     free(vals);
+    for (size_t i = 0; i < np; i++) {
+        free(ids[i]);
+        free(msgs[i]);
+    }
+    free(ids);
+    free(fires);
+    free(repeats);
+    free(untils);
+    free(msgs);
+    free(reasons);
+
+    if (stale) {
+        fprintf(stderr,
+                "exosched: reload aborted: registry changed mid-reload; "
+                "retrying against fresh state\n");
+        return -1;
+    }
     fprintf(stderr, "exosched: reload complete (%zu timers found)\n", n);
     return 0;
 }
