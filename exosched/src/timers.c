@@ -1,6 +1,16 @@
-/* exosched timers: registry (sorted by deadline) + exactly one timer thread.
- * Internal deadlines use CLOCK_MONOTONIC; wall clock is used only for
- * parsing and for the notes written back into exomind. */
+/* exosched timers: registry (sorted by effective deadline) + exactly one
+ * timer thread. Internal deadlines use CLOCK_MONOTONIC; wall clock is used
+ * only for parsing and for the notes written back into exomind.
+ *
+ * Durability protocol (exomind is the only source of truth):
+ *  - one-shot value:  "<fire_epoch>\t<msg>"
+ *  - recurring value: "<fire_epoch>\t<repeat_s>\t<until_epoch>\t<msg>"
+ * msg is esc_line()'d on persist, unescaped on reload.
+ *  - on fire: ws push, then write the note and rewrite/delete the key.
+ *  - if exomind is down at fire time the timer stays in the registry with
+ *    retry_mono set; the note/reschedule/del is retried until it succeeds,
+ *    so a fire is never silently lost.
+ */
 #include "exosched.h"
 
 #include <errno.h>
@@ -65,6 +75,9 @@ timer_rec_t *timers_snapshot(size_t *n)
         snprintf(snap[i].id, sizeof snap[i].id, "%s", t->id);
         snap[i].wall_fire = t->wall_fire;
         snap[i].mono_fire = t->mono_fire;
+        snap[i].repeat = t->repeat;
+        snap[i].until = t->until;
+        snap[i].retry_mono = t->retry_mono;
         snap[i].msg = xstrdup(t->msg);
         i++;
     }
@@ -80,12 +93,34 @@ void timers_snapshot_free(timer_rec_t *snap, size_t n)
     free(snap);
 }
 
-/* inserts a timer; mono_fire computed from wall clock delta */
-int timer_add(const char *id, int64_t wall_fire, const char *msg)
+/* effective deadline: pending exomind retries trump the (already elapsed)
+ * fire deadline */
+static int64_t eff_due(const timer_rec_t *t)
+{
+    return t->retry_mono ? t->retry_mono : t->mono_fire;
+}
+
+/* inserts under the held lock, sorted by effective deadline */
+static void insert_locked(timer_rec_t *t)
+{
+    timer_rec_t **pp = &g_head;
+    while (*pp && eff_due(*pp) <= eff_due(t))
+        pp = &(*pp)->next;
+    t->next = *pp;
+    *pp = t;
+    pthread_cond_signal(&g_cv);
+}
+
+/* inserts a timer; mono_fire computed from the wall-clock delta */
+int timer_add(const char *id, int64_t wall_fire, int64_t repeat,
+              int64_t until, const char *msg)
 {
     timer_rec_t *t = xmalloc(sizeof *t);
     snprintf(t->id, sizeof t->id, "%s", id);
     t->wall_fire = wall_fire;
+    t->repeat = repeat;
+    t->until = until;
+    t->retry_mono = 0;
     t->msg = xstrdup(msg);
     int64_t delta_ns = (wall_fire - now_epoch()) * 1000000000L;
     t->mono_fire = mono_ns() + delta_ns;
@@ -101,12 +136,7 @@ int timer_add(const char *id, int64_t wall_fire, const char *msg)
         free(t);
         return -1;
     }
-    timer_rec_t **pp = &g_head;
-    while (*pp && (*pp)->mono_fire <= t->mono_fire)
-        pp = &(*pp)->next;
-    t->next = *pp;
-    *pp = t;
-    pthread_cond_signal(&g_cv);
+    insert_locked(t);
     pthread_mutex_unlock(&g_mu);
     return 0;
 }
@@ -133,32 +163,91 @@ int timer_cancel(const char *id)
     return found;
 }
 
-/* writes the fired/missed timer into the exomind note feed and drops the
- * durable key; the TTL is the safety net if we are down at fire time */
-static void fire_cleanup(exo_t *e, const timer_rec_t *t, const char *kind)
+/* ---- exomind bookkeeping for a fired timer ------------------------------ */
+
+char *timer_value(int64_t fire, int64_t repeat, int64_t until,
+                  const char *msg)
+{
+    char *esc = esc_line(msg, strlen(msg));
+    char *v = xmalloc(strlen(esc) + 96);
+    if (repeat > 0)
+        snprintf(v, strlen(esc) + 96, "%lld\t%lld\t%lld\t%s",
+                 (long long)fire, (long long)repeat, (long long)until, esc);
+    else
+        snprintf(v, strlen(esc) + 96, "%lld\t%s", (long long)fire, esc);
+    free(esc);
+    return v;
+}
+
+long timer_ttl(int64_t fire)
+{
+    long ttl = (long)(fire - now_epoch()) + 300;
+    if (ttl < 60)
+        ttl = 60;
+    if (ttl > 315360000)
+        ttl = 315360000;
+    return ttl;
+}/* handles the fire bookkeeping for one timer. The ws push already happened.
+ * returns 0 if the timer is done (one-shot fired, or last recurring fire),
+ * 1 if it must be kept (recurring, bookkeeping done), 2 if exomind was
+ * down and the bookkeeping must be retried (keep, retry later).
+ * On success the timer's wall_fire/mono_fire are advanced in place. */
+static int fire_timer(exo_t *e, timer_rec_t *t)
 {
     char err[256];
+    int last = t->repeat > 0 && t->until > 0 &&
+               t->wall_fire + t->repeat > t->until;
+
     buf_t note = {0};
-    if (!strcmp(kind, "missed"))
-        buf_printf(&note,
-                   "missed timer %s: %s (was at %lld, now %lld)", t->id,
-                   t->msg, (long long)t->wall_fire, (long long)now_epoch());
+    if (last)
+        buf_printf(&note, "fired timer %s: %s at %lld (last fire, until %lld)",
+                   t->id, t->msg, (long long)t->wall_fire,
+                   (long long)t->until);
+    else if (t->repeat > 0)
+        buf_printf(&note, "fired timer %s: %s at %lld (repeat %llds)",
+                   t->id, t->msg, (long long)t->wall_fire,
+                   (long long)t->repeat);
     else
         buf_printf(&note, "fired timer %s: %s at %lld", t->id, t->msg,
                    (long long)t->wall_fire);
-    if (exo_note(e, note.p, err, sizeof err) != 0)
-        fprintf(stderr, "exosched: note failed: %s\n", err);
+    if (exo_note(e, note.p, err, sizeof err) != 0) {
+        fprintf(stderr, "exosched: note failed for %s: %s (retrying)\n",
+                t->id, err);
+        buf_free(&note);
+        return 2;
+    }
     buf_free(&note);
+
     char key[512];
     snprintf(key, sizeof key, EXO_KEY_PREFIX "%s", t->id);
+    if (!last && t->repeat > 0) {
+        /* recurring: rewrite the key with the next fire time */
+        int64_t nxt = t->wall_fire + t->repeat;
+        char *val = timer_value(nxt, t->repeat, t->until, t->msg);
+        if (exo_persist(e, key, val, timer_ttl(nxt), err, sizeof err) != 0) {
+            fprintf(stderr,
+                    "exosched: reschedule failed for %s: %s (retrying)\n",
+                    t->id, err);
+            free(val);
+            return 2;
+        }
+        free(val);
+        t->wall_fire = nxt;
+        int64_t delta_ns = (nxt - now_epoch()) * 1000000000L;
+        t->mono_fire = mono_ns() + delta_ns;
+        t->retry_mono = 0;
+        return 1; /* keep the timer */
+    }
     int existed = 0;
-    if (exo_del(e, key, &existed, err, sizeof err) != 0)
-        fprintf(stderr, "exosched: del %s failed: %s (ttl will expire it)\n",
-                key, err);
+    if (exo_del(e, key, &existed, err, sizeof err) != 0) {
+        fprintf(stderr, "exosched: del %s failed: %s (retrying)\n", key, err);
+        return 2;
+    }
+    return 0; /* done: caller frees */
 }
 
-/* the one and only timer thread: sleeps until the next deadline (100ms
- * granularity), woken by timer_add/timer_cancel via the condvar */
+/* the one and only timer thread: sleeps until the next effective deadline
+ * (100ms granularity), woken by timer_add/timer_cancel via the condvar */
 void *timer_loop(void *arg)
 {
     g_exo = arg;
@@ -168,20 +257,32 @@ void *timer_loop(void *arg)
             break;
         int64_t now = mono_ns();
         timer_rec_t *t = g_head;
-        if (t && t->mono_fire <= now) {
+        if (t && eff_due(t) <= now) {
             g_head = t->next;
             t->next = NULL;
             pthread_mutex_unlock(&g_mu);
-            ws_broadcast(t->id, t->wall_fire, t->msg);
-            fire_cleanup(g_exo, t, "fired");
-            free(t->msg);
-            free(t);
+            if (!t->retry_mono)
+                ws_broadcast(t->id, t->wall_fire, t->msg);
+            int keep = fire_timer(g_exo, t);
             pthread_mutex_lock(&g_mu);
+            if (keep == 2) {
+                /* exomind was down: keep the timer, retry the note /
+                 * reschedule / delete later; the fire was not lost */
+                t->retry_mono = mono_ns() + RETRY_DELAY_NS;
+                insert_locked(t);
+            } else if (keep == 1) {
+                /* recurring, rescheduled: keep and sleep until next fire */
+                t->retry_mono = 0;
+                insert_locked(t);
+            } else {
+                free(t->msg);
+                free(t);
+            }
             continue;
         }
         int64_t wait_ns = 100 * 1000000L; /* 100ms granularity */
         if (t) {
-            int64_t to_next = t->mono_fire - now;
+            int64_t to_next = eff_due(t) - now;
             if (to_next < wait_ns)
                 wait_ns = to_next < 0 ? 0 : to_next;
         }
@@ -198,39 +299,93 @@ void *timer_loop(void *arg)
     return NULL;
 }
 
+/* writes a "missed timer ..." note and drops the durable key */
+static void drop_missed(exo_t *e, const char *id, const char *msg,
+                        int64_t fire, const char *reason)
+{
+    char err[256];
+    buf_t note = {0};
+    if (reason)
+        buf_printf(&note, "missed timer %s: %s (was at %lld, now %lld; %s)",
+                   id, msg, (long long)fire, (long long)now_epoch(), reason);
+    else
+        buf_printf(&note,
+                   "missed timer %s: %s (was at %lld, now %lld)", id, msg,
+                   (long long)fire, (long long)now_epoch());
+    if (exo_note(e, note.p, err, sizeof err) != 0)
+        fprintf(stderr, "exosched: note failed: %s\n", err);
+    buf_free(&note);
+    char key[512];
+    snprintf(key, sizeof key, EXO_KEY_PREFIX "%s", id);
+    int existed = 0;
+    if (exo_del(e, key, &existed, err, sizeof err) != 0)
+        fprintf(stderr, "exosched: del %s failed: %s (ttl will expire it)\n",
+                key, err);
+}
+
 static void reload_one(exo_t *e, const char *key, const char *value)
 {
-    const char *sep = strchr(value, '\t');
-    if (!sep) {
+    int64_t fire = 0, repeat = 0, until = 0;
+    const char *p = value;
+    char *end = NULL;
+    fire = strtoll(p, &end, 10);
+    if (end == p || *end != '\t' || fire <= 0) {
         fprintf(stderr, "exosched: reload: bad timer value for %s\n", key);
         return;
     }
-    char wall[32];
-    size_t wlen = (size_t)(sep - value);
-    if (wlen >= sizeof wall)
-        wlen = sizeof wall - 1;
-    memcpy(wall, value, wlen);
-    wall[wlen] = 0;
-    int64_t fire = (int64_t)strtoll(wall, NULL, 10);
-    if (fire <= 0) {
-        fprintf(stderr, "exosched: reload: bad epoch in %s\n", key);
-        return;
+    p = end + 1;
+    char *end2 = NULL;
+    int64_t r2 = strtoll(p, &end2, 10);
+    char *msg = NULL;
+    if (end2 > p && *end2 == '\t' && r2 > 0) {
+        /* recurring: <fire>\t<repeat>\t<until>\t<msg> */
+        repeat = r2;
+        char *end3 = NULL;
+        until = strtoll(end2 + 1, &end3, 10);
+        if (end3 == end2 + 1 || *end3 != '\t' || until < 0) {
+            fprintf(stderr, "exosched: reload: bad recurring value for %s\n",
+                    key);
+            return;
+        }
+        msg = unesc_line(end3 + 1);
+    } else {
+        /* one-shot: <fire>\t<msg> */
+        msg = unesc_line(p);
     }
     const char *id = key + strlen(EXO_KEY_PREFIX);
-    const char *msg = sep + 1;
-    if (fire > now_epoch()) {
-        if (timer_add(id, fire, msg) != 0)
-            fprintf(stderr, "exosched: reload: duplicate id %s\n", id);
-        else
-            fprintf(stderr, "exosched: reloaded timer %s (fires in %llds)\n",
-                    id, (long long)(fire - now_epoch()));
-    } else {
-        timer_rec_t fake;
-        snprintf(fake.id, sizeof fake.id, "%s", id);
-        fake.wall_fire = fire;
-        fake.msg = (char *)msg;
-        fire_cleanup(e, &fake, "missed");
+    int64_t orig_fire = fire;
+
+    if (repeat > 0) {
+        if (until > 0 && fire >= until) {
+            drop_missed(e, id, msg, orig_fire, "recurring: until already reached");
+            free(msg);
+            return;
+        }
+        while (fire <= now_epoch() && (until == 0 || fire + repeat <= until))
+            fire += repeat;
+        if (fire <= now_epoch()) {
+            drop_missed(e, id, msg, orig_fire, "recurring: until reached while down");
+            free(msg);
+            return;
+        }
+        if (fire != orig_fire)
+            fprintf(stderr,
+                    "exosched: reloaded recurring timer %s (caught up to %lld, "
+                    "repeat %llds)\n",
+                    id, (long long)fire, (long long)repeat);
+    } else if (fire <= now_epoch()) {
+        drop_missed(e, id, msg, orig_fire, NULL);
+        free(msg);
+        return;
     }
+
+    if (timer_add(id, fire, repeat, until, msg) != 0)
+        fprintf(stderr, "exosched: reload: duplicate id %s\n", id);
+    else
+        fprintf(stderr, "exosched: reloaded timer %s (fires in %llds%s)\n",
+                id, (long long)(fire - now_epoch()),
+                repeat > 0 ? ", recurring" : "");
+    free(msg);
 }
 
 /* reloads timers from exomind at startup: /list then one /batch of /gets.

@@ -26,8 +26,8 @@ typedef struct {
 static void *conn_thread(void *arg)
 {
     conn_args_t *a = arg;
-    http_handle_conn(a->fd, a->e);
-    close(a->fd);
+    if (http_handle_conn(a->fd, a->e) == 0)
+        close(a->fd);
     free(a);
     pthread_mutex_lock(&conn_mu);
     g_active--;
@@ -56,6 +56,19 @@ static void usage(const char *argv0)
            "  --version          show version\n"
            "env: EXOSCHED_TOKEN same as --token\n",
            argv0);
+}
+
+/* keeps retrying the startup reload until exomind answers; runs detached so
+ * the daemon serves requests even while its storage backend is down */
+static void *reload_thread(void *arg)
+{
+    exo_t *e = arg;
+    for (;;) {
+        sleep(1);
+        if (timers_reload(e) == 0)
+            break;
+    }
+    return NULL;
 }
 
 int main(int argc, char **argv)
@@ -134,10 +147,23 @@ int main(int argc, char **argv)
 
     timers_init();
     ws_init();
+    int loaded = 0;
     for (int attempt = 0; attempt < 10; attempt++) {
-        if (timers_reload(&exo) == 0)
+        if (timers_reload(&exo) == 0) {
+            loaded = 1;
             break;
+        }
         sleep(1);
+    }
+    if (!loaded) {
+        fprintf(stderr,
+                "exosched: exomind down at startup; serving with an empty "
+                "registry and retrying reload in the background\n");
+        pthread_t rt;
+        if (pthread_create(&rt, NULL, reload_thread, &exo) != 0)
+            fprintf(stderr, "exosched: cannot start reload thread\n");
+        else
+            pthread_detach(rt);
     }
 
     pthread_t tloop;

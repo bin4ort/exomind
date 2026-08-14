@@ -290,21 +290,28 @@ static const char *spec_text(void)
         "    in 5m \"stand up and stretch\"\n"
         "    in 2h \"push the branch\"\n"
         "    at 1786740704 \"fire at this unix epoch\"\n"
+        "    every 10m \"check the pipeline\"\n"
+        "    every 30s \"nudge\" until 1786740704\n"
         "\n"
-        "Units: s, m, h, d. The message may be quoted (\\\" escapes work) or\n"
-        "unquoted to the end of the body. The answer is\n"
-        "`ok <id> <when-epoch>` with an id of the form `<epoch>:<hex>`.\n"
+        "Units: s, m, h, d. `every <n><unit> \"msg\"` schedules a RECURRING\n"
+        "timer that fires every <n><unit>; the optional `until <epoch>` suffix\n"
+        "(quoted messages only) stops it after the fire at or before that\n"
+        "epoch. `at` in the past is rejected. The message may be quoted\n"
+        "(\\\" escapes work) or unquoted to the end of the body. The answer\n"
+        "is `ok <id> <when-epoch>` with an id of the form `<epoch>:<hex>`.\n"
         "\n"
         "## timers\n"
         "\n"
         "GET /timers lists active timers, one per line, tab-separated:\n"
-        "`id <TAB> epoch <TAB> remaining_s <TAB> message`. Add `json=1` for\n"
-        "a JSON array.\n"
+        "`id <TAB> epoch <TAB> remaining_s <TAB> message`; recurring timers\n"
+        "append two more columns `repeat_s <TAB> until` (0 until = forever).\n"
+        "Add `json=1` for a JSON array; objects carry `repeat_s` and `until`\n"
+        "(0 for one-shots).\n"
         "\n"
         "## websocket push\n"
         "\n"
         "GET /ws upgrades to RFC 6455 WebSocket. The server then pushes one\n"
-        "text frame per fired timer:\n"
+        "text frame per fired timer (every fire of a recurring timer):\n"
         "\n"
         "    timer <id> <epoch> <message>\n"
         "\n"
@@ -314,8 +321,13 @@ static const char *spec_text(void)
         "## durability\n"
         "\n"
         "On startup exosched reloads all `exosched:timer:*` keys from\n"
-        "exomind: future timers are rescheduled, overdue ones are logged as\n"
-        "notes (`missed timer ...`) and dropped. Cancel deletes the key.\n"
+        "exomind: future timers are rescheduled, overdue one-shots are logged\n"
+        "as notes (`missed timer ...`) and dropped, overdue recurring timers\n"
+        "catch up to their next fire (skipped fires are logged). If exomind\n"
+        "is down at startup, reload is retried every second until it\n"
+        "succeeds. If exomind is down at fire time, the timer is kept and\n"
+        "its note/reschedule is retried every 5s until exomind answers, so\n"
+        "a fire is never silently lost. Cancel deletes the key.\n"
         "\n"
         "## auth\n"
         "\n"
@@ -412,11 +424,11 @@ static void route(req_t *r, exo_t *e, buf_t *out, int *status,
             buf_puts(out, "error: empty body");
             return;
         }
-        int64_t fire = 0;
+        int64_t fire = 0, repeat = 0, until = 0;
         char *msg = NULL;
         char err[256];
-        if (parse_schedule(r->body, r->body_len, &fire, &msg, err,
-                           sizeof err) != 0) {
+        if (parse_schedule(r->body, r->body_len, &fire, &repeat, &until, &msg,
+                           err, sizeof err) != 0) {
             *status = 400;
             buf_printf(out, "error: %s", err);
             return;
@@ -428,30 +440,27 @@ static void route(req_t *r, exo_t *e, buf_t *out, int *status,
             free(msg);
             return;
         }
-        long ttl = (long)(fire - now_epoch()) + 300;
-        if (ttl < 60)
-            ttl = 60;
-        if (ttl > 315360000)
-            ttl = 315360000;
         char key[512];
         snprintf(key, sizeof key, EXO_KEY_PREFIX "%s", id);
         char perr[256];
-        char value[4096];
-        size_t mlen = strlen(msg);
-        if (mlen + 64 > sizeof value) {
+        char *value = timer_value(fire, repeat, until, msg);
+        size_t vlen = strlen(value);
+        if (vlen + 64 > 4096) {
             *status = 413;
             buf_puts(out, "error: message too large");
+            free(value);
             free(msg);
             return;
         }
-        snprintf(value, sizeof value, "%lld\t%s", (long long)fire, msg);
-        if (exo_persist(e, key, value, ttl, perr, sizeof perr) != 0) {
+        if (exo_persist(e, key, value, timer_ttl(fire), perr, sizeof perr) != 0) {
             *status = 500;
             buf_printf(out, "error: exomind unavailable: %s", perr);
+            free(value);
             free(msg);
             return;
         }
-        if (timer_add(id, fire, msg) != 0) {
+        free(value);
+        if (timer_add(id, fire, repeat, until, msg) != 0) {
             *status = 500;
             buf_puts(out, "error: timer already exists");
             int existed = 0;
@@ -482,19 +491,25 @@ static void route(req_t *r, exo_t *e, buf_t *out, int *status,
                 char *je = json_escape(snap[i].msg, strlen(snap[i].msg));
                 buf_printf(out,
                            "{\"id\":\"%s\",\"epoch\":%lld,\"remaining_s\":%lld,"
-                           "\"message\":\"%s\"}",
+                           "\"repeat_s\":%lld,\"until\":%lld,\"message\":\"%s\"}",
                            snap[i].id, (long long)snap[i].wall_fire,
-                           (long long)(snap[i].wall_fire - now), je);
+                           (long long)(snap[i].wall_fire - now),
+                           (long long)snap[i].repeat, (long long)snap[i].until,
+                           je);
                 free(je);
             }
             buf_puts(out, "]");
         } else {
             for (size_t i = 0; i < n; i++) {
                 char *e = esc_line(snap[i].msg, strlen(snap[i].msg));
-                buf_printf(out, "%s\t%lld\t%lld\t%s\n", snap[i].id,
+                buf_printf(out, "%s\t%lld\t%lld\t%s", snap[i].id,
                            (long long)snap[i].wall_fire,
                            (long long)(snap[i].wall_fire - now), e);
                 free(e);
+                if (snap[i].repeat > 0)
+                    buf_printf(out, "\t%lld\t%lld", (long long)snap[i].repeat,
+                               (long long)snap[i].until);
+                buf_puts(out, "\n");
             }
         }
         timers_snapshot_free(snap, n);
@@ -533,7 +548,7 @@ static void route(req_t *r, exo_t *e, buf_t *out, int *status,
     buf_puts(out, "error: unknown path");
 }
 
-void http_handle_conn(int fd, exo_t *e)
+int http_handle_conn(int fd, exo_t *e)
 {
     struct timeval tv = {.tv_sec = 10, .tv_usec = 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
@@ -544,18 +559,18 @@ void http_handle_conn(int fd, exo_t *e)
     if (rc == -2) {
         send_response(fd, 413, "text/plain; charset=utf-8",
                       "error: body too large\n", 21, 0);
-        return;
+        return 0;
     }
     if (rc != 0) {
         send_response(fd, 400, "text/plain; charset=utf-8",
                       "error: bad request\n", 19, 0);
-        return;
+        return 0;
     }
     if (!strcmp(r.method, "OPTIONS")) {
         send_response(fd, 204, "text/plain", "", 0, 0);
         free(r.body);
         free(r.hdrs);
-        return;
+        return 0;
     }
     if (strcmp(r.method, "GET") && strcmp(r.method, "POST") &&
         strcmp(r.method, "DELETE") && strcmp(r.method, "HEAD")) {
@@ -563,14 +578,14 @@ void http_handle_conn(int fd, exo_t *e)
                       "error: method not allowed\n", 25, 0);
         free(r.body);
         free(r.hdrs);
-        return;
+        return 0;
     }
     if (!auth_ok(&r)) {
         send_response(fd, 401, "text/plain; charset=utf-8",
                       "error: unauthorized\n", 19, 0);
         free(r.body);
         free(r.hdrs);
-        return;
+        return 0;
     }
 
     if (!strcmp(r.path, "/ws")) {
@@ -582,14 +597,16 @@ void http_handle_conn(int fd, exo_t *e)
                           "error: not a websocket upgrade\n", 30, 0);
         } else {
             /* upgrade succeeded: this thread becomes the ws client */
+            free(r.body);
+            free(r.hdrs);
             struct timeval notv = {.tv_sec = 0, .tv_usec = 0};
             setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &notv, sizeof notv);
             ws_handle_conn(fd);
-            return;
+            return 1; /* ws layer owns and closes the fd */
         }
         free(r.body);
         free(r.hdrs);
-        return;
+        return 0;
     }
 
     int status = 200;
@@ -601,4 +618,5 @@ void http_handle_conn(int fd, exo_t *e)
     buf_free(&out);
     free(r.body);
     free(r.hdrs);
+    return 0;
 }
