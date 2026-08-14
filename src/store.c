@@ -391,8 +391,8 @@ int store_set(store_t *s, const char *key, size_t klen, const char *val,
 {
     if (klen == 0 || klen > MAX_KEY || vlen > MAX_VAL)
         return -1;
-    if (ttl_sec < 0)
-        ttl_sec = 0;
+    if (ttl_sec < 0 || ttl_sec > 315360000)
+        ttl_sec = 0; /* absurd ttl: over 10 years means forever */
     pthread_mutex_lock(&s->mu);
     int64_t ts = now_ms();
 

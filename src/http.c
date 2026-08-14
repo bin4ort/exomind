@@ -215,12 +215,12 @@ static int read_request(int fd, req_t *r)
         n += (size_t)got;
         /* scan the newly arrived region for "\r\n\r\n" or "\n\n" */
         size_t from = n > (size_t)got + 4 ? n - (size_t)got - 4 : 0;
-        for (size_t i = from; i + 4 <= n; i++) {
-            if (memcmp(buf + i, "\r\n\r\n", 4) == 0) {
+        for (size_t i = from; i + 2 <= n; i++) {
+            if (i + 4 <= n && memcmp(buf + i, "\r\n\r\n", 4) == 0) {
                 hdr_end = i + 4;
                 break;
             }
-            if (i + 2 <= n && memcmp(buf + i, "\n\n", 2) == 0) {
+            if (memcmp(buf + i, "\n\n", 2) == 0) {
                 hdr_end = i + 2;
                 break;
             }
@@ -284,8 +284,11 @@ static int read_request(int fd, req_t *r)
         char *heol = strstr(hdrline, "\r\n");
         int last = 0;
         if (!heol) {
-            heol = hdrline + strlen(hdrline);
-            last = 1;
+            heol = strchr(hdrline, '\n');
+            if (!heol) {
+                heol = hdrline + strlen(hdrline);
+                last = 1;
+            }
         }
         *heol = 0;
         if (ci_prefix(hdrline, "content-length:")) {
@@ -296,13 +299,16 @@ static int read_request(int fd, req_t *r)
             while (*v == ' ')
                 v++;
             snprintf(r->auth, sizeof r->auth, "%s", v);
+            char *at = r->auth + strlen(r->auth);
+            while (at > r->auth && (at[-1] == ' ' || at[-1] == '\t'))
+                *--at = 0;
         } else if (ci_prefix(hdrline, "content-type:")) {
             if (strstr(hdrline + 13, "json"))
                 r->has_ct_json = 1;
         }
         if (last)
             break;
-        hdrline = heol + 2;
+        hdrline = heol + (heol[1] == '\n' ? 2 : 1);
     }
 
     if (have_cl && content_len > 0) {
@@ -386,6 +392,52 @@ static int qp_str(const char *qs, const char *name, char *out, size_t cap)
         p = amp ? amp + 1 : NULL;
     }
     return 0;
+}
+
+/* qp_str for the "key" parameter; returns 2 when the value does not fit cap */
+static int qp_key(const char *qs, char *out, size_t cap)
+{
+    size_t nl = strlen("key");
+    const char *p = qs;
+    while (p && *p) {
+        const char *amp = strchr(p, '&');
+        size_t seglen = amp ? (size_t)(amp - p) : strlen(p);
+        if (seglen > nl && strncmp(p, "key", nl) == 0 && p[nl] == '=') {
+            size_t vlen = seglen - nl - 1;
+            if (vlen >= cap)
+                return 2;
+            memcpy(out, p + nl + 1, vlen);
+            out[vlen] = 0;
+            url_decode(out);
+            return 1;
+        }
+        p = amp ? amp + 1 : NULL;
+    }
+    return 0;
+}
+
+/* true when the body looks like a urlencoded form: some pair uses a known
+ * field name. Raw-text bodies may contain '=' (e.g. "a=b") and must not be
+ * misread as forms. */
+static int is_form_body(const char *b, size_t len)
+{
+    char *s = xstrndup(b, len);
+    char *save = NULL;
+    int is = 0;
+    for (char *pair = strtok_r(s, "&", &save); pair && !is;
+         pair = strtok_r(NULL, "&", &save)) {
+        char *eq = strchr(pair, '=');
+        if (!eq)
+            continue;
+        size_t nl = (size_t)(eq - pair);
+        if ((nl == 3 && memcmp(pair, "key", 3) == 0) ||
+            (nl == 5 && memcmp(pair, "value", 5) == 0) ||
+            (nl == 3 && memcmp(pair, "ttl", 3) == 0) ||
+            (nl == 6 && memcmp(pair, "append", 6) == 0))
+            is = 1;
+    }
+    free(s);
+    return is;
 }
 
 static long qp_int(const char *qs, const char *name, long def)
@@ -518,6 +570,7 @@ static const char *help_text(void)
         "`[\"append\",\"k\",\"v\"]` or objects\n"
         "`{\"set\":\"k\",\"value\":\"v\",\"ttl\":60}`. Result lines look like\n"
         "`set k ok`, `get k <value>`, `del k ok|missing`.\n"
+        "`note` is not a batch op; store notes with POST /note.\n"
         "\n"
         "    curl -X POST localhost:7654/batch \\\n"
         "      -d '[{\"set\":\"a\",\"value\":\"1\"},{\"get\":\"a\"},{\"del\":\"a\"}]'\n"
@@ -707,7 +760,13 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
     }
 
     if (!strcmp(path, "/get")) {
-        if (!qp_str(r->query, "key", key, sizeof key)) {
+        int kr = qp_key(r->query, key, sizeof key);
+        if (kr == 2) {
+            *status = 400;
+            buf_puts(out, "error: key too long");
+            return;
+        }
+        if (!kr) {
             *status = 400;
             buf_puts(out, "error: missing key");
             return;
@@ -738,12 +797,24 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
         int append = 0;
         int have_key = 0;
 
-        if (r->body_len > 0 &&
-            (r->body[0] == '{' || r->has_ct_json)) {
+        int body_is_json = r->body_len > 0 && r->has_ct_json;
+        if (!body_is_json && r->body_len > 0 && r->body[0] == '{' &&
+            json_field(r->body, r->body_len, "key") != NULL)
+            body_is_json = 1;
+        if (body_is_json) {
             char *jk = json_field(r->body, r->body_len, "key");
             char *jv = json_field(r->body, r->body_len, "value");
             char *jt = json_field(r->body, r->body_len, "ttl");
             char *ja = json_field(r->body, r->body_len, "append");
+            if (jk && strlen(jk) >= sizeof key) {
+                *status = 400;
+                buf_puts(out, "error: key too long");
+                free(jk);
+                free(jv);
+                free(jt);
+                free(ja);
+                return;
+            }
             if (jk) {
                 snprintf(key, sizeof key, "%s", jk);
                 have_key = 1;
@@ -761,7 +832,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
                 append = (strtol(ja, NULL, 10) != 0) || !strcmp(ja, "true");
                 free(ja);
             }
-        } else if (r->body_len > 0 && strstr(r->body, "=") != NULL) {
+        } else if (r->body_len > 0 && is_form_body(r->body, r->body_len)) {
             char *b = xstrdup(r->body);
             char *save = NULL;
             for (char *pair = strtok_r(b, "&", &save); pair;
@@ -771,13 +842,24 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
                     continue;
                 *eq = 0;
                 url_decode(pair);
-                url_decode(eq + 1);
+                size_t dlen = url_decode(eq + 1);
                 if (!strcmp(pair, "key")) {
-                    snprintf(key, sizeof key, "%s", eq + 1);
+                    if (dlen >= sizeof key) {
+                        *status = 400;
+                        buf_puts(out, "error: key too long");
+                        free(b);
+                        free(v);
+                        return;
+                    }
+                    memcpy(key, eq + 1, dlen);
+                    key[dlen] = 0;
                     have_key = 1;
                 } else if (!strcmp(pair, "value")) {
-                    v = xstrdup(eq + 1);
-                    vlen = strlen(v);
+                    free(v);
+                    v = xmalloc(dlen + 1);
+                    memcpy(v, eq + 1, dlen);
+                    v[dlen] = 0;
+                    vlen = dlen;
                 } else if (!strcmp(pair, "ttl")) {
                     ttl = strtol(eq + 1, NULL, 10);
                 } else if (!strcmp(pair, "append")) {
@@ -787,7 +869,14 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             }
             free(b);
         } else {
-            if (qp_str(r->query, "key", key, sizeof key))
+            int kr = qp_key(r->query, key, sizeof key);
+            if (kr == 2) {
+                *status = 400;
+                buf_puts(out, "error: key too long");
+                free(v);
+                return;
+            }
+            if (kr)
                 have_key = 1;
             ttl = qp_int(r->query, "ttl", 0);
             if (qp_str(r->query, "append", tmp, sizeof tmp))
@@ -801,6 +890,12 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
         if (!have_key) {
             *status = 400;
             buf_puts(out, "error: missing key");
+            free(v);
+            return;
+        }
+        if (!key[0]) {
+            *status = 400;
+            buf_puts(out, "error: empty key");
             free(v);
             return;
         }
@@ -835,9 +930,20 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
     }
 
     if (!strcmp(path, "/append")) {
-        if (!qp_str(r->query, "key", key, sizeof key)) {
+        int kr = qp_key(r->query, key, sizeof key);
+        if (kr == 2) {
+            *status = 400;
+            buf_puts(out, "error: key too long");
+            return;
+        }
+        if (!kr) {
             *status = 400;
             buf_puts(out, "error: missing key");
+            return;
+        }
+        if (!key[0]) {
+            *status = 400;
+            buf_puts(out, "error: empty key");
             return;
         }
         if (!tok_can_write(tok, key, strlen(key))) {
@@ -861,9 +967,20 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             buf_puts(out, "error: use DELETE");
             return;
         }
-        if (!qp_str(r->query, "key", key, sizeof key)) {
+        int kr = qp_key(r->query, key, sizeof key);
+        if (kr == 2) {
+            *status = 400;
+            buf_puts(out, "error: key too long");
+            return;
+        }
+        if (!kr) {
             *status = 400;
             buf_puts(out, "error: missing key");
+            return;
+        }
+        if (!key[0]) {
+            *status = 400;
+            buf_puts(out, "error: empty key");
             return;
         }
         if (!tok_can_write(tok, key, strlen(key))) {
