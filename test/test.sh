@@ -153,6 +153,112 @@ for i in $(seq 1 50); do
 done
 stop_server
 
+echo "=== session 7: malformed HTTP hardening ==="
+start_server
+
+# LF-only line endings (no CR bytes) must be accepted
+exec 9<>/dev/tcp/127.0.0.1/$PORT
+printf 'GET /ping HTTP/1.1\nHost: x\n\n' >&9
+resp=$(cat <&9)
+exec 9<&- 9>&-
+assert_contains "lf-only ping" "pong" "$resp"
+
+# LF-only headers with a JSON body; the Content-Type header must not be lost
+body='{"key":"lfj","value":"jj"}'
+cl=$(printf '%s' "$body" | wc -c)
+exec 8<>/dev/tcp/127.0.0.1/$PORT
+printf 'POST /set HTTP/1.1\nContent-Type: application/json\nContent-Length: %s\n\n%s' "$cl" "$body" >&8
+head -c 128 <&8 > /dev/null
+exec 8<&- 8>&-
+assert_eq "lf-only json stored" "jj" "$(curl -s "$BASE/get?key=lfj")"
+
+# LF-only request with a body on /append
+exec 7<>/dev/tcp/127.0.0.1/$PORT
+printf 'POST /append?key=lfa HTTP/1.1\nContent-Length: 3\n\nxyz' >&7
+cat <&7 > /dev/null
+exec 7<&- 7>&-
+assert_eq "lf-only append stored" "xyz" "$(curl -s "$BASE/get?key=lfa")"
+
+# garbage request line must be answered with 400, not a crash
+exec 6<>/dev/tcp/127.0.0.1/$PORT
+printf 'GARBAGE\x00\xff\r\n\r\n' >&6
+resp=$(head -1 <&6)
+exec 6<&- 6>&-
+assert_contains "garbage request 400" "400" "$resp"
+
+stop_server
+
+echo "=== session 8: body shape heuristics ==="
+start_server
+
+assert_eq "set raw with =" "ok" "$(curl -s -X POST "$BASE/set?key=rq" -d 'a=b')"
+assert_eq "get raw with =" "a=b" "$(curl -s "$BASE/get?key=rq")"
+assert_eq "set raw with &" "ok" "$(curl -s -X POST "$BASE/set?key=ra" -d 'a&b=c')"
+assert_eq "get raw with &" "a&b=c" "$(curl -s "$BASE/get?key=ra")"
+assert_eq "set raw with {" "ok" "$(curl -s -X POST "$BASE/set?key=rb" -d '{"a":1}')"
+assert_eq "get raw with {" '{"a":1}' "$(curl -s "$BASE/get?key=rb")"
+assert_eq "set raw plus" "ok" "$(curl -s -X POST "$BASE/set?key=rp" -d 'a+b')"
+assert_eq "get raw plus" "a+b" "$(curl -s "$BASE/get?key=rp")"
+assert_eq "json ct needs key field" "error: missing key" "$(curl -s -X POST "$BASE/set?key=rb" -H 'Content-Type: application/json' -d '{"a":1}')"
+
+# percent-encoded NUL byte in a form value must survive
+curl -s -X POST "$BASE/set" -d 'key=rn&value=ab%00cd' > /dev/null
+curl -s "$BASE/get?key=rn" > "$DATA/nulv"
+printf 'ab\x00cd' > "$DATA/nulv_exp"
+cmp -s "$DATA/nulv" "$DATA/nulv_exp"
+assert_eq "form nul byte preserved" "0" "$?"
+
+stop_server
+
+echo "=== session 9: empty keys, oversize keys, ttl edges ==="
+start_server
+
+assert_eq "set empty key" "error: empty key" "$(curl -s -X POST "$BASE/set?key=" -d 'x')"
+assert_eq "set empty key status" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/set?key=" -d 'x')"
+assert_eq "append empty key" "error: empty key" "$(curl -s -X POST "$BASE/append?key=" -d 'x')"
+assert_eq "del empty key" "error: empty key" "$(curl -s -X DELETE "$BASE/del?key=")"
+assert_eq "get empty key" "missing" "$(curl -s "$BASE/get?key=")"
+
+LONGK=$(printf 'k%.0s' $(seq 1 5000))
+assert_eq "set 5k key rejected" "error: key too long" "$(curl -s -X POST "$BASE/set?key=$LONGK" -d 'x')"
+assert_eq "append 5k key rejected" "error: key too long" "$(curl -s -X POST "$BASE/append?key=$LONGK" -d 'x')"
+assert_eq "del 5k key rejected" "error: key too long" "$(curl -s -X DELETE "$BASE/del?key=$LONGK")"
+assert_eq "get 5k key rejected" "error: key too long" "$(curl -s "$BASE/get?key=$LONGK")"
+assert_eq "form 5k key rejected" "error: key too long" "$(curl -s -X POST "$BASE/set" -d "key=$LONGK&value=x")"
+assert_eq "json 5k key rejected" "error: key too long" "$(curl -s -X POST "$BASE/set" -H 'Content-Type: application/json' -d "{\"key\":\"$LONGK\",\"value\":\"x\"}")"
+
+assert_eq "ttl huge set" "ok" "$(curl -s -X POST "$BASE/set?key=tth&ttl=9223372036854775" -d 'big')"
+assert_eq "ttl huge readable" "big" "$(curl -s "$BASE/get?key=tth")"
+curl -s -X POST "$BASE/set?key=ttn&ttl=-7" -d 'neg' > /dev/null
+assert_eq "ttl negative forever" "neg" "$(curl -s "$BASE/get?key=ttn")"
+curl -s -X POST "$BASE/set?key=ttz&ttl=0" -d 'z' > /dev/null
+assert_eq "ttl 0 forever" "z" "$(curl -s "$BASE/get?key=ttz")"
+
+stop_server
+
+echo "=== session 10: auth hardening ==="
+start_server --token sekret
+assert_eq "auth trailing ws" "pong" "$(curl -s -H 'Authorization: Bearer sekret ' "$BASE/ping")"
+assert_eq "auth leading ws" "pong" "$(curl -s -H 'Authorization:    Bearer sekret' "$BASE/ping")"
+exec 5<>/dev/tcp/127.0.0.1/$PORT
+printf 'GET /ping HTTP/1.1\nAuthorization: Bearer sekret\n\n' >&5
+resp=$(cat <&5)
+exec 5<&- 5>&-
+assert_eq "auth lf-only" "pong" "$(printf '%s' "$resp" | tr -d '\r' | tail -1)"
+stop_server
+LONGT=$(printf 't%.0s' $(seq 1 200))
+start_server --token "$LONGT"
+assert_eq "long token ok" "pong" "$(curl -s -H "Authorization: Bearer $LONGT" "$BASE/ping")"
+assert_eq "long token wrong" "error: unauthorized" "$(curl -s -H "Authorization: Bearer ${LONGT}x" "$BASE/ping")"
+stop_server
+
+echo "=== session 11: batch note limitation ==="
+start_server
+assert_eq "batch note array rejected" "error: bad batch op" "$(curl -s -X POST "$BASE/batch" -d '[["note","hi"]]')"
+assert_eq "batch note object rejected" "error: bad batch element" "$(curl -s -X POST "$BASE/batch" -d '[{"note":"hi"}]')"
+assert_contains "spec documents note limit" "not a batch op" "$(curl -s "$BASE/")"
+stop_server
+
 rm -rf "$DATA"
 
 if [ "$FAILS" -eq 0 ]; then
