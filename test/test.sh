@@ -274,6 +274,7 @@ assert_eq "scoped restore denied" "error: denied" "$(curl -s -H "$LOGS" -X POST 
 
 assert_eq "master still full access" "oc" "$(curl -s -H "$MASTER" "$BASE/get?key=other/c")"
 assert_eq "wrong token" "error: unauthorized" "$(curl -s -H 'Authorization: Bearer nope' "$BASE/get?key=logs/a")"
+stop_server
 
 echo "=== session 10: malformed HTTP hardening ==="
 start_server

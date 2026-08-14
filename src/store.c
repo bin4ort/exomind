@@ -13,6 +13,10 @@
 #include "store.h"
 #include "util.h"
 
+#if defined(__GNUC__)
+#pragma GCC diagnostic ignored "-Wdangling-pointer"
+#endif
+
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -216,7 +220,8 @@ static void store_load(store_t *s)
     struct stat st;
     if (fstat(s->fd, &st) != 0)
         return;
-    s->size = (uint64_t)st.st_size;
+    uint64_t sz = (uint64_t)st.st_size;
+    s->size = sz;
     uint64_t pos = 0, good = 0;
     uint8_t hdr[HDR_SIZE];
     while (pos + HDR_SIZE <= s->size) {
