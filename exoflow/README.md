@@ -1,6 +1,6 @@
 # exoflow — the orchestrator for agent swarms
 
-`exoflow` is a dependency-graph task orchestrator for AI-agent swarms. A flow
+`exoflow` v0.1.0 is a dependency-graph task orchestrator for AI-agent swarms. A flow
 is a DAG of steps; an arbitrary number of agents pull work from it with
 `GET /next`, execute, and report back with `POST /step`. exoflow guarantees
 that every step is claimed by exactly one worker and only becomes runnable
@@ -133,6 +133,7 @@ wait
 | method | path                     | body / params            | reply |
 |--------|--------------------------|--------------------------|-------|
 | GET    | `/`                      | —                        | self-describing text |
+| GET    | `/ping`                  | —                        | `pong` |
 | POST   | `/flow`                  | line 1 = flow name; then `id<TAB>desc<TAB>deps` lines, deps comma-separated (empty allowed); optional 4th field `deadline_epoch` | `ok <flow-id> <nsteps>` |
 | GET    | `/flow?id=`              | —                        | TSV state (one line per step) |
 | GET    | `/flows`                 | —                        | flow list |
@@ -143,6 +144,17 @@ wait
 
 Auth: start exoflow with `--token <secret>`; every endpoint then requires
 `Authorization: Bearer <secret>` and answers `401` without it.
+
+## limitations
+
+- exoflow is a *pull* orchestrator: workers must call `GET /next`; there is
+  no push of new work to idle workers.
+- A step claimed by a worker that dies is released only via an explicit
+  `unclaim` (or the deadline sweep marking it `overdue`); there is no
+  lease timeout / requeue-on-heartbeat.
+- Deadline enforcement is best-effort lazy: the authoritative sweep runs on
+  reads (`/flow`, `/next`) and startup reload, so an overdue step is
+  reflected at the next read, not at the exact deadline instant.
 
 ## integration tests
 

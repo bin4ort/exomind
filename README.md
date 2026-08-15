@@ -247,6 +247,34 @@ in 0.3.0. The 0.2.0 roadmap is complete.
   WebSocket client (`GET /ws`), with all timer state persisted inside exomind
   (`exosched:timer:*` keys, TTL'd) and fired/missed events logged as notes.
   Build with `make exosched`, test with `make test-exosched`.
+- **exoflow** — `exoflow/` in this repo. The orchestrator for agent swarms:
+  dependency-graph flows, exclusive step claiming, deadlines, audit notes.
+  Build with `make exoflow`, test with `make test-exoflow`.
+- **exodoc** — `exodoc/` in this repo. The documentation auditor: checks every
+  component README against the ISO 9001 §7.5-flavored standard
+  (`exodoc/standard.md`), against the live daemons when asked. Build with
+  `make exodoc`, test with `make test-exodoc`.
+
+## Stack
+
+The unified human-facing reference for the whole stack — the AI-native
+philosophy (no GUI, machine-first plain-text APIs, self-describing specs,
+zero deps), per-component ports and API tables, durability stories, and the
+memory↔scheduler↔orchestrator↔auditor flows diagram — lives in
+[docs/STACK.md](docs/STACK.md). The stack manifest is
+[docs/stack.tsv](docs/stack.tsv).
+
+**The quality gate** — documentation debt is CI-checked, not aspirational:
+
+```sh
+make test-exodoc                  # exodoc suite + live audit gate
+./exodoc/build/exodoc audit --live --stack docs/stack.tsv
+# expect: === audit: 35 pass, 0 fail (score 100%) ===
+```
+
+`make test-exodoc` runs exodoc's own suite, then audits the live stack
+(7654/7655/7656) and fails the build on any doc debt; if the daemons are
+down it falls back to the offline doc audit as the gate.
 
 ## License
 

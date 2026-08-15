@@ -12,6 +12,12 @@ make exosched        # builds exosched/build/exosched (from the repo root)
 make test-exosched   # runs exosched/test/test.sh (54 checks, ~2.5min)
 ```
 
+## build
+
+`make exosched` from the repo root (or `make -C exosched` directly)
+produces `exosched/build/exosched` — a single C11 binary, zero
+dependencies beyond libc + pthread.
+
 ## usage
 
 ```
@@ -88,6 +94,17 @@ dead clients are purged on the next broadcast, pings get pongs.
   notes.
 - One thread per HTTP/WS connection, like exomind.
 - No state on disk: exomind is the only source of truth.
+
+## limitations
+
+- exosched is a *timer* daemon, not a durable message broker: fired timers
+  are pushed over WebSocket and logged to the exomind note feed, but there
+  is no replay queue — an agent that was disconnected at fire time must
+  catch up via `GET /notes`.
+- `at`-style reminders are rejected in the past; there is no timezone
+  support (all epochs are Unix time).
+- A timer whose fire is retried during an exomind outage is kept and
+  retried every 5s — reliable, but a long outage can pile up pending fires.
 
 ## tests
 

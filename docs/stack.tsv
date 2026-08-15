@@ -1,0 +1,6 @@
+# exomind stack manifest v1 — one component per line: name<TAB>dir<TAB>port
+# port empty = batch tool (no live daemon). Format: exodoc/standard.md section 7.
+exomind	.	7654
+exosched	exosched	7655
+exoflow	exoflow	7656
+exodoc	exodoc	
