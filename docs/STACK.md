@@ -153,12 +153,12 @@ The QMS daemon (C11, zero dependencies) that turns the ISO 9000 family
 into running code for the stack. It holds quality objectives
 (ISO 9001 §6.2), monitors the `metric:iterN:tests_passing` trend as the
 sustained-success indicator (ISO 9004), runs ISO 19011 audit programs
-against the live stack — invoking `exodoc` and `exoqms-ui` as child
-processes under a hard 5s timeout each — and records non-conformities
-with a full corrective-action lifecycle (ISO 9001 §8.7/§10.2). Its
-durable state lives inside exomind under `exoqms:*` keys, so the QMS
-itself is restarted without losing a record, and every audit score and
-NC transition lands in the note feed.
+against the live stack — invoking `exodoc`, `exoqms-ui`, `exoqms-code`
+and `exoqms-svg` as child processes under a hard 5s timeout each — and
+records non-conformities with a full corrective-action lifecycle
+(ISO 9001 §8.7/§10.2). Its durable state lives inside exomind under
+`exoqms:*` keys, so the QMS itself is restarted without losing a
+record, and every audit score and NC transition lands in the note feed.
 
 - Purpose: machine-auditable quality management for the whole stack.
 - Port: **7657** (`127.0.0.1`; development instances run on own ports,
@@ -199,15 +199,44 @@ evidence; **ISO 9004** sustained success → the trend verdict and
 stagnation flag; **ISO 19011** audit programs → `POST /audit` with
 named programs, criteria and durable records.
 
-The five checks of the audit program: `component-tests` (every
-manifest test command within the 5s budget), `doc-compliance` (exodoc
-`--live`, 0 fail), `dogfood` (every active agent keeps
-`agent:<id>:status`; enough notes in the last 24h), `ui-audit`
-(exoqms-ui finds 0 findings on the target page) and `metrics` (trend
-not down). The UI audit engine lives at [`exoqms/ui`](../exoqms/ui/README.md):
-a zero-dependency C11 static analyzer (7 defect checks, no browser)
-with permanent fixtures (`good.html` = the standard, `bad.html` = the
-12-finding demo artifact).
+The audit program has **seven checks** (see `exoqms/standard.md` §5):
+`component-tests`, `doc-compliance`, `dogfood`, `ui-audit`, `metrics`,
+plus the iteration-6 field checks `code-safety` and `asset-logic`.
+
+**Field modules.** The QMS's batch analysis engines live as sibling
+components under `exoqms/`, each a zero-dependency C11 binary with
+permanent fixtures and its own test suite:
+
+| module | binary | check | what it audits | pass rule |
+|--------|--------|-------|----------------|-----------|
+| [`exoqms/ui`](../exoqms/ui/README.md) | `exoqms-ui` | `ui-audit` | HTML/CSS UI defect classes (7 checks, no browser) | 0 findings |
+| [`exoqms/code`](../exoqms/code/README.md) | `exoqms-code` | `code-safety` | error-handling defects in C source: unchecked returns of critical libc calls, missing error paths, null-deref paths | 0 **major** findings (minor non-fatal) |
+| [`exoqms/svg`](../exoqms/svg/README.md) | `exoqms-svg` | `asset-logic` | generated SVG shape logic (tree rule-set) | 0 **major** findings (minor non-fatal) |
+
+**Code-safety real-run (iteration 6).** The deployment loop's fix step
+was applied to the code-safety field: the analyzer audited the stack's
+own C source (exomind, exosched, exodoc, exoqms, exoqms-ui; exoflow
+excluded while its loop feature was in flight) — **2 verified findings
+before (1 major, 1 minor)** → fixes landed in
+`exoqms/ui/src/util.c` (`file_read` short-read error path),
+`exomind/src/store.c` (`store_close` fdatasync check) and
+`exodoc/src/audit.c` (`read_sanitized` ferror check) → **0 findings
+after** (major count 1 → 0). The 3 NCs
+(`1786807693:288919d2` major, `1786807693:7dd8dd6b`,
+`1786807693:a8c44471` minor) were lifecycle-closed
+(open→analysis→corrective→verify→closed) on the live QMS with the fix
+commit as evidence.
+
+Honest gaps, documented not silenced: (1) the exoqms-code module
+branch (`feat/qms-code`) had not landed when this integration was
+verified — the code-safety check ran against a contract-conformant
+stopgap checker (same CLI/JSON contract, `exoqms/standard.md` §5.3 c6);
+the daemon wiring is module-agnostic, so landing the module later needs
+no daemon change. (2) exoflow excluded from the real run (B3's loop
+feature in flight). (3) an asset-logic audit with no `?target=` scans
+the whole repo and therefore flags the SVG module's own *deliberate
+negative fixtures* (`exoqms/svg/fixtures/`) — expected; the full
+audit-program gate passes with an explicit target (`make audit-stack`).
 
 ## Stack flows
 

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300">
+  <!-- tree-too-lean: a huge crown on a 22px stub of a trunk.
+       trunk/crown height ratio 0.12 < 0.15. Expected:
+       proportions minor only. -->
+  <title>Too lean — proportions failure</title>
+  <circle id="crown" cx="150" cy="110" r="90"/>
+  <path id="trunk" d="M 147 200 L 153 200 L 159 222 L 141 222 Z"/>
+</svg>

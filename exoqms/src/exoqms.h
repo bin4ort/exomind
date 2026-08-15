@@ -136,6 +136,8 @@ typedef struct {
 typedef struct cfg {
     char exodoc_path[1024];
     char ui_path[1024];
+    char code_path[1024];
+    char svg_path[1024];
     char repo[1024];
     char agents[1024];
     int notes24h;

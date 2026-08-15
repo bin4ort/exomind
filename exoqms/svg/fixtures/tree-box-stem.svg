@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300">
+  <!-- tree-box-stem: perfectly round crown over a parallel-sided box
+       trunk (20px wide at both measured heights). Expected:
+       stem-taper major only. -->
+  <title>Box stem — parallel-sided trunk detection</title>
+  <circle id="crown" cx="150" cy="100" r="75"/>
+  <rect id="trunk" x="140" y="175" width="20" height="84"/>
+</svg>

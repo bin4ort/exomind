@@ -27,7 +27,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-EM_PORT=7681; QMS_A=7682; QMS_B=7683; QMS_C=7684; QMS_E=7686
+EM_PORT=${EM_PORT:-7681}; QMS_A=${QMS_A:-7682}; QMS_B=${QMS_B:-7683}
+QMS_C=${QMS_C:-7684}; QMS_E=${QMS_E:-7686}
 EM="http://127.0.0.1:$EM_PORT"
 BASE=http://127.0.0.1
 
@@ -134,6 +135,40 @@ exit 0
 EOF
 chmod +x "$TDIR/stub-ui"
 
+cat > "$TDIR/stub-code" <<'EOF'
+#!/bin/sh
+# exoqms-code stub: JSON findings with severity major/minor (flag files)
+if [ -n "${STUB_CODE_MAJOR_FLAG:-}" ] && [ -f "$STUB_CODE_MAJOR_FLAG" ]; then
+    printf '[{"check":"unchecked-fopen","severity":"major","file":"a.c","line":42,"reason":"fopen result not checked"}]'
+    exit 1
+fi
+if [ -n "${STUB_CODE_MINOR_FLAG:-}" ] && [ -f "$STUB_CODE_MINOR_FLAG" ]; then
+    printf '[{"check":"unchecked-pread","severity":"minor","file":"b.c","line":7,"reason":"pread result not checked"}]'
+    exit 1
+fi
+if [ -n "${STUB_CODE_TRACE:-}" ]; then printf '%s\n' "$@" > "$STUB_CODE_TRACE"; fi
+printf '[]'
+exit 0
+EOF
+chmod +x "$TDIR/stub-code"
+
+cat > "$TDIR/stub-svg" <<'EOF'
+#!/bin/sh
+# exoqms-svg stub: JSON findings with severity major/minor (flag files)
+if [ -n "${STUB_SVG_MAJOR_FLAG:-}" ] && [ -f "$STUB_SVG_MAJOR_FLAG" ]; then
+    printf '[{"file":"tree.svg","shape":"tree","severity":"major","check":"stem-missing","reason":"trunk absent"}]'
+    exit 1
+fi
+if [ -n "${STUB_SVG_MINOR_FLAG:-}" ] && [ -f "$STUB_SVG_MINOR_FLAG" ]; then
+    printf '[{"file":"tree.svg","shape":"tree","severity":"minor","check":"symmetry","reason":"lean"}]'
+    exit 1
+fi
+if [ -n "${STUB_SVG_TRACE:-}" ]; then printf '%s\n' "$@" > "$STUB_SVG_TRACE"; fi
+printf '[]'
+exit 0
+EOF
+chmod +x "$TDIR/stub-svg"
+
 cat > "$TDIR/stub-hang" <<'EOF'
 #!/bin/sh
 sleep 30
@@ -177,8 +212,17 @@ start_qms() { # name port token extra...
 }
 
 start_qms qmsa $QMS_A "" --repo "$TDIR/repo" --ui "$TDIR/stub-ui" \
-    --agents b1,b2 --notes24h 1 ENV:STUB_UI_FLAG="$TDIR/ui-flag"
+    --code "$TDIR/stub-code" --svg "$TDIR/stub-svg" \
+    --agents b1,b2 --notes24h 1 \
+    ENV:STUB_UI_FLAG="$TDIR/ui-flag" \
+    ENV:STUB_CODE_MAJOR_FLAG="$TDIR/code-major" \
+    ENV:STUB_CODE_MINOR_FLAG="$TDIR/code-minor" \
+    ENV:STUB_CODE_TRACE="$TDIR/code-trace" \
+    ENV:STUB_SVG_MAJOR_FLAG="$TDIR/svg-major" \
+    ENV:STUB_SVG_MINOR_FLAG="$TDIR/svg-minor" \
+    ENV:STUB_SVG_TRACE="$TDIR/svg-trace"
 start_qms qmsb $QMS_B sekrit --repo "$TDIR/repo" --ui "$TDIR/stub-hang" \
+    --code "$TDIR/stub-hang" --svg "$TDIR/stub-hang" \
     --agents b1,b2 --notes24h 1
 start_qms qmsc $QMS_C "" --repo "$TDIR/badrepo" --ui "$TDIR/stub-ui" \
     --agents b1,b2 --notes24h 100000
@@ -282,13 +326,15 @@ AUDID=$(printf '%s' "$AUD" | awk '{print $2}')
 t_contains "full audit runs, ok + score" "ok $AUDID 100%" "$AUD"
 REP=$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$AUDID")
 fcount() { printf '%s\n' "$REP" | awk -F'\t' -v c="$1" -v r="$2" '$1==c && $2==r {n++} END {print n+0}'; }
-t "audit report has 5 findings" 5 \
-    "$(printf '%s\n' "$REP" | awk -F'\t' '$1=="component-tests"||$1=="doc-compliance"||$1=="dogfood"||$1=="ui-audit"||$1=="metrics" {n++} END {print n+0}')"
+t "audit report has 7 findings" 7 \
+    "$(printf '%s\n' "$REP" | awk -F'\t' '$1=="component-tests"||$1=="doc-compliance"||$1=="dogfood"||$1=="ui-audit"||$1=="metrics"||$1=="code-safety"||$1=="asset-logic" {n++} END {print n+0}')"
 t "component-tests passed" 1 "$(fcount component-tests pass)"
 t "doc-compliance passed" 1 "$(fcount doc-compliance pass)"
 t "dogfood passed" 1 "$(fcount dogfood pass)"
 t "ui-audit skipped (no target)" 1 "$(fcount ui-audit skip)"
 t "metrics passed" 1 "$(fcount metrics pass)"
+t "code-safety passed (manifest dirs, 0 major)" 1 "$(fcount code-safety pass)"
+t "asset-logic passed (repo root, 0 major)" 1 "$(fcount asset-logic pass)"
 t_contains "doc evidence has exodoc score" "score" "$REP"
 t "audits list has 1 line" 1 "$(timeout 5 curl -s "$BASE:$QMS_A/audits" | grep -c .)"
 t_nc "unknown check id rejected" \
@@ -310,6 +356,64 @@ t "ui-audit finds findings -> fail" 1 \
 t_contains "ui-audit finding evidence has reason" "spacing" \
     "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$UI2ID")"
 rm -f "$TDIR/ui-flag"
+
+# ---- code-safety (exoqms-code) ---------------------------------------------
+CS1=$(timeout 20 curl -s -d $'code clean\tcode-safety' $BASE:$QMS_A/audit)
+CS1ID=$(printf '%s' "$CS1" | awk '{print $2}')
+t "code-safety passes with 0 findings" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$CS1ID" | awk -F'\t' '$1=="code-safety" && $2=="pass" {n++} END {print n+0}')"
+t "code-safety default target = manifest dirs" 1 \
+    "$([ -f "$TDIR/code-trace" ] && grep -q "$TDIR/repo/okc" "$TDIR/code-trace" && echo 1 || echo 0)"
+
+CS2ID=""
+if [ ! -f "$TDIR/code-minor" ]; then touch "$TDIR/code-minor"; fi
+CS2=$(timeout 20 curl -s -d $'code minor\tcode-safety' $BASE:$QMS_A/audit)
+CS2ID=$(printf '%s' "$CS2" | awk '{print $2}')
+t "code-safety minor-only findings non-fatal (pass)" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$CS2ID" | awk -F'\t' '$1=="code-safety" && $2=="pass" {n++} END {print n+0}')"
+t_contains "code-safety evidence counts minor" "1 finding" \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$CS2ID")"
+rm -f "$TDIR/code-minor"
+
+if [ ! -f "$TDIR/code-major" ]; then touch "$TDIR/code-major"; fi
+CS3=$(timeout 20 curl -s -d $'code dirty\tcode-safety' $BASE:$QMS_A/audit)
+CS3ID=$(printf '%s' "$CS3" | awk '{print $2}')
+t "code-safety fails on major finding" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$CS3ID" | awk -F'\t' '$1=="code-safety" && $2=="fail" {n++} END {print n+0}')"
+t_contains "code-safety failure names check" "unchecked-fopen" \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$CS3ID")"
+rm -f "$TDIR/code-major"
+
+# ---- asset-logic (exoqms-svg) ----------------------------------------------
+AS1=$(timeout 20 curl -s -d $'svg clean\tasset-logic' $BASE:$QMS_A/audit)
+AS1ID=$(printf '%s' "$AS1" | awk '{print $2}')
+t "asset-logic passes with 0 findings" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$AS1ID" | awk -F'\t' '$1=="asset-logic" && $2=="pass" {n++} END {print n+0}')"
+t "asset-logic invokes --shape auto --json" 1 \
+    "$([ -f "$TDIR/svg-trace" ] && grep -q -- "--shape" "$TDIR/svg-trace" && grep -q -- "--json" "$TDIR/svg-trace" && grep -q "$TDIR/repo" "$TDIR/svg-trace" && echo 1 || echo 0)"
+
+if [ ! -f "$TDIR/svg-major" ]; then touch "$TDIR/svg-major"; fi
+AS2=$(timeout 20 curl -s -d $'svg dirty\tasset-logic' $BASE:$QMS_A/audit)
+AS2ID=$(printf '%s' "$AS2" | awk '{print $2}')
+t "asset-logic fails on major finding" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$AS2ID" | awk -F'\t' '$1=="asset-logic" && $2=="fail" {n++} END {print n+0}')"
+rm -f "$TDIR/svg-major"
+
+if [ ! -f "$TDIR/svg-minor" ]; then touch "$TDIR/svg-minor"; fi
+AS3=$(timeout 20 curl -s -d $'svg minor\tasset-logic' $BASE:$QMS_A/audit)
+AS3ID=$(printf '%s' "$AS3" | awk '{print $2}')
+t "asset-logic minor-only findings non-fatal (pass)" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$AS3ID" | awk -F'\t' '$1=="asset-logic" && $2=="pass" {n++} END {print n+0}')"
+rm -f "$TDIR/svg-minor"
+
+# ---- field checks skip when binary not configured (instance C) -------------
+CSKIP=$(timeout 20 curl -s -d $'no code binary\tcode-safety,asset-logic' \
+        $BASE:$QMS_C/audit)
+CSKIPID=$(printf '%s' "$CSKIP" | awk '{print $2}')
+t "code-safety skips without --code" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_C/audit?id=$CSKIPID" | awk -F'\t' '$1=="code-safety" && $2=="skip" {n++} END {print n+0}')"
+t "asset-logic skips without --svg" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_C/audit?id=$CSKIPID" | awk -F'\t' '$1=="asset-logic" && $2=="skip" {n++} END {print n+0}')"
 
 # ---- doc-compliance against a bad fixture (instance C) ----------------------
 DOCF=$(timeout 20 curl -s -d $'doc fail\tdoc-compliance' $BASE:$QMS_C/audit)
@@ -376,6 +480,19 @@ t "no stray sleep 30 left behind" 0 "$(pgrep -f 'sleep 30' | wc -l)"
 t "daemon alive after timeout kill" "pong" \
     "$(timeout 5 curl -s -H "Authorization: Bearer sekrit" $BASE:$QMS_B/ping)"
 
+# hanging code-safety child killed on timeout (instance B, stub-hang as --code)
+START=$(date +%s)
+HANG2=$(timeout 25 curl -s -H "Authorization: Bearer sekrit" \
+        -d $'hang code test\tcode-safety' "$BASE:$QMS_B/audit")
+DUR2=$(( $(date +%s) - START ))
+HANG2ID=$(printf '%s' "$HANG2" | awk '{print $2}')
+HANG2REP=$(timeout 5 curl -s -H "Authorization: Bearer sekrit" \
+        "$BASE:$QMS_B/audit?id=$HANG2ID")
+t_contains "hanging code-safety times out and fails" "timed out" "$HANG2REP"
+t "code-safety timeout within ~5s budget" 1 "$([ $DUR2 -le 12 ] && echo 1 || echo 0)"
+sleep 1
+t "no stray sleep 30 after code-safety kill" 0 "$(pgrep -f 'sleep 30' | wc -l)"
+
 # ---- robustness / fuzz -------------------------------------------------------
 t_contains "unknown path -> 404" "error: unknown path" \
     "$(timeout 5 curl -s $BASE:$QMS_A/bogus/path)"
@@ -402,12 +519,12 @@ t "garbage request tolerated" 1 \
     "$(printf '%s' "$GARB" | grep -cE 'HTTP/1.1 (400|404|200)')"
 t "daemon alive after fuzz" "pong" "$(timeout 5 curl -s $BASE:$QMS_A/ping)"
 t_contains "audit json parses" 1 \
-    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$AUDID&json=1" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(1 if d["score"]==100 and len(d["findings"])==5 else 0)')"
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$AUDID&json=1" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(1 if d["score"]==100 and len(d["findings"])==7 else 0)')"
 t_contains "audits json parses" 1 \
     "$(timeout 5 curl -s "$BASE:$QMS_A/audits?json=1" | python3 -c 'import sys,json;print(1 if len(json.load(sys.stdin))>=4 else 0)')"
 
 # ---- reload after SIGKILL restart --------------------------------------------
-kill -9 $QMS_7682_PID 2>/dev/null
+eval "kill -9 \$QMS_${QMS_A}_PID" 2>/dev/null
 sleep 1
 env STUB_UI_FLAG="$TDIR/ui-flag" ./build/exoqms --port $QMS_A \
     --exomind $EM --exodoc $EXODOC_BIN --ui "$TDIR/stub-ui" \

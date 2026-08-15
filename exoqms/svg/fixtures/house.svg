@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+  <!-- house: NOT a tree. With --shape auto this file is skipped with a
+       'skip unknown-shape' line and exit 0 (no data-shape attribute,
+       filename contains no "tree"). With --shape tree the tree rules
+       run anyway and flag it: stem-taper, crown-roundness,
+       proportions (2 major + 1 minor, pinned in the tests). -->
+  <title>House — not a tree</title>
+  <rect id="body" x="100" y="200" width="200" height="120"/>
+  <polygon id="roof" points="100,200 300,200 200,100"/>
+</svg>

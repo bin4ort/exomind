@@ -241,9 +241,10 @@ static const char *spec_text(void)
         "9001-flavored quality objectives (6.2), monitoring and\n"
         "measurement (9.1), non-conformity + corrective action (8.7,\n"
         "10.2) and ISO 19011 audit programs. Durable state lives in\n"
-        "exomind under `exoqms:*` keys. The audit program runs the five\n"
-        "checks defined in exoqms/standard.md, invoking exodoc and\n"
-        "exoqms-ui as child processes under a 5s hard timeout each.\n"
+        "exomind under `exoqms:*` keys. The audit program runs the seven\n"
+        "checks defined in exoqms/standard.md, invoking exodoc, exoqms-ui,\n"
+        "exoqms-code and exoqms-svg as child processes under a 5s hard\n"
+        "timeout each.\n"
         "\n"
         "All endpoints answer in plain text; add `json=1` to listings\n"
         "for JSON. Errors are `error: <reason>`. Wire format for bodies:\n"
@@ -296,15 +297,21 @@ static const char *spec_text(void)
         "## audit programs (ISO 19011)\n"
         "\n"
         "POST /audit body: `name<TAB>criteria` where criteria is a\n"
-        "comma-separated list of check ids (empty = all five), plus an\n"
+        "comma-separated list of check ids (empty = all seven), plus an\n"
         "optional third field `agents` for the dogfood check. Query\n"
-        "`?target=<path>` feeds the ui-audit check. Each check runs with\n"
-        "a 5s timeout; child processes that overrun are SIGKILLed.\n"
+        "`?target=<path>` feeds the ui-audit check (and overrides the\n"
+        "scan target of code-safety and asset-logic). Each check runs\n"
+        "with a 5s timeout; child processes that overrun are SIGKILLed.\n"
         "\n"
         "Checks: `component-tests` (run each manifest test command), "
         "`doc-compliance` (exodoc audit), `dogfood` (swarm conventions),\n"
         "`ui-audit` (exoqms-ui), `metrics` (iter trend of\n"
-        "metric:iterN:tests_passing). Answer: `ok <audit-id> <score>%`.\n"
+        "metric:iterN:tests_passing), `code-safety` (exoqms-code on the\n"
+        "stack's own C source; default target = the manifest source dirs,\n"
+        "passes when 0 major findings — minor findings are non-fatal),\n"
+        "`asset-logic` (exoqms-svg on the stack's own SVG assets; default\n"
+        "target = the repo root, passes when 0 major findings). Answer:\n"
+        "`ok <audit-id> <score>%`.\n"
         "GET /audit?id= prints the record line plus one findings line per\n"
         "check: `check<TAB>result<TAB>evidence`.\n"
         "\n"
@@ -329,7 +336,8 @@ static const char *spec_text(void)
         "\n"
         "usage: exoqms [--host <addr>] [--port <n>]\n"
         "              [--exomind URL] [--exosched URL] [--exodoc <path>]\n"
-        "              [--ui <path>] [--repo <dir>] [--agents <a,b,c>]\n"
+        "              [--ui <path>] [--code <path>] [--svg <path>]\n"
+        "              [--repo <dir>] [--agents <a,b,c>]\n"
         "              [--notes24h <n>] [--token <t>] [--help] [--version]\n";
 }
 
@@ -338,7 +346,8 @@ static const char *spec_text(void)
 static const char *known_check(const char *id)
 {
     static const char *known[] = {"component-tests", "doc-compliance",
-                                  "dogfood", "ui-audit", "metrics"};
+                                  "dogfood", "ui-audit", "metrics",
+                                  "code-safety", "asset-logic"};
     for (size_t i = 0; i < sizeof known / sizeof known[0]; i++)
         if (!strcmp(known[i], id))
             return known[i];
@@ -746,6 +755,8 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
             ids[nids++] = (char *)"dogfood";
             ids[nids++] = (char *)"ui-audit";
             ids[nids++] = (char *)"metrics";
+            ids[nids++] = (char *)"code-safety";
+            ids[nids++] = (char *)"asset-logic";
         } else {
             char *copy = xstrdup(criteria);
             char *save = NULL;
@@ -784,7 +795,9 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
                 ids[i] != (char *)"doc-compliance" &&
                 ids[i] != (char *)"dogfood" &&
                 ids[i] != (char *)"ui-audit" &&
-                ids[i] != (char *)"metrics")
+                ids[i] != (char *)"metrics" &&
+                ids[i] != (char *)"code-safety" &&
+                ids[i] != (char *)"asset-logic")
                 free(ids[i]);
         }
         int pass = 0, fail = 0, skip = 0;

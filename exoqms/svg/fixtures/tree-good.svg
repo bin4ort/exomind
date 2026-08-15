@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 400">
+  <!-- tree-good: the QA standard every generated tree must meet.
+       Tapered stem (trapezoid path: 12px top, 32px bottom, 95px tall)
+       and a round crown (85px radius circle + two symmetric foliage
+       dots). Expected: 0 findings. -->
+  <title>Good tree — passes every tree check</title>
+  <circle id="crown" cx="150" cy="110" r="85"/>
+  <circle id="foliage-l" cx="120" cy="120" r="12"/>
+  <circle id="foliage-r" cx="180" cy="120" r="12"/>
+  <path id="trunk" d="M 144 195 L 156 195 L 166 290 L 134 290 Z"/>
+</svg>

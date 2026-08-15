@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300">
+  <!-- tree-square-crown: rectangular crown over a properly tapered stem.
+       A square is convex (convexity 1.0) and its aspect is 1.0, so only
+       the box-shaped signal (single element filling >= 85% of its own
+       bbox) flags it. Expected: crown-roundness major only. -->
+  <title>Square crown — box-shaped crown detection</title>
+  <rect id="crown" x="80" y="20" width="140" height="140"/>
+  <path id="trunk" d="M 144 160 L 156 160 L 166 240 L 134 240 Z"/>
+</svg>

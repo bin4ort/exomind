@@ -56,8 +56,10 @@ static void usage(const char *argv0)
            "  --port <n>         port (default 7657)\n"
            "  --exomind <url>    storage backend (default http://127.0.0.1:7654)\n"
            "  --exosched <url>   scheduler health probe (default http://127.0.0.1:7655)\n"
-           "  --exodoc <path>    exodoc binary for doc-compliance (default exodoc)\n"
-           "  --ui <path>        exoqms-ui binary for ui-audit (default none)\n"
+            "  --exodoc <path>    exodoc binary for doc-compliance (default exodoc)\n"
+            "  --ui <path>        exoqms-ui binary for ui-audit (default none)\n"
+            "  --code <path>      exoqms-code binary for code-safety (default none)\n"
+            "  --svg <path>       exoqms-svg binary for asset-logic (default none)\n"
            "  --repo <dir>       stack repo root for docs/stack.tsv (default .)\n"
            "  --agents <a,b,c>   active agent ids for the dogfood check\n"
            "  --notes24h <n>     min notes in last 24h for the dogfood check\n"
@@ -113,6 +115,10 @@ int main(int argc, char **argv)
                      argv[++i]);
         else if (!strcmp(a, "--ui") && i + 1 < argc)
             snprintf(cfg.ui_path, sizeof cfg.ui_path, "%s", argv[++i]);
+        else if (!strcmp(a, "--code") && i + 1 < argc)
+            snprintf(cfg.code_path, sizeof cfg.code_path, "%s", argv[++i]);
+        else if (!strcmp(a, "--svg") && i + 1 < argc)
+            snprintf(cfg.svg_path, sizeof cfg.svg_path, "%s", argv[++i]);
         else if (!strcmp(a, "--repo") && i + 1 < argc)
             snprintf(cfg.repo, sizeof cfg.repo, "%s", argv[++i]);
         else if (!strcmp(a, "--agents") && i + 1 < argc) {

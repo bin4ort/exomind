@@ -42,19 +42,34 @@ exodoc:
 exoqms:
 	$(MAKE) -C exoqms
 	$(MAKE) -C exoqms/ui
+	@if [ -d exoqms/code ]; then $(MAKE) -C exoqms/code; else echo "exoqms/code not present (module branch not merged); skipped"; fi
+	@if [ -d exoqms/svg ]; then $(MAKE) -C exoqms/svg; else echo "exoqms/svg not present (module branch not merged); skipped"; fi
+
+# QMS field modules only (exoqms-code + exoqms-svg), independent of the
+# daemon build. The module dirs land with their own branches
+# (feat/qms-code, feat/qms-svg); a missing module is skipped, not fatal.
+qms-modules:
+	@if [ -d exoqms/code ]; then $(MAKE) -C exoqms/code; else echo "exoqms/code not present (module branch not merged); skipped"; fi
+	@if [ -d exoqms/svg ]; then $(MAKE) -C exoqms/svg; else echo "exoqms/svg not present (module branch not merged); skipped"; fi
 
 test-exoqms: all
 	$(MAKE) -C exoqms test
 	$(MAKE) -C exoqms/ui test
+	@if [ -d exoqms/code ]; then $(MAKE) -C exoqms/code test; else echo "exoqms/code suite skipped (module branch not merged)"; fi
+	@if [ -d exoqms/svg ]; then $(MAKE) -C exoqms/svg test; else echo "exoqms/svg suite skipped (module branch not merged)"; fi
 
 # QMS audit of the live stack: starts an exoqms daemon (own port 7692,
 # shared exomind 7654 backend), runs the full ISO 19011 audit program
-# (all five checks, ui target = the stack's own good.html fixture),
+# (all seven checks, ui target = the stack's own good.html fixture),
 # prints the findings and greps the score line. Kills only the daemon
 # it started; never touches the shared daemons (7654/7655/7656).
 audit-stack: all exoqms
 	@echo "== exoqms audit program against the live stack =="; \
 	URL="http://127.0.0.1:7692"; DAEMON_PID=""; \
+	CODE_BIN=""; \
+	if [ -x "$(CURDIR)/exoqms/code/build/exoqms-code" ]; then \
+		CODE_BIN="$(CURDIR)/exoqms/code/build/exoqms-code"; \
+	elif [ -n "$$EXOQMS_CODE_BIN" ]; then CODE_BIN="$$EXOQMS_CODE_BIN"; fi; \
 	if ! timeout 3 curl -s -m 2 "$$URL/ping" | grep -q pong; then \
 		echo "starting exoqms on 7692 (state backend: shared exomind 7654)"; \
 		setsid nohup ./exoqms/build/exoqms --port 7692 \
@@ -62,6 +77,8 @@ audit-stack: all exoqms
 			--exosched http://127.0.0.1:7655 \
 			--exodoc $(CURDIR)/exodoc/build/exodoc \
 			--ui $(CURDIR)/exoqms/ui/build/exoqms-ui \
+			$${CODE_BIN:+--code "$$CODE_BIN"} \
+			--svg $(CURDIR)/exoqms/svg/build/exoqms-svg \
 			--repo $(CURDIR) --agents a,b,b1,b2,b3,e \
 			</dev/null >/tmp/exoqms-audit-stack.log 2>&1 & \
 		DAEMON_PID=$$!; \
@@ -71,7 +88,7 @@ audit-stack: all exoqms
 		done; \
 	fi; \
 	RESP=$$(timeout 60 curl -s -X POST "$$URL/audit?target=$(CURDIR)/exoqms/ui/fixtures/good.html" \
-		--data-binary "$$(printf 'audit-stack\tcomponent-tests,doc-compliance,dogfood,ui-audit,metrics\ta,b,b1,b2,b3,e')"); \
+		--data-binary "$$(printf 'audit-stack\tcomponent-tests,doc-compliance,dogfood,ui-audit,metrics,code-safety,asset-logic\ta,b,b1,b2,b3,e')"); \
 	echo "$$RESP"; \
 	echo "score line: $$(echo "$$RESP" | grep -oE '[0-9]+%')"; \
 	ID=$$(echo "$$RESP" | awk '{print $$2}'); \
@@ -115,4 +132,4 @@ test-exodoc: all
 		fi; \
 	fi
 
-.PHONY: all test clean exosched test-exosched exoflow test-exoflow exodoc test-exodoc exoqms test-exoqms audit-stack
+.PHONY: all test clean exosched test-exosched exoflow test-exoflow exodoc test-exodoc exoqms qms-modules test-exoqms audit-stack
