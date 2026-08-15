@@ -1,0 +1,155 @@
+/* good.css — deliberately clean stylesheet (QA fixture for exoqms-ui).
+ * Every color comes from the :root palette (or is the page background),
+ * every interactive element has matching rules, icons are SVG <use>,
+ * geometry is aligned and corner radii are consistent.
+ */
+:root {
+  --color-page: #f7f8fa;
+  --color-ink: #17202a;
+  --color-primary: #0b5bd3;
+  --color-surface: #ffffff;
+  --color-muted: #3e4a5a;
+  --color-text-light: #e8edf2;
+}
+
+body.page {
+  background: var(--color-page);
+  color: var(--color-ink);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  width: 960px;
+  margin: 16px auto 24px;
+  padding: 16px;
+  background: var(--color-surface);
+  border-radius: 8px;
+}
+
+.brand {
+  font-size: 20px;
+  margin: 0;
+  color: var(--color-ink);
+}
+
+.nav {
+  display: flex;
+  margin-left: 24px;
+}
+
+.nav-link {
+  color: var(--color-primary);
+  text-decoration: none;
+  margin-right: 16px;
+}
+
+.icon-btn {
+  width: 40px;
+  height: 40px;
+  background: var(--color-primary);
+  border: 0;
+  border-radius: 6px;
+  margin-left: auto;
+}
+
+.hero {
+  width: 960px;
+  margin: 0 auto 24px;
+  padding: 32px;
+  background: var(--color-ink);
+  border-radius: 8px;
+}
+
+.hero-title {
+  font-size: 28px;
+  color: var(--color-text-light);
+  margin: 0 0 8px;
+}
+
+.hero-text {
+  font-size: 16px;
+  color: var(--color-text-light);
+  margin: 0 0 16px;
+}
+
+.actions {
+  display: flex;
+}
+
+.btn {
+  width: 140px;
+  height: 44px;
+  font-size: 14px;
+  border-radius: 6px;
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  color: #ffffff;
+  border: 0;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--color-text-light);
+  border: 1px solid var(--color-text-light);
+  margin-left: 12px;
+}
+
+.cards {
+  display: flex;
+  width: 960px;
+  margin: 0 auto 24px;
+}
+
+.card {
+  width: 240px;
+  height: 140px;
+  padding: 16px;
+  background: var(--color-surface);
+  border-radius: 8px;
+  margin-right: 16px;
+}
+
+.card-title {
+  font-size: 18px;
+  color: var(--color-ink);
+  margin: 0 0 8px;
+}
+
+.card-text {
+  font-size: 14px;
+  color: var(--color-muted);
+  margin: 0;
+}
+
+.form {
+  width: 960px;
+  margin: 0 auto;
+  padding: 24px;
+  background: var(--color-surface);
+  border-radius: 8px;
+}
+
+.field-label {
+  display: block;
+  font-size: 14px;
+  color: var(--color-ink);
+  margin-bottom: 8px;
+}
+
+.field-input {
+  width: 260px;
+  height: 38px;
+  padding: 0 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-muted);
+  color: var(--color-ink);
+}
+
+.btn-submit {
+  margin-left: 12px;
+}

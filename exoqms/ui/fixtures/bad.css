@@ -1,0 +1,152 @@
+/* bad.css — deliberately defective stylesheet (QA fixture for exoqms-ui).
+ * Contains all seven defect classes:
+ *   1. emoji-icon:   🛒 in .cart-btn, ⚙ in .icon-gear
+ *   2. overlap:      .btn-overlap-b (relative, top: -30px) over .btn-overlap-a
+ *   3. misalign:     .btn-mis-b margin-left 30px vs .btn-mis-a
+ *   4. corner-mismatch: .card-a (8px all corners) above square .card-b
+ *   5. background:   .cta-primary white-on-white, .plain transparent,
+ *                    .weird-bg #ff00ff off-palette
+ *   6. sdk-default:  button.plain has zero matching rules
+ *   7. contrast:     .hero-text #999999 on #f2f2f2, .cta-primary white text
+ */
+:root {
+  --color-primary: #1a3c6e;
+  --color-text: #222222;
+  --color-page: #ffffff;
+}
+
+body {
+  background: var(--color-page);
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.topbar {
+  width: 800px;
+  margin: 0 auto;
+  padding: 16px;
+  background: #eef2f7;
+}
+
+.brand {
+  font-size: 20px;
+}
+
+.cart-btn {
+  background: var(--color-primary);
+  color: #ffffff;
+  width: 100px;
+  height: 36px;
+  border: 0;
+}
+
+.nav-link {
+  color: var(--color-primary);
+  margin-left: 12px;
+  text-decoration: none;
+}
+
+.hero {
+  width: 800px;
+  margin: 16px auto 0;
+  padding: 24px;
+  background: #f2f2f2;
+}
+
+.cta-primary {
+  background: #ffffff;
+  color: #ffffff;
+  width: 140px;
+  height: 44px;
+  border: 0;
+  display: block;
+  margin-bottom: 12px;
+}
+
+.hero-text {
+  color: #999999;
+  margin-bottom: 12px;
+}
+
+/* button.plain deliberately has NO rule: SDK default widget */
+
+.cards {
+  width: 800px;
+  margin: 16px auto 0;
+  padding: 0;
+}
+
+.card {
+  width: 280px;
+  height: 120px;
+}
+
+.card-a {
+  background: #eef2f7;
+  border-radius: 8px;
+}
+
+.card-b {
+  background: #dde4ee;
+  border-radius: 0;
+}
+
+.form {
+  width: 800px;
+  margin: 16px auto 0;
+  padding: 24px;
+  background: #f2f2f2;
+}
+
+.btn-mis-a,
+.btn-mis-b {
+  display: block;
+  width: 180px;
+  height: 40px;
+  background: var(--color-primary);
+  color: #ffffff;
+  border: 0;
+}
+
+.btn-mis-b {
+  margin-left: 30px;
+}
+
+.btn-overlap-a,
+.btn-overlap-b {
+  display: block;
+  width: 120px;
+  height: 40px;
+  background: var(--color-primary);
+  color: #ffffff;
+  border: 0;
+}
+
+.btn-overlap-a {
+  margin-top: 12px;
+}
+
+.btn-overlap-b {
+  position: relative;
+  top: -30px;
+}
+
+.weird-bg {
+  background-color: #ff00ff;
+  color: #ffffff;
+  width: 120px;
+  height: 36px;
+  border: 0;
+  display: block;
+  margin-top: 12px;
+}
+
+.icons {
+  width: 800px;
+  margin: 16px auto 0;
+  padding: 16px;
+}
+
+.icon-gear {
+  font-size: 18px;
+}
