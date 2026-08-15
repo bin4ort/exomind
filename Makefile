@@ -39,6 +39,49 @@ test-exoflow: all
 exodoc:
 	$(MAKE) -C exodoc
 
+exoqms:
+	$(MAKE) -C exoqms
+	$(MAKE) -C exoqms/ui
+
+test-exoqms: all
+	$(MAKE) -C exoqms test
+	$(MAKE) -C exoqms/ui test
+
+# QMS audit of the live stack: starts an exoqms daemon (own port 7692,
+# shared exomind 7654 backend), runs the full ISO 19011 audit program
+# (all five checks, ui target = the stack's own good.html fixture),
+# prints the findings and greps the score line. Kills only the daemon
+# it started; never touches the shared daemons (7654/7655/7656).
+audit-stack: all exoqms
+	@echo "== exoqms audit program against the live stack =="; \
+	URL="http://127.0.0.1:7692"; DAEMON_PID=""; \
+	if ! timeout 3 curl -s -m 2 "$$URL/ping" | grep -q pong; then \
+		echo "starting exoqms on 7692 (state backend: shared exomind 7654)"; \
+		setsid nohup ./exoqms/build/exoqms --port 7692 \
+			--exomind http://127.0.0.1:7654 \
+			--exosched http://127.0.0.1:7655 \
+			--exodoc $(CURDIR)/exodoc/build/exodoc \
+			--ui $(CURDIR)/exoqms/ui/build/exoqms-ui \
+			--repo $(CURDIR) --agents a,b,b1,b2,b3,e \
+			</dev/null >/tmp/exoqms-audit-stack.log 2>&1 & \
+		DAEMON_PID=$$!; \
+		for i in 1 2 3 4 5; do \
+			timeout 3 curl -s -m 2 "$$URL/ping" | grep -q pong && break; \
+			sleep 1; \
+		done; \
+	fi; \
+	RESP=$$(timeout 60 curl -s -X POST "$$URL/audit?target=$(CURDIR)/exoqms/ui/fixtures/good.html" \
+		--data-binary "$$(printf 'audit-stack\tcomponent-tests,doc-compliance,dogfood,ui-audit,metrics\ta,b,b1,b2,b3,e')"); \
+	echo "$$RESP"; \
+	echo "score line: $$(echo "$$RESP" | grep -oE '[0-9]+%')"; \
+	ID=$$(echo "$$RESP" | awk '{print $$2}'); \
+	echo "findings:"; \
+	timeout 30 curl -s "$$URL/audit?id=$$ID"; \
+	if [ -n "$$DAEMON_PID" ]; then kill "$$DAEMON_PID" 2>/dev/null || true; fi
+
+clean:
+	rm -rf build
+
 # Doc-debt gate: the live audit must report 0 fail (score 100%). When the
 # live daemons are unreachable the live-only checks (api-conformance,
 # version-against-daemon) report SKIP instead of FAIL — they need a running
@@ -72,7 +115,4 @@ test-exodoc: all
 		fi; \
 	fi
 
-clean:
-	rm -rf build
-
-.PHONY: all test clean exosched test-exosched exoflow test-exoflow exodoc test-exodoc
+.PHONY: all test clean exosched test-exosched exoflow test-exoflow exodoc test-exodoc exoqms test-exoqms audit-stack

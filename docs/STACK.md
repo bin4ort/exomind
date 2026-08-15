@@ -1,6 +1,6 @@
 # The exomind Stack
 
-**One repo, three daemons, one batch auditor — the AI-native software stack.**
+**One repo, four daemons, one batch auditor — the AI-native software stack.**
 
 This document is the single human-facing reference for the whole stack: what
 it is, why it exists, how the pieces fit together, and how every piece is
@@ -13,6 +13,7 @@ each directory's README; this page is the map.
 | [exomind](../README.md) | 0.3.0 | 7654 | durable long-term memory |
 | [exosched](../exosched/README.md) | 0.2.0 | 7655 | scheduled reminders + push |
 | [exoflow](../exoflow/README.md) | 0.1.0 | 7656 | dependency-graph orchestrator |
+| [exoqms](../exoqms/README.md) | 0.1.0 | 7657 | quality management system |
 | [exodoc](../exodoc/README.md) | 0.1.0 | — (batch) | documentation auditor |
 
 ## Why this stack exists: the AI-native philosophy
@@ -146,6 +147,68 @@ again, until `=== audit: 0 fail`.
 - No port: batch tool, run on demand.
 - Build: `make exodoc`; test: `make test-exodoc`.
 
+### exoqms — the Quality Management System (7657)
+
+The QMS daemon (C11, zero dependencies) that turns the ISO 9000 family
+into running code for the stack. It holds quality objectives
+(ISO 9001 §6.2), monitors the `metric:iterN:tests_passing` trend as the
+sustained-success indicator (ISO 9004), runs ISO 19011 audit programs
+against the live stack — invoking `exodoc` and `exoqms-ui` as child
+processes under a hard 5s timeout each — and records non-conformities
+with a full corrective-action lifecycle (ISO 9001 §8.7/§10.2). Its
+durable state lives inside exomind under `exoqms:*` keys, so the QMS
+itself is restarted without losing a record, and every audit score and
+NC transition lands in the note feed.
+
+- Purpose: machine-auditable quality management for the whole stack.
+- Port: **7657** (`127.0.0.1`; development instances run on own ports,
+  e.g. 7692, still backed by the shared exomind on 7654).
+- Durability: all state is `exoqms:obj:*`, `exoqms:nc:*`,
+  `exoqms:audit:*`, `exoqms:config:*` keys in exomind, reloaded on
+  startup; records written while exomind is down are rejected, never
+  lost silently.
+- API: see [exoqms README](../exoqms/README.md) or
+  `curl localhost:7657/`.
+
+| method | path | purpose |
+|--------|------|---------|
+| GET | `/` | self-describing spec |
+| GET | `/ping` | liveness: `pong` |
+| POST | `/objectives` | add quality objective (ISO 9001 §6.2) |
+| GET | `/objectives` | list objectives |
+| POST | `/nc` | raise a non-conformity (ISO 9001 §8.7) |
+| GET | `/nc?id=<id>` | NC detail |
+| GET | `/nc?status=<st>` | list NCs, filtered |
+| POST | `/nc?id=<id>&action=<a>` | NC lifecycle transition (§10.2) |
+| POST | `/audit` | run an ISO 19011 audit program |
+| GET | `/audit?id=<id>` | audit report with findings |
+| GET | `/audits` | audit program list |
+| GET | `/report` | consolidated quality picture |
+| GET | `/trends` | metric trend + verdict |
+
+ISO mapping (one line per principle→feature): **ISO 9000** vocabulary →
+the machine-executable checks in `exoqms/standard.md` §5; **ISO 9001
+§5.2** policy → the quality policy statement in `standard.md` §2;
+**ISO 9001 §6.2** objectives → `POST /objectives`; **ISO 9001 §7.5**
+documented information → the `doc-compliance` check (exodoc);
+**ISO 9001 §8.7** non-conforming outputs → `POST /nc` with
+major/minor severity; **ISO 9001 §9.1** measurement → the `metrics`
+check; **ISO 9001 §10.2** corrective action → the NC lifecycle
+`open → analysis → corrective → verify → closed` with mandatory
+evidence; **ISO 9004** sustained success → the trend verdict and
+stagnation flag; **ISO 19011** audit programs → `POST /audit` with
+named programs, criteria and durable records.
+
+The five checks of the audit program: `component-tests` (every
+manifest test command within the 5s budget), `doc-compliance` (exodoc
+`--live`, 0 fail), `dogfood` (every active agent keeps
+`agent:<id>:status`; enough notes in the last 24h), `ui-audit`
+(exoqms-ui finds 0 findings on the target page) and `metrics` (trend
+not down). The UI audit engine lives at [`exoqms/ui`](../exoqms/ui/README.md):
+a zero-dependency C11 static analyzer (7 defect checks, no browser)
+with permanent fixtures (`good.html` = the standard, `bad.html` = the
+12-finding demo artifact).
+
 ## Stack flows
 
 ```
@@ -168,19 +231,29 @@ again, until `=== audit: 0 fail`.
         |                   |         |
         |   exosched:timer:* <-- state lives here   |
         |   exoflow:flow:*  |         |
+        |   exoqms:* (QMS)  |         |
         +--------+----------+   every fire:
                  |              note into exomind + WS frame
                  v
         every event appended as a timestamped NOTE
         -> /notes = the swarm's paper trail
+
+        the QMS loop (exoqms, 7657 — runs against the same exomind):
+             POST /audit -> exodoc --live + exoqms-ui + dogfood/metrics
+                 -> findings -> POST /nc -> corrective action -> close
+                 -> every audit + transition = a NOTE (the audit trail)
 ```
 
-Reading it as a data-flow diagram: **memory** (exomind) is the single source
-of truth at the bottom; **scheduler** (exosched) stores its timers there and
-feeds its fires back as notes; **orchestrator** (exoflow) stores its flows
-there, borrows the scheduler for deadlines, and audits every transition into
-the note feed; **auditor** (exodoc) reads the manifest and the live specs to
-verify the docs that describe the whole thing.
+Reading it as a data-flow diagram: **memory** (exomind) is the single
+source of truth at the bottom; **scheduler** (exosched) stores its
+timers there and feeds its fires back as notes; **orchestrator**
+(exoflow) stores its flows there, borrows the scheduler for deadlines,
+and audits every transition into the note feed; **auditor** (exodoc)
+reads the manifest and the live specs to verify the docs that describe
+the whole thing; **QMS** (exoqms) reads the same memory to audit the
+stack, files NCs and closes them with evidence — its records live in
+exomind like everyone else's, so the quality system is part of the
+paper trail it audits.
 
 ## Running the stack
 
@@ -188,12 +261,16 @@ verify the docs that describe the whole thing.
 make            # builds build/exomind
 make exosched   # builds exosched/build/exosched
 make exoflow    # builds exoflow/build/exoflow
+make exoqms     # builds exoqms/build/exoqms + exoqms/ui/build/exoqms-ui
 make exodoc     # builds exodoc/build/exodoc
 
 build/exomind --port 7654 --data exomind.dat &
 exosched/build/exosched --port 7655 --exomind http://127.0.0.1:7654 &
 exoflow/build/exoflow --port 7656 --exomind http://127.0.0.1:7654 \
     --exosched http://127.0.0.1:7655 &
+exoqms/build/exoqms --port 7657 --exomind http://127.0.0.1:7654 \
+    --exodoc exodoc/build/exodoc --ui exoqms/ui/build/exoqms-ui \
+    --repo . --agents a,b,b1,b2,b3,e &
 ```
 
 ## The quality gate
@@ -201,7 +278,9 @@ exoflow/build/exoflow --port 7656 --exomind http://127.0.0.1:7654 \
 ```sh
 make test-exodoc        # exodoc's unit suite, then the live audit
 timeout 30 ./exodoc/build/exodoc audit --live --stack docs/stack.tsv
-# expect: === audit: 35 pass, 0 fail (score 100%) ===
+# expect: === audit: 43 pass, 0 fail (score 100%) ===
+make audit-stack        # exoqms audit program against the live stack
+# expect: ok <audit-id> 100%
 ```
 
 `make test-exodoc` runs exodoc's suite, then the live audit against the
