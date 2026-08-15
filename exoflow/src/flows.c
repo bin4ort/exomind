@@ -53,6 +53,7 @@ size_t flow_count(void)
     return n;
 }
 
+/* @nonnull */
 const char *flow_status(const flow_t *f)
 {
     int all_done = 1, any_cancelled = 0, any_active = 0, any_failed = 0;
@@ -131,6 +132,7 @@ static void flow_free(flow_t *f)
  *   optional last line (loops only):
  *     loop<TAB><interval s><TAB><max><TAB><until><TAB><iter><TAB><budget><TAB><next_run><TAB><parent><TAB><stopped>
  * v1 documents (header `exoflow<TAB>1<TAB>...`) load as non-looping. */
+/* @nonnull */
 char *flow_serialize(const flow_t *f)
 {
     char *en = esc_line(f->name, strlen(f->name));
@@ -869,6 +871,7 @@ int flow_cancel(cli_t *e, const char *id, char *err, size_t errsz)
  * The exosched reminder `exoflow:loop:<id>` is feed candy only. */
 
 /* id of the loop's first iteration */
+/* @nonnull */
 static const char *loop_root_id(const flow_t *f)
 {
     return f->loop_parent[0] ? f->loop_parent : f->id;

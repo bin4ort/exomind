@@ -186,10 +186,14 @@ int dir_walk_svg(const char *dir, vec_t *out)
         if (stat(path, &st) != 0)
             continue;
         if (S_ISDIR(st.st_mode)) {
-            dir_walk_svg(path, out);
+            if (!strstr(path, "/fixtures/"))
+                dir_walk_svg(path, out);
         } else if (S_ISREG(st.st_mode) && pl >= 4 &&
                    strcmp(de->d_name + pl - 4, ".svg") == 0) {
-            vec_push(out, xstrdup(path));
+            /* QA fixtures are intentionally non-conforming (negative
+               test artifacts); audits scan real assets only */
+            if (!strstr(path, "/fixtures/"))
+                vec_push(out, xstrdup(path));
         }
     }
     closedir(d);

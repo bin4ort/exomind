@@ -27,6 +27,71 @@
 #define MAX_PATHS 4096
 
 typedef struct {
+    char *path;   /* file path substring */
+    int line;     /* 0 = any */
+    char *check;  /* NULL = any */
+} allow_t;
+
+typedef struct {
+    allow_t *a;
+    size_t n;
+    size_t cap;
+} allowvec_t;
+
+static int allow_load(const char *path, allowvec_t *av)
+{
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return -1;
+    char line[1024];
+    while (fgets(line, sizeof line, f)) {
+        size_t l = strlen(line);
+        while (l && (line[l - 1] == '\n' || line[l - 1] == '\r'))
+            line[--l] = 0;
+        if (!l || line[0] == '#')
+            continue;
+        char *lp = strchr(line, ':');
+        int ln = 0;
+        char *ck = NULL;
+        if (lp) {
+            *lp = 0;
+            char *rest = lp + 1;
+            char *ckp = strchr(rest, ':');
+            if (ckp) {
+                *ckp = 0;
+                ck = ckp + 1;
+            }
+            ln = atoi(rest);
+        }
+        if (av->n >= av->cap) {
+            av->cap = av->cap ? av->cap * 2 : 16;
+            allow_t *nw = realloc(av->a, av->cap * sizeof(allow_t));
+            if (!nw)
+                break;
+            av->a = nw;
+        }
+        allow_t *al = &av->a[av->n++];
+        al->path = strdup(line);
+        al->line = ln;
+        al->check = ck ? strdup(ck) : NULL;
+    }
+    fclose(f);
+    return (int)av->n;
+}
+
+static int allow_match(const allowvec_t *av, const char *path, int line,
+                       const char *check)
+{
+    for (size_t i = 0; i < av->n; i++) {
+        if (strstr(path, av->a[i].path) &&
+            (!av->a[i].line || av->a[i].line == line) &&
+            (!av->a[i].check || !strcmp(av->a[i].check, check)))
+            return 1;
+    }
+    return 0;
+}
+
+typedef struct {
     char **items;
     size_t n;
     size_t cap;
@@ -57,8 +122,9 @@ static void sv_free(strvec_t *sv)
 static int is_c_file(const char *p)
 {
     size_t n = strlen(p);
-    return (n > 2 && !strcmp(p + n - 2, ".c")) ||
-           (n > 2 && !strcmp(p + n - 2, ".h"));
+    if (n > 2 && (!strcmp(p + n - 2, ".c") || !strcmp(p + n - 2, ".h")))
+        return !strstr(p, "/fixtures/"); /* QA fixtures are intentionally dirty */
+    return 0;
 }
 
 static void walk_dir(const char *dir, strvec_t *files)
@@ -74,7 +140,7 @@ static void walk_dir(const char *dir, strvec_t *files)
         snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
         if (e->d_type == DT_DIR) {
             walk_dir(path, files);
-        } else if (is_c_file(e->d_name)) {
+        } else if (is_c_file(path)) {
             sv_push(files, path);
         }
     }
@@ -85,6 +151,7 @@ int main(int argc, char **argv)
 {
     strvec_t paths = {0};
     strvec_t ignores = {0};
+    allowvec_t allows = {0};
     int json = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -92,6 +159,12 @@ int main(int argc, char **argv)
             json = 1;
         else if (!strcmp(argv[i], "--ignore") && i + 1 < argc)
             sv_push(&ignores, argv[++i]);
+        else if (!strcmp(argv[i], "--allow") && i + 1 < argc) {
+            if (allow_load(argv[++i], &allows) < 0) {
+                fprintf(stderr, "exoqms-code: cannot open allow file\n");
+                return 2;
+            }
+        }
         else if (!strcmp(argv[i], "--version")) {
             printf("exoqms-code v0.1.0\n");
             return 0;
@@ -157,6 +230,12 @@ int main(int argc, char **argv)
 
         for (size_t k = 0; k < out.nf; k++) {
             finding_t *f = &out.f[k];
+            if (allow_match(&allows, path, f->line, f->check)) {
+                if (!json)
+                    printf("skip %s %s:%d:%d (allowlisted)\n", f->check,
+                           path, f->line, f->col);
+                continue;
+            }
             if (json) {
                 printf("%s{\"check\":\"%s\",\"severity\":\"%s\",\"file\":\"%s\",\"line\":%d,\"col\":%d,\"reason\":\"%s\"}",
                        k == 0 && fi == 0 ? "" : ",", f->check, f->severity,

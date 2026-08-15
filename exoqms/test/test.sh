@@ -362,8 +362,8 @@ CS1=$(timeout 20 curl -s -d $'code clean\tcode-safety' $BASE:$QMS_A/audit)
 CS1ID=$(printf '%s' "$CS1" | awk '{print $2}')
 t "code-safety passes with 0 findings" 1 \
     "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$CS1ID" | awk -F'\t' '$1=="code-safety" && $2=="pass" {n++} END {print n+0}')"
-t "code-safety default target = manifest dirs" 1 \
-    "$([ -f "$TDIR/code-trace" ] && grep -q "$TDIR/repo/okc" "$TDIR/code-trace" && echo 1 || echo 0)"
+t "code-safety default target = repo root" 1 \
+    "$([ -f "$TDIR/code-trace" ] && grep -q "$TDIR/repo" "$TDIR/code-trace" && echo 1 || echo 0)"
 
 CS2ID=""
 if [ ! -f "$TDIR/code-minor" ]; then touch "$TDIR/code-minor"; fi

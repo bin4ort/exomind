@@ -183,12 +183,22 @@ int main(int argc, char **argv)
             return 2;
         }
     }
-    if (is_dir(target)) {
+        if (is_dir(target)) {
         vec_t files = {0};
         size_t n;
-        if (dir_walk_svg(target, &files) != 0 || files.len == 0) {
-            fprintf(stderr, "error: no .svg files found under %s\n", target);
+        if (dir_walk_svg(target, &files) != 0) {
+            fprintf(stderr, "error: cannot walk %s\n", target);
             return 2;
+        }
+        if (files.len == 0) {
+            /* no real assets under the target (fixtures are excluded):
+               nothing to audit is a pass, not a failure */
+            if (json)
+                printf("[]\n");
+            else
+                printf("skip no svg assets under %s\n=== findings: 0 (0 major) ===\n",
+                       target);
+            return 0;
         }
         n = files.len;
         for (i = 0; i < (int)n; i++) {

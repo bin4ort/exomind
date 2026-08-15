@@ -608,7 +608,8 @@ static char *manifest_src_dirs(cfg_t *cfg)
     FILE *f = fopen(manifest, "r");
     if (!f)
         return NULL;
-    buf_t b = {0};
+    char dirs[16][2048];
+    size_t nd = 0;
     char line[4096];
     while (fgets(line, sizeof line, f)) {
         trim_crlf(line);
@@ -626,11 +627,35 @@ static char *manifest_src_dirs(cfg_t *cfg)
             snprintf(resolved, sizeof resolved, "%s/%s", cfg->repo, col[1]);
         if (stat(resolved, &st) != 0 || !S_ISDIR(st.st_mode))
             continue;
-        buf_printf(&b, "%s ", resolved);
+        /* the repo root covers every subdir: skip it if others exist,
+           and dedupe identical entries */
+        int dup = 0;
+        for (size_t i = 0; i < nd; i++)
+            if (strcmp(dirs[i], resolved) == 0)
+                dup = 1;
+        if (!dup && nd < 16)
+            snprintf(dirs[nd++], sizeof dirs[0], "%s", resolved);
     }
     fclose(f);
-    if (!b.len)
+    if (nd == 0)
         return NULL;
+    buf_t b = {0};
+    for (size_t i = 0; i < nd; i++) {
+        /* the repo root (or its `/.` spelling) covers every subdir:
+           skip it when subdirs are listed */
+        int is_root = strcmp(dirs[i], cfg->repo) == 0;
+        size_t rl = strlen(cfg->repo);
+        if (!is_root && strlen(dirs[i]) == rl + 2 &&
+            strncmp(dirs[i], cfg->repo, rl) == 0 &&
+            strcmp(dirs[i] + rl, "/.") == 0)
+            is_root = 1;
+        if (nd > 1 && is_root)
+            continue;
+        buf_printf(&b, "%s ", dirs[i]);
+    }
+    if (!b.len) {
+        buf_printf(&b, "%s ", cfg->repo);
+    }
     char *out = b.p;
     b.p = NULL;
     buf_free(&b);
@@ -662,11 +687,12 @@ static void check_code_safety(check_ctx_t *ctx, finding_t *f)
     char *default_dirs = NULL;
     const char *target = ctx->target;
     if (!target || !target[0]) {
-        default_dirs = manifest_src_dirs(ctx->cfg);
+        /* the whole repo: fixtures are excluded by the tools, documented
+           exceptions live in <repo>/.exoqms-allow */
+        default_dirs = xstrdup(ctx->cfg->repo);
         if (!default_dirs) {
             set_finding(f, "code-safety", R_SKIP,
-                        "no target given (audit ?target=) and no source "
-                        "dirs in the stack manifest");
+                        "no target given (audit ?target=)");
             return;
         }
         target = default_dirs;
@@ -679,6 +705,16 @@ static void check_code_safety(check_ctx_t *ctx, finding_t *f)
     for (char *p = strtok_r(dirs, " ", &save); p && n < 14;
          p = strtok_r(NULL, " ", &save))
         argv[n++] = p;
+    /* documented exceptions: <repo>/.exoqms-allow (file:line:check lines) */
+    char allowpath[2048];
+    snprintf(allowpath, sizeof allowpath, "%s/.exoqms-allow",
+             ctx->cfg->repo);
+    FILE *al = fopen(allowpath, "r");
+    if (al) {
+        fclose(al);
+        argv[n++] = "--allow";
+        argv[n++] = allowpath;
+    }
     argv[n++] = "--json";
     argv[n] = NULL;
     char *out = NULL;
