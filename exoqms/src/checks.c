@@ -510,6 +510,7 @@ int trend_values(exo_t *e, int64_t **vals, int *n, char **list, size_t *llen)
 
 /* trend verdict over the two most recent values; flag=1 = stagnation
  * (not improving) */
+/* @nonnull */
 const char *trend_verdict(int64_t *vals, int n, int *flag)
 {
     if (flag)

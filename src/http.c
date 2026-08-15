@@ -514,6 +514,7 @@ static uint32_t rand16(void)
     return st & 0xFFFF;
 }
 
+/* @nonnull */
 static char *snippet(const char *v, size_t n)
 {
     int trunc = n > SNIPPET_MAX;
