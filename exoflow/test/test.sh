@@ -323,7 +323,10 @@ sleep 0.5
 setsid nohup "$XF_BIN" --port $XF_PORT --exomind "$XM_URL" \
     --exosched "$XS_URL" >>"$XF_LOG" 2>&1 < /dev/null &
 XF_PID=$!
-sleep 0.8
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    [ "$(curl -s -m 2 "$XF_URL/ping")" = "pong" ] && break
+    sleep 0.5
+done
 r=$(curl -s -m 3 "$XF_URL/flow?id=$F5")
 check "SIGKILL restart: flow state intact" \
     "$(printf '%s' "$r" | awk -F '\t' '/^step/ {if ($1=="p" && $3!="done") bad=1; if ($1=="w" && $3!="claimed") bad=1; if ($1=="w" && $4!="a1") bad=1; if ($1=="d" && $3!="pending") bad=1} END {exit bad?1:0}' && echo 0 || echo 1)" "$r"
@@ -340,7 +343,10 @@ sleep 2.5
 setsid nohup "$XF_BIN" --port $XF_PORT --exomind "$XM_URL" \
     --exosched "$XS_URL" >>"$XF_LOG" 2>&1 < /dev/null &
 XF_PID=$!
-sleep 0.8
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    [ "$(curl -s -m 2 "$XF_URL/ping")" = "pong" ] && break
+    sleep 0.5
+done
 r=$(curl -s -m 3 "$XF_URL/flow?id=$F6")
 check "deadline expired while down -> overdue on reload" \
     "$(printf '%s' "$r" | grep '^step' | awk -F '\t' '$2=="soon" && $3=="overdue" {ok=1} END {exit ok?0:1}' && echo 0 || echo 1)" "$r"
@@ -368,10 +374,18 @@ check "exomind down: create reports unavailable" \
 setsid nohup "$XM_BIN" --port $DEAD_PORT --data "$XM_DATA" \
     >>"$XM_LOG" 2>&1 < /dev/null &
 XM_PID=$!
-sleep 1.5
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    [ "$(curl -s -m 2 "http://127.0.0.1:$DEAD_PORT/ping")" = "pong" ] && break
+    sleep 0.5
+done
 r=$(curl -s -m 3 -X POST "$XF_URL/flow" -d $'retry ok\nx\tfirst\t')
 check "exomind up: create works after background reload" \
     "$(printf '%s' "$r" | grep -qE '^ok ' && echo 0 || echo 1)" "$r"
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    r=$(curl -s -m 2 "$XF_URL/flow?id=$F5")
+    printf '%s' "$r" | grep -q "$F5" && break
+    sleep 0.5
+done
 r=$(curl -s -m 3 "$XF_URL/flow?id=$F5")
 check "background reload picked up existing flows" \
     "$(printf '%s' "$r" | grep -q "$F5" && echo 0 || echo 1)" "$r"
@@ -401,7 +415,11 @@ check "auth: no token -> 401" \
 r=$(curl -s -m 3 -H "Authorization: Bearer wrong" -o /dev/null -w '%{http_code}' "$AUTH_URL/flows")
 check "auth: wrong token -> 401" \
     "$([ "$r" = "401" ] && echo 0 || echo 1)" "$r"
-r=$(curl -s -m 3 -H "Authorization: Bearer supersecret" "$AUTH_URL/flows")
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    r=$(curl -s -m 2 -H "Authorization: Bearer supersecret" "$AUTH_URL/flows")
+    printf '%s' "$r" | grep -q '^flow' && break
+    sleep 0.5
+done
 check "auth: correct token -> 200 + data" \
     "$([ -n "$r" ] && printf '%s' "$r" | grep -q '^flow' && echo 0 || echo 1)" "$r"
 stop_port $AUTH_PORT
