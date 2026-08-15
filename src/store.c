@@ -452,7 +452,9 @@ void store_close(store_t *s)
     if (!s)
         return;
     pthread_mutex_lock(&s->mu);
-    fdatasync(s->fd);
+    if (fdatasync(s->fd) != 0)
+        fprintf(stderr, "exomind: store_close: fdatasync failed: %s\n",
+                strerror(errno));
     close(s->fd);
     for (size_t b = 0; b < s->nbuckets; b++) {
         entry_t *e = s->buckets[b];

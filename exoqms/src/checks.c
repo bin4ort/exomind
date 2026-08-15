@@ -425,7 +425,6 @@ static void check_ui_audit(check_ctx_t *ctx, finding_t *f)
     }
     free(out);
 }
-
 /* ---------- check 5: metrics trend (ISO 9004 sustained success) ---------- */
 
 int trend_values(exo_t *e, int64_t **vals, int *n, char **list, size_t *llen)
@@ -571,6 +570,191 @@ static void check_metrics(check_ctx_t *ctx, finding_t *f)
     free(list);
 }
 
+/* ---------- check 6/7: code-safety (exoqms-code) and asset-logic
+ * (exoqms-svg) — the field modules. Both are batch static analyzers with
+ * the same contract: findings as a JSON array with a "severity" field
+ * ("major"/"minor"), exit 0 no findings, 1 findings, 2 usage/IO error.
+ * The pass rule is severity-based: 0 MAJOR findings passes; minor
+ * findings are reported as evidence but are non-fatal (documented in
+ * exoqms/standard.md 5.3). */
+
+/* count findings + major/minor severities in a JSON findings array */
+static void json_severity_count(const char *out, int *n, int *maj, int *min)
+{
+    *n = *maj = *min = 0;
+    if (!out)
+        return;
+    for (const char *p = out; (p = strstr(p, "\"severity\":")); p += 11) {
+        const char *v = p + 11;
+        if (strncmp(v, "\"major\"", 7) == 0) {
+            (*n)++;
+            (*maj)++;
+        } else if (strncmp(v, "\"minor\"", 7) == 0) {
+            (*n)++;
+            (*min)++;
+        }
+    }
+}
+
+/* the manifest source dirs (column 2 of docs/stack.tsv) resolved against
+ * the repo root, space-separated; NULL when none are usable. This is the
+ * default scan target of the code-safety check: the stack audits its own
+ * C source. */
+static char *manifest_src_dirs(cfg_t *cfg)
+{
+    char manifest[2048];
+    snprintf(manifest, sizeof manifest, "%s/docs/stack.tsv", cfg->repo);
+    FILE *f = fopen(manifest, "r");
+    if (!f)
+        return NULL;
+    buf_t b = {0};
+    char line[4096];
+    while (fgets(line, sizeof line, f)) {
+        trim_crlf(line);
+        if (!line[0] || line[0] == '#')
+            continue;
+        char *col[8];
+        int nc = tab_split(line, col, 8);
+        if (nc < 2 || !col[1][0])
+            continue;
+        char resolved[2048];
+        struct stat st;
+        if (col[1][0] == '/')
+            snprintf(resolved, sizeof resolved, "%s", col[1]);
+        else
+            snprintf(resolved, sizeof resolved, "%s/%s", cfg->repo, col[1]);
+        if (stat(resolved, &st) != 0 || !S_ISDIR(st.st_mode))
+            continue;
+        buf_printf(&b, "%s ", resolved);
+    }
+    fclose(f);
+    if (!b.len)
+        return NULL;
+    char *out = b.p;
+    b.p = NULL;
+    buf_free(&b);
+    return out;
+}
+
+/* append up to 200 chars of child output to the evidence line */
+static void finding_snippet(finding_t *f, const char *out, size_t olen)
+{
+    if (!out || !out[0])
+        return;
+    char *o = xstrndup(out, olen < 200 ? olen : 200);
+    trim_crlf(o);
+    if (strlen(f->evidence) + strlen(o) + 2 < EVID_MAX) {
+        strncat(f->evidence, " ",
+                EVID_MAX - strlen(f->evidence) - 1);
+        strncat(f->evidence, o, EVID_MAX - strlen(f->evidence) - 1);
+    }
+    free(o);
+}
+
+static void check_code_safety(check_ctx_t *ctx, finding_t *f)
+{
+    if (!ctx->cfg->code_path[0]) {
+        set_finding(f, "code-safety", R_SKIP,
+                    "no code binary configured (--code)");
+        return;
+    }
+    char *default_dirs = NULL;
+    const char *target = ctx->target;
+    if (!target || !target[0]) {
+        default_dirs = manifest_src_dirs(ctx->cfg);
+        if (!default_dirs) {
+            set_finding(f, "code-safety", R_SKIP,
+                        "no target given (audit ?target=) and no source "
+                        "dirs in the stack manifest");
+            return;
+        }
+        target = default_dirs;
+    }
+    char *dirs = xstrdup(target);
+    char *argv[16];
+    int n = 0;
+    argv[n++] = ctx->cfg->code_path;
+    char *save = NULL;
+    for (char *p = strtok_r(dirs, " ", &save); p && n < 14;
+         p = strtok_r(NULL, " ", &save))
+        argv[n++] = p;
+    argv[n++] = "--json";
+    argv[n] = NULL;
+    char *out = NULL;
+    size_t olen = 0;
+    char err[256];
+    int rc = run_child(argv, ctx->cfg->repo, CHECK_TIMEOUT_S, &out, &olen,
+                       err, sizeof err);
+    int nf = 0, maj = 0, min = 0;
+    json_severity_count(out, &nf, &maj, &min);
+    if (rc == -2) {
+        set_finding(f, "code-safety", R_FAIL,
+                    "timed out after %ds scanning %s", CHECK_TIMEOUT_S,
+                    target);
+    } else if (rc == -1) {
+        set_finding(f, "code-safety", R_FAIL, "%s", err);
+    } else if (maj > 0) {
+        set_finding(f, "code-safety", R_FAIL,
+                    "%d major, %d minor finding(s) on %s", maj, min, target);
+        finding_snippet(f, out, olen);
+    } else if (nf == 0 && rc != 0) {
+        set_finding(f, "code-safety", R_FAIL,
+                    "no severity-parsable findings but exit %d on %s: %s",
+                    rc, target, out && out[0] ? out : "(no output)");
+    } else {
+        set_finding(f, "code-safety", R_PASS,
+                    "%d finding(s), 0 major on %s (minor non-fatal)", nf,
+                    target);
+        if (nf > 0)
+            finding_snippet(f, out, olen);
+    }
+    free(out);
+    free(dirs);
+    free(default_dirs);
+}
+
+static void check_asset_logic(check_ctx_t *ctx, finding_t *f)
+{
+    if (!ctx->cfg->svg_path[0]) {
+        set_finding(f, "asset-logic", R_SKIP,
+                    "no svg binary configured (--svg)");
+        return;
+    }
+    const char *target = ctx->target;
+    if (!target || !target[0])
+        target = ctx->cfg->repo;
+    char *argv[6] = {NULL, (char *)target, "--shape", "auto", "--json",
+                     NULL};
+    argv[0] = ctx->cfg->svg_path;
+    char *out = NULL;
+    size_t olen = 0;
+    char err[256];
+    int rc = run_child(argv, ctx->cfg->repo, CHECK_TIMEOUT_S, &out, &olen,
+                       err, sizeof err);
+    int nf = 0, maj = 0, min = 0;
+    json_severity_count(out, &nf, &maj, &min);
+    if (rc == -2) {
+        set_finding(f, "asset-logic", R_FAIL,
+                    "timed out after %ds on %s", CHECK_TIMEOUT_S, target);
+    } else if (rc == -1) {
+        set_finding(f, "asset-logic", R_FAIL, "%s", err);
+    } else if (maj > 0) {
+        set_finding(f, "asset-logic", R_FAIL,
+                    "%d major, %d minor finding(s) on %s", maj, min, target);
+        finding_snippet(f, out, olen);
+    } else if (nf == 0 && rc != 0) {
+        set_finding(f, "asset-logic", R_FAIL,
+                    "no severity-parsable findings but exit %d on %s: %s",
+                    rc, target, out && out[0] ? out : "(no output)");
+    } else {
+        set_finding(f, "asset-logic", R_PASS,
+                    "%d finding(s), 0 major on %s", nf, target);
+        if (nf > 0)
+            finding_snippet(f, out, olen);
+    }
+    free(out);
+}
+
 /* ---------- dispatch ---------- */
 
 int check_run(const char *id, check_ctx_t *ctx, finding_t *f)
@@ -586,6 +770,10 @@ int check_run(const char *id, check_ctx_t *ctx, finding_t *f)
         check_ui_audit(ctx, f);
     else if (!strcmp(id, "metrics"))
         check_metrics(ctx, f);
+    else if (!strcmp(id, "code-safety"))
+        check_code_safety(ctx, f);
+    else if (!strcmp(id, "asset-logic"))
+        check_asset_logic(ctx, f);
     else
         set_finding(f, id, R_SKIP, "unknown check id");
     if (!f->id[0])

@@ -74,6 +74,11 @@ static char *read_sanitized(const char *path, size_t *len, size_t cap)
                 tmp[i] = ' ';
         buf_put(&b, tmp, got);
     }
+    if (ferror(f)) {
+        fclose(f);
+        buf_free(&b);
+        return NULL;
+    }
     fclose(f);
     *len = b.len;
     return b.p ? b.p : xstrdup("");

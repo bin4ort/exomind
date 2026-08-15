@@ -13,7 +13,7 @@ their results are durable records in exomind.
 This standard applies to every component of the exomind stack (exomind,
 exosched, exoflow, exodoc, exoqms and any future component) and to every
 agent that builds, operates or audits them. Conformance is determined by
-the five checks of the audit program (section 5); the results of each
+the seven checks of the audit program (section 5); the results of each
 audit are stored under `exoqms:audit:*` and published to the note feed.
 The standard is normative: "SHALL" is a requirement, "SHOULD" a
 recommendation, "MAY" a permission, in the vocabulary of ISO 9000 3.6.
@@ -74,7 +74,7 @@ closing audit. The dogfood check also measures swarm activity (clause
 
 5.1 An audit program is created with `POST /audit` (body
 `name<TAB>criteria`, criteria = comma-separated check ids, empty = all
-five) and stored under `exoqms:audit:<id>`. Each audit records: the
+seven) and stored under `exoqms:audit:<id>`. Each audit records: the
 criteria executed, the scheduled (run) time, one finding per check
 (check id, result `pass|fail|skip`, evidence line) and a score equal to
 `100 * pass / (pass + fail)` rounded to the nearest integer, where
@@ -82,9 +82,10 @@ criteria executed, the scheduled (run) time, one finding per check
 is written to the note feed.
 
 5.2 Every check SHALL complete within 5 seconds. Checks that spawn child
-processes (component tests, exodoc, exoqms-ui) run under a hard timeout;
-a child that overruns is SIGKILLed and the check fails with evidence
-`timed out`. The audit program therefore never hangs the daemon.
+processes (component tests, exodoc, exoqms-ui, exoqms-code, exoqms-svg)
+run under a hard timeout; a child that overruns is SIGKILLed and the
+check fails with evidence `timed out`. The audit program therefore never
+hangs the daemon.
 
 5.3 The criteria checklist — the normative criteria set — consists of:
 
@@ -95,13 +96,23 @@ a child that overruns is SIGKILLed and the check fails with evidence
 | c3 | `dogfood` | every active agent id has `agent:<id>:status`, and >= N notes exist in the last 24h | exomind `GET /get` per agent; `GET /notes?limit=200` with 24h timestamps; N from config `exoqms:config:notes24h` (default 5); scheduler health is reported as evidence only |
 | c4 | `ui-audit` | `exoqms-ui` finds 0 findings on the audit target | child process `<ui> <target> --json`; exit 0 = pass, exit 1 = findings (counted), timeout = fail; skipped without `--ui` or `?target=` |
 | c5 | `metrics` | the `metric:iterN:tests_passing` trend between the two most recent iterations is not `down` | exomind `GET /list?prefix=metric:iter` filtered to `:tests_passing`, sorted by iteration, parsed numerically; `down` fails, `flat` passes with the stagnation flag set |
+| c6 | `code-safety` | the stack's own C source contains 0 **major** error-handling defects (unchecked returns of critical libc calls, missing error paths, null-deref paths); minor findings are reported but non-fatal | child process `<code> <srcdirs...> --json`; default srcdirs = the manifest dirs (column 2 of `docs/stack.tsv`) resolved against the repo root — the stack audits its own code; `?target=<dir>` overrides; the JSON findings array is parsed for severities; pass iff 0 major |
+| c7 | `asset-logic` | the stack's own SVG assets pass the shape rule-set with 0 **major** findings (minor findings reported but non-fatal) | child process `<svg> <target> --shape auto --json`; target = audit `?target=` or the repo root; the JSON findings array is parsed for severities; pass iff 0 major |
 
-5.4 Agent id list for c3: the list given as the third body field of
+5.4 Severity rule for the field-module checks (c4–c7 except c6's
+variant): the modules grade each finding `major` or `minor`. A check
+**passes iff it reports 0 major findings**; minor findings are recorded
+in the evidence line but do not fail the check. Rationale: majors are
+conformance breaches (broken UI, unsafe C code, broken asset logic);
+minors are improvement candidates that SHALL be tracked but must not
+gate the audit program (ISO 9001 §10.2 treats them as opportunities).
+
+5.5 Agent id list for c3: the list given as the third body field of
 `POST /audit` if present, else the config value `exoqms:config:agents`
 (overridable with `--agents` at startup; the swarm default is
 `a,b,b1,b2,b3`).
 
-5.5 Auditor competence (ISO 19011 7.2): the auditor is the daemon
+5.6 Auditor competence (ISO 19011 7.2): the auditor is the daemon
 itself — deterministic, reproducible, and incapable of favoritism. Audit
 results are tamper-evident only in the sense that they are durable
 records in exomind with the note feed as the audit trail.

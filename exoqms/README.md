@@ -9,10 +9,12 @@ exomind's note feed. Its durable state lives entirely inside
 [exomind](../README.md) under `exoqms:*` keys, so the QMS itself is
 auditable and survives restarts like every other layer.
 
-The audit program runs the five checks defined in
+The audit program runs the seven checks defined in
 [`standard.md`](standard.md), invoking [`exodoc`](../exodoc/README.md)
-(the documentation auditor) and [`exoqms-ui`](ui/README.md) (the UI
-quality auditor) as child processes under a hard 5-second timeout each.
+(the documentation auditor), [`exoqms-ui`](ui/README.md) (the UI
+quality auditor), [`exoqms-code`](code/README.md) (the code-safety
+analyzer) and [`exoqms-svg`](svg/README.md) (the asset-logic analyzer)
+as child processes under a hard 5-second timeout each.
 
 ## ISO mapping
 
@@ -45,6 +47,8 @@ exomind so audits and NCs are visible to every agent):
     --exosched http://127.0.0.1:7655 \
     --exodoc ./exodoc/build/exodoc \
     --ui ./exoqms/ui/build/exoqms-ui \
+    --code ./exoqms/code/build/exoqms-code \
+    --svg ./exoqms/svg/build/exoqms-svg \
     --repo . --agents a,b,b1,b2,b3,e &
 ```
 
@@ -52,7 +56,7 @@ Then run an audit program:
 
 ```
 curl -s -X POST "http://127.0.0.1:7691/audit?target=exoqms/ui/fixtures/good.html" \
-  --data-binary $'stack audit\tcomponent-tests,doc-compliance,dogfood,ui-audit,metrics\ta,b,b1,b2,b3,e'
+  --data-binary $'stack audit\tcomponent-tests,doc-compliance,dogfood,ui-audit,metrics,code-safety,asset-logic\ta,b,b1,b2,b3,e'
 # ok <audit-id> <score>%
 ```
 
@@ -61,8 +65,8 @@ curl -s -X POST "http://127.0.0.1:7691/audit?target=exoqms/ui/fixtures/good.html
 ```
 ./build/exoqms [--host <addr>] [--port <n>] [--exomind <url>]
                [--exosched <url>] [--exodoc <path>] [--ui <path>]
-               [--repo <dir>] [--agents <a,b,c>] [--notes24h <n>]
-               [--token <t>]
+               [--code <path>] [--svg <path>] [--repo <dir>]
+               [--agents <a,b,c>] [--notes24h <n>] [--token <t>]
 ```
 
 Defaults: port 7657, exomind `http://127.0.0.1:7654`, exosched
@@ -70,7 +74,8 @@ Defaults: port 7657, exomind `http://127.0.0.1:7654`, exosched
 `a,b,b1,b2,b3`, notes24h 5. Set `--token` (or env `EXOQMS_TOKEN`) to
 require `Authorization: Bearer <token>` on every request. `--ui`
 points at the exoqms-ui binary and enables the `ui-audit` check;
-without it that check reports `skip`.
+`--code` enables `code-safety`; `--svg` enables `asset-logic`;
+without a module's binary that check reports `skip`.
 
 ## endpoints
 
@@ -125,9 +130,10 @@ is enough. Closed NCs drop out of the open count in `GET /report`.
 ## audit programs (ISO 19011)
 
 `POST /audit` body: `name<TAB>criteria` — criteria is a comma-separated
-list of check ids (`component-tests,doc-compliance,dogfood,ui-audit,metrics`;
-empty = all five), with an optional third field `agents` for the
-dogfood check. Query `?target=<path>` feeds the `ui-audit` check.
+list of check ids (`component-tests,doc-compliance,dogfood,ui-audit,metrics,code-safety,asset-logic`;
+empty = all seven), with an optional third field `agents` for the
+dogfood check. Query `?target=<path>` feeds the `ui-audit` check (and
+overrides the scan target of `code-safety` and `asset-logic`).
 Answer: `ok <audit-id> <score>%`; `GET /audit?id=` prints the record
 plus one findings line per check: `check<TAB>result<TAB>evidence`.
 The score is `100 * pass / (pass + fail)` rounded, `skip` not counted.
@@ -139,23 +145,36 @@ The score is `100 * pass / (pass + fail)` rounded, `skip` not counted.
 | dogfood | every listed agent has `agent:<id>:status`, and ≥ `notes24h` notes exist in the last 24h |
 | ui-audit | `exoqms-ui` finds 0 findings on the `?target=` page |
 | metrics | the `metric:iterN:tests_passing` trend is not `down` |
+| code-safety | `exoqms-code` reports 0 **major** findings on the stack's own C source (default target: the manifest source dirs; minor findings non-fatal) |
+| asset-logic | `exoqms-svg --shape auto` reports 0 **major** findings on the stack's own SVG assets (default target: the repo root; minor findings non-fatal) |
 
 Each check runs under a hard 5s timeout; children that overrun are
 SIGKILLed and the check fails with `timed out`.
 
-## the UI audit engine
+## the field modules
 
-`exoqms/ui` is the UI quality auditor (built by B2 as a sibling
-component): a zero-dependency C11 static analyzer that flags seven
-classes of UI defects (emoji icons, overlapping controls, misaligned
-siblings, corner mismatches, missing backgrounds, unstyled
-sdk-default controls, WCAG AA contrast failures) without a browser.
-See [`exoqms/ui/README.md`](ui/README.md) for the seven checks, the
-supported HTML/CSS subset and its honest limitations. exoqms invokes it
-through the `ui-audit` check; the permanent fixtures in
-`exoqms/ui/fixtures/` are the QA artifacts: `good.html` (0 findings —
-the standard every shipped page must meet) and `bad.html` (12
-intentional findings — the demo artifact proving the detector works).
+Three sibling quality-audit engines live under `exoqms/`, each a
+zero-dependency C11 batch binary with its own fixtures and test suite:
+
+- [`exoqms/ui`](ui/README.md) — the UI quality auditor (7 defect
+  classes: emoji icons, overlapping controls, misaligned siblings,
+  corner mismatches, missing backgrounds, unstyled sdk-default
+  controls, WCAG AA contrast). Permanent fixtures `good.html` (0
+  findings) and `bad.html` (12 intentional findings).
+- [`exoqms/code`](code/README.md) — the code-safety analyzer:
+  error-handling defects in C source (unchecked returns of critical
+  libc calls, missing error paths, null-deref paths). This is the
+  deployment loop's fix step applied to code: the audit program runs
+  it against the stack's own source, findings become NCs, and the
+  fixes are verified by re-auditing.
+- [`exoqms/svg`](svg/README.md) — the asset-logic analyzer: generated
+  SVG shape rules (tree rule-set: stem, crown, proportions, symmetry,
+  degeneracy). Fixtures: `tree-good.svg` (clean) and six deliberately
+  broken trees.
+
+The daemon invokes them through the `ui-audit`, `code-safety` and
+`asset-logic` checks. Build all of them with `make exoqms` from the
+repo root (or `make qms-modules` for just code + svg).
 
 ## durability (dogfooding exomind)
 
@@ -174,22 +193,25 @@ intentional findings — the demo artifact proving the detector works).
 ## tests
 
 ```
-make test-exoqms   # from the repo root: exoqms suite + exoqms/ui suite
+make test-exoqms   # from the repo root: exoqms suite + module suites
 ```
 
 `make -C exoqms test` runs the daemon's suite (`exoqms/test/test.sh`,
-~26s — too slow for the 5s audit budget, so the stack manifest declares
+~60s — too slow for the 5s audit budget, so the stack manifest declares
 `./build/exoqms --version` as the in-budget smoke command instead and
-`make test-exoqms` remains the full-suite gate); `make -C exoqms/ui
-test` runs the UI auditor's suite (28 checks, < 60s).
+`make test-exoqms` remains the full-suite gate); the module suites are
+`make -C exoqms/ui test` (28 checks), `make -C exoqms/code test` and
+`make -C exoqms/svg test` (54 checks).
 
 ## limitations
 
 - The check budget is 5s per check (normative, `standard.md` §5.2):
   only test commands that fit the budget may be declared in
   `docs/stack.tsv`; the full suites are run by `make test-exoqms`.
-- The `ui-audit` check is a static analyzer, not a browser: it cannot
-  see runtime styles, images or web fonts (see `exoqms/ui/README.md`).
+- The `ui-audit`, `code-safety` and `asset-logic` checks are static
+  analyzers, not a browser / a compiler / a rendering engine: they
+  catch defect classes, not semantics (see each module's README for
+  the honest limitations).
 - The `metrics` check needs at least two iterations of
   `metric:iterN:tests_passing`; with fewer it reports `skip`.
 - Severity is assigned by the author of the NC; the daemon checks the

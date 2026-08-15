@@ -307,6 +307,13 @@ char *file_read(const char *path, size_t *len, char *err, size_t errsz)
     rewind(f);
     p = xmalloc((size_t)sz + 1);
     n = fread(p, 1, (size_t)sz, f);
+    if (n != (size_t)sz) {
+        snprintf(err, errsz, "%s: short read (%zu of %ld bytes)", path, n,
+                 sz);
+        fclose(f);
+        free(p);
+        return NULL;
+    }
     fclose(f);
     p[n] = 0;
     *len = n;
