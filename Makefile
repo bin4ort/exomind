@@ -27,7 +27,16 @@ exosched:
 test-exosched: all
 	$(MAKE) -C exosched test
 
+exoflow:
+	$(MAKE) -C exoflow
+
+test-exoflow: all
+	$(MAKE) -C exoflow test
+	@if [ -f exoflow/test/test-integration.sh ]; then \
+		bash exoflow/test/test-integration.sh; \
+	fi
+
 clean:
 	rm -rf build
 
-.PHONY: all test clean
+.PHONY: all test clean exosched test-exosched exoflow test-exoflow
