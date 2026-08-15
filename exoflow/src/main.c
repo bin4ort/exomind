@@ -65,10 +65,10 @@ static void usage(const char *argv0)
  * the daemon serves requests even while its storage backend is down */
 static void *reload_thread(void *arg)
 {
-    cli_t *e = arg;
+    struct { cli_t *e; cli_t *x; } *a = arg;
     for (;;) {
         sleep(1);
-        if (flows_reload(e) == 0)
+        if (flows_reload(a->e, a->x) == 0)
             break;
     }
     return NULL;
@@ -155,13 +155,16 @@ int main(int argc, char **argv)
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
-    int loaded = flows_reload(&xm) == 0;
+    int loaded = flows_reload(&xm, &xs) == 0;
     if (!loaded) {
         fprintf(stderr,
                 "exoflow: exomind down at startup; serving with an empty "
                 "registry and retrying reload in the background\n");
+        struct { cli_t *e; cli_t *x; } *ra = xmalloc(sizeof *ra);
+        ra->e = &xm;
+        ra->x = &xs;
         pthread_t rt;
-        if (pthread_create(&rt, NULL, reload_thread, &xm) != 0)
+        if (pthread_create(&rt, NULL, reload_thread, ra) != 0)
             fprintf(stderr, "exoflow: cannot start reload thread\n");
         else
             pthread_detach(rt);

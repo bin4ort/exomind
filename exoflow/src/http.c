@@ -265,9 +265,11 @@ static const char *spec_text(void)
         "| POST   | /flow                         | create a flow (body below)   |\n"
         "| GET    | /flow?id=<f>                  | one flow, TSV or json=1      |\n"
         "| GET    | /flows                        | list flows (status=, limit, offset) |\n"
+        "| GET    | /loops                        | list loop iterations               |\n"
         "| GET    | /next?flow=<f>&worker=<w>     | claim the next ready step    |\n"
         "| POST   | /step?flow=<f>&id=<s>         | done / failed / unclaim      |\n"
         "| POST   | /flow?id=<f>&action=cancel    | cancel non-terminal steps    |\n"
+        "| POST   | /flow?id=<f>&action=stop-loop | halt future iterations of a loop |\n"
         "| DELETE | /flow?id=<f>                  | remove a flow and its keys   |\n"
         "\n"
         "## creating a flow\n"
@@ -322,6 +324,36 @@ static const char *spec_text(void)
         "effort: a down exosched never breaks flow creation, and the lazy\n"
         "sweep is authoritative.\n"
         "\n"
+        "## loops\n"
+        "\n"
+        "A flow becomes a loop when the LAST line of the POST /flow body is\n"
+        "a loop spec:\n"
+        "\n"
+        "    loop<TAB>every <n><s|m|h><TAB>[max <n>] [until <epoch>]\n"
+        "\n"
+        "`every 2s` / `every 1m` / `every 3h` set the interval; `max` caps\n"
+        "the number of COUNTED iterations (default: unlimited); `until`\n"
+        "stops new runs at/after the given epoch. A line starting with\n"
+        "`loop<TAB>every` that does not parse is rejected with\n"
+        "`error: bad loop spec`. Loop scheduling is LAZY, like deadlines:\n"
+        "on every /flows, /flow?id=, /loops, /next and startup reload,\n"
+        "exoflow checks whether the newest iteration of a loop is TERMINAL\n"
+        "(all done / all failed / cancelled) and its next_run has arrived;\n"
+        "if so it spawns the next iteration: same steps, flow name\n"
+        "`iter <n+1>`, parent link `parent=<first flow id>`, next_run\n"
+        "advanced by the interval, audit note `flow loop <id> -> iter <n+1>\n"
+        "at <epoch>`, and a best-effort exosched reminder\n"
+        "`exoflow:loop:<id>` at the new next_run (feed candy only, like\n"
+        "deadline reminders). Reaching `max` writes `flow loop <id>\n"
+        "finished (max reached)`; passing `until` writes `finished (until\n"
+        "reached)`. Cancelling one iteration (action=cancel) does NOT count\n"
+        "toward max: the loop keeps going and a replacement iteration is\n"
+        "spawned without consuming budget. `action=stop-loop` halts future\n"
+        "iterations (note written, records kept); DELETE of any loop record\n"
+        "also halts the loop and removes that record. GET /loops lists every\n"
+        "iteration: `loop<TAB><id><TAB>iter <n><TAB>next <epoch><TAB>\n"
+        "interval <s>` (json=1 for JSON).\n"
+        "\n"
         "## durability\n"
         "\n"
         "Flows live in exomind; exoflow reloads them on startup (list prefix\n"
@@ -352,6 +384,15 @@ static void flow_tsv(const flow_t *f, buf_t *out)
                    ed);
         free(ed);
     }
+    if (f->loop_active)
+        buf_printf(out,
+                   "loop\tevery %llds\tmax %lld\tuntil %lld\titer %lld\t"
+                   "budget %lld\tnext %lld\tparent %s\tstopped %d\n",
+                   (long long)f->loop_interval, (long long)f->loop_max,
+                   (long long)f->loop_until, (long long)f->loop_iter,
+                   (long long)f->loop_budget, (long long)f->loop_next,
+                   f->loop_parent[0] ? f->loop_parent : "-",
+                   f->loop_stopped ? 1 : 0);
 }
 
 static void flow_json(const flow_t *f, buf_t *out)
@@ -377,6 +418,15 @@ static void flow_json(const flow_t *f, buf_t *out)
         buf_printf(out, "],\"state\":\"%s\",\"owner\":\"%s\",\"deadline\":%lld}",
                    s->state, s->owner, (long long)s->deadline);
     }
+    if (f->loop_active)
+        buf_printf(out,
+                   "],\"loop\":{\"interval\":%lld,\"max\":%lld,"
+                   "\"until\":%lld,\"iter\":%lld,\"budget\":%lld,"
+                   "\"next\":%lld,\"parent\":\"%s\",\"stopped\":%d}",
+                   (long long)f->loop_interval, (long long)f->loop_max,
+                   (long long)f->loop_until, (long long)f->loop_iter,
+                   (long long)f->loop_budget, (long long)f->loop_next,
+                   f->loop_parent, f->loop_stopped ? 1 : 0);
     buf_printf(out, "]}");
 }
 
@@ -402,7 +452,8 @@ static void route(req_t *r, cli_t *xm, cli_t *xs, buf_t *out, int *status,
         if (strcmp(r->method, "POST") == 0) {
             char action[32];
             if (qp_str(r->query, "action", action, sizeof action)) {
-                if (strcmp(action, "cancel") != 0) {
+                if (strcmp(action, "cancel") != 0 &&
+                    strcmp(action, "stop-loop") != 0) {
                     *status = 400;
                     buf_printf(out, "error: bad action %s", action);
                     return;
@@ -414,13 +465,22 @@ static void route(req_t *r, cli_t *xm, cli_t *xs, buf_t *out, int *status,
                     return;
                 }
                 flows_lock();
-                if (!flow_find(fid)) {
+                flow_t *f = flow_find(fid);
+                if (!f) {
                     flows_unlock();
                     *status = 404;
                     buf_puts(out, "missing");
                     return;
                 }
-                int rc = flow_cancel(xm, fid, err, sizeof err);
+                if (strcmp(action, "stop-loop") == 0 && !f->loop_active) {
+                    flows_unlock();
+                    *status = 400;
+                    buf_puts(out, "error: not a loop");
+                    return;
+                }
+                int rc = strcmp(action, "cancel") == 0
+                             ? flow_cancel(xm, fid, err, sizeof err)
+                             : flow_stop_loop(xm, fid, err, sizeof err);
                 flows_unlock();
                 if (rc != 0) {
                     *status = 500;
@@ -485,6 +545,12 @@ static void route(req_t *r, cli_t *xm, cli_t *xs, buf_t *out, int *status,
                 buf_printf(out, "error: exomind unavailable: %s", err);
                 return;
             }
+            if (loop_tick(xm, xs, f, err, sizeof err) != 0) {
+                flows_unlock();
+                *status = 500;
+                buf_printf(out, "error: exomind unavailable: %s", err);
+                return;
+            }
             if (qp_str(r->query, "json", tmp, sizeof tmp)) {
                 *ctype = "application/json; charset=utf-8";
                 flow_json(f, out);
@@ -517,6 +583,15 @@ static void route(req_t *r, cli_t *xm, cli_t *xs, buf_t *out, int *status,
         if (json)
             *ctype = "application/json; charset=utf-8";
         flows_lock();
+        /* lazy loop check on every list: a due loop spawns its next
+         * iteration before the listing is rendered */
+        for (flow_t *f = flows_first(); f; f = f->next) {
+            if (!f->loop_active)
+                continue;
+            if (loop_tick(xm, xs, f, err, sizeof err) != 0)
+                fprintf(stderr, "exoflow: loop check on /flows failed for %s: "
+                        "%s\n", f->id, err);
+        }
         long seen = 0, emitted = 0;
         if (json)
             buf_puts(out, "[");
@@ -537,6 +612,53 @@ static void route(req_t *r, cli_t *xm, cli_t *xs, buf_t *out, int *status,
                 char *en = esc_line(f->name, strlen(f->name));
                 buf_printf(out, "flow\t%s\t%s\t%s\n", f->id, en, st);
                 free(en);
+            }
+            emitted++;
+        }
+        if (json)
+            buf_puts(out, "]");
+        flows_unlock();
+        return;
+    }
+
+    if (!strcmp(path, "/loops")) {
+        if (strcmp(r->method, "GET")) {
+            *status = 405;
+            buf_puts(out, "error: use GET");
+            return;
+        }
+        int json = qp_str(r->query, "json", tmp, sizeof tmp);
+        if (json)
+            *ctype = "application/json; charset=utf-8";
+        flows_lock();
+        /* lazy loop check: due loops spawn before the listing */
+        for (flow_t *f = flows_first(); f; f = f->next) {
+            if (!f->loop_active)
+                continue;
+            if (loop_tick(xm, xs, f, err, sizeof err) != 0)
+                fprintf(stderr, "exoflow: loop check on /loops failed for %s: "
+                        "%s\n", f->id, err);
+        }
+        long emitted = 0;
+        if (json)
+            buf_puts(out, "[");
+        for (flow_t *f = flows_first(); f; f = f->next) {
+            if (!f->loop_active)
+                continue;
+            if (json) {
+                if (emitted)
+                    buf_puts(out, ",");
+                buf_printf(out,
+                           "{\"id\":\"%s\",\"iter\":%lld,\"next\":%lld,"
+                           "\"interval\":%lld}",
+                           f->id, (long long)f->loop_iter,
+                           (long long)f->loop_next,
+                           (long long)f->loop_interval);
+            } else {
+                buf_printf(out, "loop\t%s\titer %lld\tnext %lld\tinterval %lld\n",
+                           f->id, (long long)f->loop_iter,
+                           (long long)f->loop_next,
+                           (long long)f->loop_interval);
             }
             emitted++;
         }
@@ -570,6 +692,12 @@ static void route(req_t *r, cli_t *xm, cli_t *xs, buf_t *out, int *status,
             flows_unlock();
             *status = 404;
             buf_puts(out, "missing");
+            return;
+        }
+        if (loop_tick(xm, xs, f, err, sizeof err) != 0) {
+            flows_unlock();
+            *status = 500;
+            buf_printf(out, "error: exomind unavailable: %s", err);
             return;
         }
         char sid[STEP_ID_MAX];

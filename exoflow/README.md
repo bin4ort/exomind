@@ -1,6 +1,6 @@
 # exoflow — the orchestrator for agent swarms
 
-`exoflow` v0.1.0 is a dependency-graph task orchestrator for AI-agent swarms. A flow
+`exoflow` v0.2.0 is a dependency-graph task orchestrator for AI-agent swarms. A flow
 is a DAG of steps; an arbitrary number of agents pull work from it with
 `GET /next`, execute, and report back with `POST /step`. exoflow guarantees
 that every step is claimed by exactly one worker and only becomes runnable
@@ -8,7 +8,10 @@ once all of its dependencies are done. Durable state lives in
 [exomind](https://github.com/bin4ort/exomind) (external long-term memory);
 step deadlines are enforced through [exosched](https://github.com/bin4ort/exomind)
 scheduled reminders; every claim, completion and deadline is audited as an
-exomind note.
+exomind note. Since 0.2.0 a flow can be a **loop**: when its last
+iteration reaches a terminal state, exoflow lazily spawns the next one
+(`iter <n+1>`), repeating with a fixed interval up to `max` / `until`
+limits.
 
 ```
 exomind (state)   <-+-  exoflow   <-+-- GET /next?flow=F&worker=W   (workers)
@@ -127,6 +130,62 @@ wait
 - **Audit via notes.** Claims, step completions/failures, cancellations and
   deadline misses are written as timestamped exomind notes, which gives you
   an append-only ledger you can query with `GET /notes?q=<flow-id>`.
+- **Loops are lazy.** A loop spawns its next iteration on the next read
+  (`/flows`, `/flow?id=`, `/loops`, `/next`) or startup reload after the
+  newest iteration is terminal and `next_run` has arrived — no background
+  threads, no clock dependencies, survives SIGKILL. The exosched reminder
+  `exoflow:loop:<id>` is feed candy; the lazy check is authoritative.
+
+## loops
+
+Make any flow a loop by adding an optional LAST line to the POST /flow
+body:
+
+```
+loop<TAB>every <n><s|m|h><TAB>[max <n>] [until <epoch>]
+```
+
+`every 2s` / `every 1m` / `every 3h` set the interval; `max` caps the
+number of COUNTED iterations (default unlimited); `until` stops new runs
+at/after the given epoch. A line starting with `loop<TAB>every` that does
+not parse is rejected with `error: bad loop spec`; any other last line is
+a plain step, so old bodies keep working byte for byte.
+
+Scheduling is **lazy**, exactly like deadlines: no background thread, no
+timer-driven spawn. On every `GET /flows`, `GET /flow?id=`, `GET /loops`,
+`GET /next` and every startup reload, exoflow checks whether the NEWEST
+iteration of a loop is terminal (all done / all failed / cancelled) and
+its `next_run` has arrived; if so it spawns the next iteration:
+
+- same steps, all pending;
+- flow name `iter <n+1>`;
+- parent link `parent=<first flow id>` (the first iteration has none);
+- `next_run` advanced by the interval on every record of the loop;
+- audit note `flow loop <id> -> iter <n+1> at <epoch>`;
+- best-effort exosched reminder `exoflow:loop:<id>` at the new next_run
+  (feed candy only, like deadline reminders — the lazy check is
+  authoritative).
+
+Reaching `max` writes `flow loop <id> finished (max reached)` and zeroes
+`next_run`; passing `until` writes `finished (until reached)`. Because
+the check is lazy, a loop that became terminal while the daemon was down
+resumes from persisted state at the next read — SIGKILL mid-loop is safe.
+
+- `POST /flow?id=<f>&action=stop-loop` halts future iterations of the
+  loop (note written, existing records kept).
+- `DELETE /flow?id=<f>` on any record of a loop also halts the loop and
+  removes that record.
+- Cancelling one iteration (`action=cancel`) does NOT count toward `max`:
+  the loop continues and a replacement iteration is spawned without
+  consuming budget.
+- `GET /loops` lists every iteration:
+  `loop<TAB><id><TAB>iter <n><TAB>next <epoch><TAB>interval <s>`
+  (`json=1` for JSON).
+
+Persistence: format version 2 — the header is `exoflow<TAB>2<TAB>name`
+and looping records carry one trailing line
+`loop<TAB><interval s><TAB><max><TAB><until><TAB><iter><TAB><budget><TAB><next_run><TAB><parent><TAB><stopped>`.
+Version-1 records load as non-looping flows (both formats are read).
 
 ## API reference
 
@@ -134,12 +193,14 @@ wait
 |--------|--------------------------|--------------------------|-------|
 | GET    | `/`                      | —                        | self-describing text |
 | GET    | `/ping`                  | —                        | `pong` |
-| POST   | `/flow`                  | line 1 = flow name; then `id<TAB>desc<TAB>deps` lines, deps comma-separated (empty allowed); optional 4th field `deadline_epoch` | `ok <flow-id> <nsteps>` |
-| GET    | `/flow?id=`              | —                        | TSV state (one line per step) |
+| POST   | `/flow`                  | line 1 = flow name; then `id<TAB>desc<TAB>deps` lines, deps comma-separated (empty allowed); optional 4th field `deadline_epoch`; optional LAST line `loop<TAB>every <n><s|m|h><TAB>[max <n>] [until <epoch>]` | `ok <flow-id> <nsteps>` |
+| GET    | `/flow?id=`              | —                        | TSV state (one line per step; `loop` line for loops) |
 | GET    | `/flows`                 | —                        | flow list |
+| GET    | `/loops`                 | —                        | loop iterations list |
 | GET    | `/next?flow=&worker=`    | —                        | `ok <stepid>` (auto-claims) or `none` |
 | POST   | `/step?flow=&id=`        | `done [note]` / `failed [note]` / `unclaim` | `ok` |
 | POST   | `/flow?id=&action=cancel`| —                        | `ok` |
+| POST   | `/flow?id=&action=stop-loop` | —                    | `ok` |
 | DELETE | `/flow?id=`              | —                        | `ok` |
 
 Auth: start exoflow with `--token <secret>`; every endpoint then requires
@@ -155,6 +216,10 @@ Auth: start exoflow with `--token <secret>`; every endpoint then requires
 - Deadline enforcement is best-effort lazy: the authoritative sweep runs on
   reads (`/flow`, `/next`) and startup reload, so an overdue step is
   reflected at the next read, not at the exact deadline instant.
+- Loop scheduling is lazy too: the next iteration spawns at the first read
+  after the newest iteration is terminal and `next_run` has arrived (the
+  exosched reminder `exoflow:loop:<id>` only surfaces the due moment in
+  the note feed). There is no timer-driven push.
 
 ## integration tests
 
