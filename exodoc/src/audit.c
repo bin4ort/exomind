@@ -129,6 +129,7 @@ static void comp_count(comp_t *c)
 
 /* ---------------- manifest ---------------- */
 
+/* @nonnull */
 static char *tsv_field(char *line, size_t ll, size_t *n)
 {
     char *t = line;

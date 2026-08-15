@@ -176,6 +176,7 @@ int timer_cancel(const char *id)
 
 /* ---- exomind bookkeeping for a fired timer ------------------------------ */
 
+/* @nonnull */
 char *timer_value(int64_t fire, int64_t repeat, int64_t until,
                   const char *msg)
 {
