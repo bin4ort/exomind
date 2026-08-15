@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 400">
+  <!-- tree-stick: a single vertical line. Degenerate: no painted area
+       (empty-shape) and no trunk material (stem-missing). Expected:
+       empty-shape major + stem-missing major. -->
+  <title>Stick — degenerate single line</title>
+  <line id="stick" x1="150" y1="20" x2="150" y2="380" stroke="#333" stroke-width="4"/>
+</svg>

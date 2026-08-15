@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300">
+  <!-- tree-asym: crown shifted hard to the right of the trunk axis
+       (crown center x=190, trunk axis x=156). Expected:
+       symmetry minor only. -->
+  <title>Asymmetric — lopsided crown</title>
+  <circle id="crown" cx="190" cy="110" r="75"/>
+  <path id="trunk" d="M 151 185 L 161 185 L 169 269 L 143 269 Z"/>
+</svg>
