@@ -627,7 +627,8 @@ static void route(req_t *r, cli_t *xm, cli_t *xs, buf_t *out, int *status,
                 break;
             }
         }
-        while (rest && (*rest == ' ' || *rest == '\t'))
+        while (rest && (*rest == ' ' || *rest == '\t' || *rest == '\n' ||
+                        *rest == '\r'))
             rest++;
         char *note = rest ? xstrdup(rest) : NULL;
         flows_lock();
