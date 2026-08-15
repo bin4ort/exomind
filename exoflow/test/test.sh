@@ -351,6 +351,278 @@ r=$(curl -s -m 3 "$XF_URL/flow?id=$F6")
 check "deadline expired while down -> overdue on reload" \
     "$(printf '%s' "$r" | grep '^step' | awk -F '\t' '$2=="soon" && $3=="overdue" {ok=1} END {exit ok?0:1}' && echo 0 || echo 1)" "$r"
 
+# --- loops --------------------------------------------------------------------
+# every helper is SCOPED to one loop via its parent link: several loops run
+# in this suite simultaneously, so /loops rows must be matched per loop.
+# drive the single t1 step of a flow to done (skip if already terminal)
+drive_t1() { # flow id
+    local fid="$1" st
+    st=$(curl -s -m 3 "$XF_URL/flow?id=$fid" | head -1 | awk -F '\t' '{print $4}')
+    case "$st" in done|failed|cancelled) return 1;; esac
+    curl -s -m 3 "$XF_URL/next?flow=$fid&worker=loopw" >/dev/null
+    curl -s -m 3 -X POST "$XF_URL/step?flow=$fid&id=t1" -d 'done iteration' >/dev/null
+    return 0
+}
+# name of a flow record (3rd TSV column of /flow header)
+flow_name() { # flow id
+    curl -s -m 3 "$XF_URL/flow?id=$1" | head -1 | awk -F '\t' '{print $3}'
+}
+# newest record of the loop rooted at $1 (/loops lists newest first)
+newest_iter() { # root
+    loop_iters "$1" | head -1
+}
+# ids of all records of the loop rooted at $1 (root + iterations)
+loop_iters() { # root
+    local root="$1" id body
+    for id in $(curl -s -m 3 "$XF_URL/loops" | awk -F '\t' '$1=="loop" {print $2}'); do
+        [ "$id" = "$root" ] && { echo "$id"; continue; }
+        body=$(curl -s -m 3 "$XF_URL/flow?id=$id")
+        printf '%s' "$body" | grep -q "parent $root" && echo "$id"
+    done
+}
+# prints the /loops row for one flow id (empty if not listed)
+loop_row() { # flow id
+    curl -s -m 3 "$XF_URL/loops" | awk -F '\t' -v id="$1" '$1=="loop" && $2==id {print}'
+}
+# 0 when the lazy finalize of a loop record has fired (next_run zeroed)
+finalized() { # flow id
+    loop_row "$1" | grep -q 'next 0'
+}
+# poll the note feed until the pattern appears (lazy finalize notes are
+# written by the tick that fires them, which may lag the state change)
+# poll the note feed until every grep pattern appears (the lazy finalize
+# notes are written by the tick that fires them, which may lag; the /flows
+# poke triggers the lazy checks and the query retry removes timing
+# sensitivity)
+wait_notes() { # q-pattern (%20-encoded), max seconds, patterns...
+    local pat="$1" max="$2" i plain
+    shift 2
+    for i in $(seq 1 $((max * 2))); do
+        curl -s -m 3 "$XF_URL/flows" >/dev/null
+        RN=$(curl -s -m 3 "$XM_URL/notes?q=$pat&limit=1000")
+        ok=1
+        for pat2 in "$@"; do
+            printf '%s' "$RN" | grep -q "$pat2" || ok=0
+        done
+        [ "$ok" = "1" ] && return 0
+        sleep 0.5
+    done
+    return 1
+}
+# one pass: drive every not-yet-driven record of the loop; 0 = progress made
+DRIVEN=""
+drive_all() { # root flow id
+    local root="$1" id changed=0
+    for id in $(loop_iters "$root"); do
+        case " $DRIVEN " in *" $id "*) continue;; esac
+        drive_t1 "$id"
+        DRIVEN="$DRIVEN $id"
+        changed=1
+    done
+    [ "$changed" = "1" ]
+}
+# wait until a shell expression becomes true; arg 1 = max seconds
+wait_true() { # seconds, cmd...
+    local max="$1" i; shift
+    for i in $(seq 1 $((max * 2))); do
+        "$@" && return 0
+        sleep 0.5
+    done
+    return 1
+}
+count_iters() { # root: number of records of this loop listed by /loops
+    local n=0 id
+    for id in $(loop_iters "$1"); do n=$((n + 1)); done
+    echo "$n"
+}
+iters_ge() { # root, n
+    [ "$(count_iters "$1")" -ge "$2" ]
+}
+latest_done() { # root: 0 when the newest record of the loop is terminal
+    local last
+    last=$(newest_iter "$1")
+    [ -z "$last" ] && return 1
+    case "$(curl -s -m 3 "$XF_URL/flow?id=$last" | head -1 | awk -F '\t' '{print $4}')" in
+        done|failed|cancelled) return 0;;
+    esac
+    return 1
+}
+# drive every iteration of the loop as it spawns until <n> records exist
+# and the newest is terminal (bounded ~30s)
+run_loop_to() { # root, n
+    local root="$1" n="$2" i
+    DRIVEN="$root"
+    drive_t1 "$root" >/dev/null
+    for i in $(seq 1 60); do
+        drive_all "$root" && continue
+        iters_ge "$root" "$n" && latest_done "$root" && break
+        sleep 0.5
+    done
+    curl -s -m 3 "$XF_URL/flows" >/dev/null
+}
+
+r=$(curl -s -m 3 -X POST "$XF_URL/flow" --data-binary $'bad unit\na\tone\t\nloop\tevery 5x')
+check "malformed loop spec (bad unit) -> error: bad loop spec" \
+    "$([ "$r" = "error: bad loop spec" ] && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 -X POST "$XF_URL/flow" --data-binary $'dangling max\na\tone\t\nloop\tevery 2s\tmax')
+check "malformed loop spec (dangling max) -> error: bad loop spec" \
+    "$([ "$r" = "error: bad loop spec" ] && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 -X POST "$XF_URL/flow" --data-binary $'bad token\na\tone\t\nloop\tevery 2s\tbanana 3')
+check "malformed loop spec (bad token) -> error: bad loop spec" \
+    "$([ "$r" = "error: bad loop spec" ] && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 -X POST "$XF_URL/flow" --data-binary $'no every\na\tone\t\nloop\tmax 3')
+check "malformed loop spec (no every) -> error: bad loop spec" \
+    "$([ "$r" = "error: bad loop spec" ] && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 -X POST "$XF_URL/flow" --data-binary $'no steps\nt1\tstep one\t\nloop\tevery 2s\tmax 3')
+L1=$(echo "$r" | awk '{print $2}')
+check "loop create replies 'ok <id> 1'" \
+    "$(printf '%s' "$r" | grep -qE '^ok [0-9]+:[0-9a-f]+ 1$' && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 -X POST "$XF_URL/flow" --data-binary $'one shot\no1\tstep one\t')
+O1=$(echo "$r" | awk '{print $2}')
+r=$(curl -s -m 3 "$XF_URL/flow?id=$O1")
+check "one-shot flow has no loop line" \
+    "$(printf '%s' "$r" | grep -q '^loop' && echo 1 || echo 0)" "$r"
+r=$(curl -s -m 3 "$XF_URL/loops")
+check "one-shot flow not listed by /loops" \
+    "$(printf '%s' "$r" | grep -q "$O1" && echo 1 || echo 0)" "$r"
+r=$(curl -s -m 3 "$XF_URL/flow?id=$L1")
+check "loop record carries the loop spec" \
+    "$(printf '%s' "$r" | grep -q 'loop.*every 2s' && printf '%s' "$r" | grep -q 'max 3' && printf '%s' "$r" | grep -q 'iter 1' && echo 0 || echo 1)" "$r"
+
+# every 2s max 3 -> 3 instances, iter labels, parent links, notes
+r=$(curl -s -m 3 -X POST "$XF_URL/flow" --data-binary $'basic loop\nt1\tstep one\t\nloop\tevery 2s\tmax 3')
+L2=$(echo "$r" | awk '{print $2}')
+run_loop_to "$L2" 3
+check "max 3 loop spawns exactly 3 iterations" \
+    "$([ "$(count_iters "$L2")" = "3" ] && echo 0 || echo 1)" "$(loop_row "$L2")"
+LOOPLINES=""
+for id in $(loop_iters "$L2"); do
+    LOOPLINES="$LOOPLINES
+$(loop_row "$id")"
+done
+check "/loops lists iter 1 2 3 with interval 2s" \
+    "$(printf '%s' "$LOOPLINES" | grep -q 'iter 1' && printf '%s' "$LOOPLINES" | grep -q 'iter 2' && printf '%s' "$LOOPLINES" | grep -q 'iter 3' && printf '%s' "$LOOPLINES" | grep -q 'interval 2$' && echo 0 || echo 1)" "$LOOPLINES"
+I2=$(for id in $(loop_iters "$L2"); do [ "$(flow_name "$id")" = "iter 2" ] && echo "$id" && break; done)
+I3=$(for id in $(loop_iters "$L2"); do [ "$(flow_name "$id")" = "iter 3" ] && echo "$id" && break; done)
+wait_true 8 finalized "$I3"
+wait_notes "flow%20loop%20$L2" 10 "flow loop $L2 -> iter 2 at " \
+    "flow loop $L2 -> iter 3 at " "flow loop $L2 finished (max reached)"
+r=$(curl -s -m 3 "$XF_URL/flow?id=$I2")
+check "iter 2 named 'iter 2' with parent link" \
+    "$(printf '%s' "$r" | head -1 | grep -q 'iter 2' && printf '%s' "$r" | grep -q "parent $L2" && echo 0 || echo 1)" "$r"
+RN=$(curl -s -m 8 "$XM_URL/notes?q=flow%20loop%20$L2&limit=1000")
+check "loop audit notes: spawns + max reached" \
+    "$(printf '%s' "$RN" | grep -q "flow loop $L2 -> iter 2 at " && printf '%s' "$RN" | grep -q "flow loop $L2 -> iter 3 at " && printf '%s' "$RN" | grep -q "flow loop $L2 finished (max reached)" && echo 0 || echo 1)" "$RN"
+r=$(curl -s -m 8 "$XF_URL/flow?id=$I3")
+check "max reached zeroes next_run" \
+    "$(printf '%s' "$r" | grep '^loop' | grep -q 'next 0' && echo 0 || echo 1)" "$r"
+
+# stop-loop halts future iterations
+r=$(curl -s -m 3 -X POST "$XF_URL/flow" --data-binary $'stop loop\nt1\tstep one\t\nloop\tevery 1s\tmax 10')
+L3=$(echo "$r" | awk '{print $2}')
+DRIVEN="$L3"
+drive_t1 "$L3" >/dev/null
+wait_true 10 iters_ge "$L3" 2
+r=$(curl -s -m 3 -X POST "$XF_URL/flow?id=$L3&action=stop-loop")
+check "stop-loop -> ok" "$([ "$r" = "ok" ] && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 "$XM_URL/notes?q=flow%20loop%20$L3")
+check "stop-loop audit note written" \
+    "$(printf '%s' "$r" | grep -q "flow loop $L3 stopped (stop-loop)" && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 "$XF_URL/flow?id=$L3")
+check "stopped loop shows stopped 1" \
+    "$(printf '%s' "$r" | grep '^loop' | grep -q 'stopped 1' && echo 0 || echo 1)" "$r"
+C=$(count_iters "$L3")
+sleep 3.5
+check "stop-loop: no further iterations spawned" \
+    "$([ "$(count_iters "$L3")" = "$C" ] && echo 0 || echo 1)"
+r=$(curl -s -m 3 -X POST "$XF_URL/flow?id=$O1&action=stop-loop")
+check "stop-loop on non-loop -> error: not a loop" \
+    "$([ "$r" = "error: not a loop" ] && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 -X POST "$XF_URL/flow?id=missing-loop&action=stop-loop" -w '\n%{http_code}')
+check "stop-loop on unknown flow -> 404 missing" \
+    "$(printf '%s' "$r" | grep -q missing && printf '%s' "$r" | grep -q '^404$' && echo 0 || echo 1)" "$r"
+
+# until bound: every 1s until now+6 -> stops
+UNTIL=$(( $(date +%s) + 6 ))
+r=$(curl -s -m 3 -X POST "$XF_URL/flow" --data-binary $'until loop\nt1\tstep one\t\nloop\tevery 1s\tuntil '$UNTIL)
+L4=$(echo "$r" | awk '{print $2}')
+run_loop_to "$L4" 6
+C=$(count_iters "$L4")
+sleep 3
+check "until bound stops the loop" \
+    "$([ "$(count_iters "$L4")" = "$C" ] && echo 0 || echo 1)"
+r=$(curl -s -m 3 "$XM_URL/notes?q=flow%20loop%20$L4&limit=100")
+check "until bound audit note written" \
+    "$(printf '%s' "$r" | grep -q "flow loop $L4 finished (until reached)" && echo 0 || echo 1)" "$r"
+
+# SIGKILL mid-loop: loop resumes from persisted state after restart
+r=$(curl -s -m 3 -X POST "$XF_URL/flow" --data-binary $'kill loop\nt1\tstep one\t\nloop\tevery 2s\tmax 3')
+L5=$(echo "$r" | awk '{print $2}')
+DRIVEN="$L5"
+drive_t1 "$L5" >/dev/null
+wait_true 10 iters_ge "$L5" 2
+kill -9 "$XF_PID" 2>/dev/null
+sleep 0.5
+setsid nohup "$XF_BIN" --port $XF_PORT --exomind "$XM_URL" \
+    --exosched "$XS_URL" >>"$XF_LOG" 2>&1 < /dev/null &
+XF_PID=$!
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    [ "$(curl -s -m 2 "$XF_URL/ping")" = "pong" ] && break
+    sleep 0.5
+done
+check "SIGKILL mid-loop: iterations survive restart" \
+    "$([ "$(count_iters "$L5")" -ge 2 ] && { for id in $(loop_iters "$L5"); do [ "$(flow_name "$id")" = "iter 2" ] && echo y; done; } | grep -q y && echo 0 || echo 1)"
+run_loop_to "$L5" 3
+wait_notes "flow%20loop%20$L5" 20 "flow loop $L5 -> iter 3 at " \
+    "flow loop $L5 finished (max reached)"
+check "loop continued after restart (iter 3 + max reached)" \
+    "$(printf '%s' "$RN" | grep -q "flow loop $L5 -> iter 3 at " && printf '%s' "$RN" | grep -q "flow loop $L5 finished (max reached)" && echo 0 || echo 1)" "$RN"
+
+# explicit cancel of one iteration does not count toward max
+r=$(curl -s -m 3 -X POST "$XF_URL/flow" --data-binary $'cancel loop\nt1\tstep one\t\nloop\tevery 1s\tmax 2')
+L6=$(echo "$r" | awk '{print $2}')
+DRIVEN="$L6"
+drive_t1 "$L6" >/dev/null
+wait_true 10 iters_ge "$L6" 2
+I2B=$(for id in $(loop_iters "$L6"); do [ "$(curl -s -m 3 "$XF_URL/flow?id=$id" | head -1 | awk -F '\t' '{print $3}')" = "iter 2" ] && echo "$id" && break; done)
+r=$(curl -s -m 3 -X POST "$XF_URL/flow?id=$I2B&action=cancel")
+check "cancel an iteration -> ok" "$([ "$r" = "ok" ] && echo 0 || echo 1)" "$r"
+run_loop_to "$L6" 3
+check "cancelled iteration replaced without consuming max" \
+    "$([ "$(count_iters "$L6")" = "3" ] && { for id in $(loop_iters "$L6"); do [ "$(flow_name "$id")" = "iter 3" ] && echo y; done; } | grep -q y && echo 0 || echo 1)"
+sleep 3
+check "cancelled iteration: loop ends at max 2 counted (no iter 4)" \
+    "$([ "$(count_iters "$L6")" = "3" ] && echo 0 || echo 1)"
+r=$(curl -s -m 3 "$XM_URL/notes?q=flow%20loop%20$L6&limit=100")
+check "cancelled-iteration loop reached max" \
+    "$(printf '%s' "$r" | grep -q "flow loop $L6 finished (max reached)" && echo 0 || echo 1)" "$r"
+
+# v1-format flow (raw legacy key) loads without looping
+kill -9 "$XF_PID" 2>/dev/null
+sleep 0.5
+V1PAYLOAD=$(python3 -c "
+import json
+doc = 'exoflow\t1\tv1 legacy flow\nstep\tv1s\tlegacy step\t\n'
+print(json.dumps({'key': 'exoflow:flow:v1legacy1', 'value': doc}))")
+curl -s -m 3 -H "Content-Type: application/json" -X POST "$XM_URL/set" -d "$V1PAYLOAD" >/dev/null
+setsid nohup "$XF_BIN" --port $XF_PORT --exomind "$XM_URL" \
+    --exosched "$XS_URL" >>"$XF_LOG" 2>&1 < /dev/null &
+XF_PID=$!
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    [ "$(curl -s -m 2 "$XF_URL/ping")" = "pong" ] && break
+    sleep 0.5
+done
+r=$(curl -s -m 3 "$XF_URL/flow?id=v1legacy1")
+check "v1-format flow loads without looping" \
+    "$(printf '%s' "$r" | head -1 | grep -q 'v1 legacy flow' && printf '%s' "$r" | grep -q '^step' && printf '%s' "$r" | grep -qv '^loop' && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 "$XF_URL/loops")
+check "v1-format flow not listed by /loops" \
+    "$(printf '%s' "$r" | grep -q v1legacy1 && echo 1 || echo 0)" "$r"
+curl -s -m 3 "$XF_URL/next?flow=v1legacy1&worker=loopw" >/dev/null
+r=$(curl -s -m 3 -X POST "$XF_URL/step?flow=v1legacy1&id=v1s" -d 'done legacy')
+check "v1-format flow still fully operable" \
+    "$([ "$r" = "ok" ] && echo 0 || echo 1)" "$r"
+
 # --- exomind down at startup: /ping serves, reload retries -------------------
 kill "$XF_PID" 2>/dev/null
 kill "$XM_PID" 2>/dev/null

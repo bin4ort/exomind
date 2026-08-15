@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define EXOFLOW_VERSION "0.1.0"
+#define EXOFLOW_VERSION "0.2.0"
 #define EXO_KEY_PREFIX "exoflow:flow:"
 #define FLOW_ID_MAX 40
 #define STEP_ID_MAX 64
@@ -12,7 +12,7 @@
 #define STATE_MAX 16
 #define MAX_MSG (64u * 1024u)
 #define RETRY_DELAY_NS (5LL * 1000000000LL)
-#define FLOW_TSV_VERSION "1"
+#define FLOW_TSV_VERSION "2"
 
 typedef struct step {
     char id[STEP_ID_MAX];
@@ -30,6 +30,19 @@ typedef struct flow {
     step_t *steps;
     size_t nsteps;
     struct flow *next;
+    /* loop fields (exoflow >= 0.2.0); zero when the flow does not loop.
+     * every iteration of a loop is its own flow record; the first one has
+     * no parent, every later one links `loop_parent` back to the first. */
+    int loop_active;      /* this record belongs to a loop */
+    int64_t loop_interval; /* seconds between iterations */
+    int64_t loop_max;     /* max counted iterations, 0 = unlimited */
+    int64_t loop_until;   /* epoch, 0 = none; no run starts at/after it */
+    int64_t loop_iter;    /* iteration label of THIS record (1-based) */
+    int64_t loop_budget;  /* counted iterations consumed so far incl. this
+                             record unless it was cancelled */
+    int64_t loop_next;    /* epoch of the next run, 0 = no more runs */
+    char loop_parent[FLOW_ID_MAX]; /* id of the first iteration, or "" */
+    int loop_stopped;     /* stop-loop halted future iterations */
 } flow_t;
 
 /* ---- util.c ---- */
@@ -84,13 +97,18 @@ void flows_unlock(void);
 flow_t *flow_find(const char *id);
 flow_t *flows_first(void);
 size_t flow_count(void);
-int flows_reload(cli_t *e);
+int flows_reload(cli_t *e, cli_t *x);
 char *flow_serialize(const flow_t *f);
 int flow_create(cli_t *e, cli_t *x, const char *body, size_t blen,
                 char *fid, size_t fidcap, size_t *nsteps_out,
                 char *err, size_t errsz);
 int flow_delete(cli_t *e, const char *id, int *existed, char *err, size_t errsz);
 int flow_cancel(cli_t *e, const char *id, char *err, size_t errsz);
+int flow_stop_loop(cli_t *e, const char *id, char *err, size_t errsz);
+/* lazy loop scheduler: spawns the next iteration of a terminal looping
+ * flow whose next_run is due. caller must hold the registry lock. */
+int loop_tick(cli_t *e, cli_t *x, flow_t *f, char *err, size_t errsz);
+int flow_is_loop(const flow_t *f);
 int flow_sweep(cli_t *e, flow_t *f, char *err, size_t errsz);
 int step_do(cli_t *e, flow_t *f, const char *sid, const char *action,
             const char *note, char *err, size_t errsz);

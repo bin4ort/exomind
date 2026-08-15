@@ -92,6 +92,21 @@ static int safe_token(const char *s, size_t max)
     return 1;
 }
 
+/* flow ids are generated as `<epoch>:<hex>` and travel inside URLs and TSV
+ * columns; only whitespace and the column separator are really unsafe */
+static int flow_id_ok(const char *s)
+{
+    size_t n = strlen(s);
+    if (n == 0 || n >= FLOW_ID_MAX)
+        return 0;
+    for (size_t i = 0; i < n; i++) {
+        char c = s[i];
+        if (c == '\t' || c == '\n' || c == '\r' || c == ' ' || c == ',')
+            return 0;
+    }
+    return 1;
+}
+
 static void step_free(step_t *s)
 {
     free(s->desc);
@@ -110,10 +125,12 @@ static void flow_free(flow_t *f)
 }
 
 /* ---------------- serialization ----------------
- * key `exoflow:flow:<id>` holds a TSV document:
- *   line 1: exoflow<TAB>1<TAB><escaped name>
+ * key `exoflow:flow:<id>` holds a TSV document (format version 2):
+ *   line 1: exoflow<TAB>2<TAB><escaped name>
  *   line 2+: step<TAB><sid><TAB><escaped desc><TAB><deps csv><TAB><state><TAB><owner><TAB><deadline>
- * The header carries the format version so future iterations can migrate. */
+ *   optional last line (loops only):
+ *     loop<TAB><interval s><TAB><max><TAB><until><TAB><iter><TAB><budget><TAB><next_run><TAB><parent><TAB><stopped>
+ * v1 documents (header `exoflow<TAB>1<TAB>...`) load as non-looping. */
 char *flow_serialize(const flow_t *f)
 {
     char *en = esc_line(f->name, strlen(f->name));
@@ -133,11 +150,19 @@ char *flow_serialize(const flow_t *f)
         buf_printf(&b, "\t%s\t%s\t%lld\n", s->state, s->owner,
                    (long long)s->deadline);
     }
+    if (f->loop_active)
+        buf_printf(&b, "loop\t%lld\t%lld\t%lld\t%lld\t%lld\t%lld\t%s\t%d\n",
+                   (long long)f->loop_interval, (long long)f->loop_max,
+                   (long long)f->loop_until, (long long)f->loop_iter,
+                   (long long)f->loop_budget, (long long)f->loop_next,
+                   f->loop_parent, f->loop_stopped ? 1 : 0);
     return b.p;
 }
 
 /* parses a serialized flow; returns 0 and a malloc'd flow, or -1. the
- * returned flow is fully validated (deps exist, no cycles). */
+ * returned flow is fully validated (deps exist, no cycles). format
+ * version 1 (legacy) loads as a plain non-looping flow; version 2 may
+ * carry one trailing `loop` line. */
 static int flow_parse(const char *doc, flow_t **out, char *err, size_t errsz)
 {
     flow_t *f = xcalloc(1, sizeof *f);
@@ -168,7 +193,8 @@ static int flow_parse(const char *doc, flow_t **out, char *err, size_t errsz)
         snprintf(err, errsz, "bad flow header");
         goto bad;
     }
-    if (strncmp(ver, FLOW_TSV_VERSION, strlen(FLOW_TSV_VERSION)) != 0) {
+    *t2 = 0;
+    if (strcmp(ver, "1") != 0 && strcmp(ver, "2") != 0) {
         snprintf(err, errsz, "unsupported flow format version");
         goto bad;
     }
@@ -176,85 +202,128 @@ static int flow_parse(const char *doc, flow_t **out, char *err, size_t errsz)
 
     for (size_t i = 1; i < nlines; i++) {
         char *ln = lines[i];
-        if (strncmp(ln, "step\t", 5) != 0) {
-            snprintf(err, errsz, "bad step line");
-            goto bad;
-        }
-        char *cols[8];
-        size_t nc = 0;
-        char *c = ln + 5;
-        for (;;) {
-            if (nc >= 8) {
+        if (strncmp(ln, "step\t", 5) == 0) {
+            char *cols[8];
+            size_t nc = 0;
+            char *c = ln + 5;
+            for (;;) {
+                if (nc >= 8) {
+                    snprintf(err, errsz, "bad step line");
+                    goto bad;
+                }
+                cols[nc++] = c;
+                char *t = strchr(c, '\t');
+                if (!t)
+                    break;
+                *t = 0;
+                c = t + 1;
+            }
+            /* stored form: id desc deps state owner deadline (6 columns);
+             * tolerate a bare 3/4-column line (untouched state -> pending) */
+            if (nc != 6 && nc != 3 && nc != 4) {
                 snprintf(err, errsz, "bad step line");
                 goto bad;
             }
-            cols[nc++] = c;
-            char *t = strchr(c, '\t');
-            if (!t)
-                break;
-            *t = 0;
-            c = t + 1;
-        }
-        /* stored form: id desc deps state owner deadline (6 columns);
-         * tolerate a bare 3/4-column line (untouched state -> pending) */
-        if (nc != 6 && nc != 3 && nc != 4) {
+            if (!safe_token(cols[0], STEP_ID_MAX)) {
+                snprintf(err, errsz, "bad step id");
+                goto bad;
+            }
+            f->steps = xrealloc(f->steps, (f->nsteps + 1) * sizeof(step_t));
+            step_t *s = &f->steps[f->nsteps++];
+            memset(s, 0, sizeof *s);
+            snprintf(s->id, sizeof s->id, "%s", cols[0]);
+            s->desc = unesc_line(cols[1]);
+            snprintf(s->state, sizeof s->state, "pending");
+            char *d = cols[2];
+            while (*d) {
+                char *comma = strchr(d, ',');
+                if (comma)
+                    *comma = 0;
+                if (!safe_token(d, STEP_ID_MAX)) {
+                    snprintf(err, errsz, "bad dep id");
+                    goto bad;
+                }
+                s->deps = xrealloc(s->deps, (s->ndeps + 1) * sizeof(char *));
+                s->deps[s->ndeps++] = xstrdup(d);
+                if (!comma)
+                    break;
+                d = comma + 1;
+            }
+            if (nc == 4) {
+                long long dl = atoll(cols[3]);
+                if (dl < 0) {
+                    snprintf(err, errsz, "bad deadline");
+                    goto bad;
+                }
+                s->deadline = dl;
+            } else if (nc == 6) {
+                if (strcmp(cols[3], "pending") != 0 &&
+                    strcmp(cols[3], "claimed") != 0 &&
+                    strcmp(cols[3], "done") != 0 &&
+                    strcmp(cols[3], "failed") != 0 &&
+                    strcmp(cols[3], "overdue") != 0 &&
+                    strcmp(cols[3], "cancelled") != 0) {
+                    snprintf(err, errsz, "bad step state");
+                    goto bad;
+                }
+                snprintf(s->state, sizeof s->state, "%s", cols[3]);
+                if (strcmp(cols[4], "") != 0 && !safe_token(cols[4], OWNER_MAX)) {
+                    snprintf(err, errsz, "bad step owner");
+                    goto bad;
+                }
+                snprintf(s->owner, sizeof s->owner, "%s", cols[4]);
+                long long dl = atoll(cols[5]);
+                if (dl < 0) {
+                    snprintf(err, errsz, "bad deadline");
+                    goto bad;
+                }
+                s->deadline = dl;
+            }
+        } else if (strncmp(ln, "loop\t", 5) == 0) {
+            if (i != nlines - 1) {
+                snprintf(err, errsz, "loop line must be last");
+                goto bad;
+            }
+            char *cols[8];
+            size_t nc = 0;
+            char *c = ln + 5;
+            for (;;) {
+                if (nc >= 8) {
+                    snprintf(err, errsz, "bad loop line");
+                    goto bad;
+                }
+                cols[nc++] = c;
+                char *t = strchr(c, '\t');
+                if (!t)
+                    break;
+                *t = 0;
+                c = t + 1;
+            }
+            if (nc != 8) {
+                snprintf(err, errsz, "bad loop line");
+                goto bad;
+            }
+            long long iv = atoll(cols[0]), mx = atoll(cols[1]),
+                          un = atoll(cols[2]), it = atoll(cols[3]),
+                          bd = atoll(cols[4]), nx = atoll(cols[5]);
+            if (iv < 1 || mx < 0 || un < 0 || it < 1 || bd < 1 || nx < 0 ||
+                (strcmp(cols[6], "") != 0 && !flow_id_ok(cols[6])) ||
+                (strcmp(cols[7], "0") != 0 && strcmp(cols[7], "1") != 0)) {
+                snprintf(err, errsz, "bad loop line");
+                goto bad;
+            }
+            f->loop_active = 1;
+            f->loop_interval = iv;
+            f->loop_max = mx;
+            f->loop_until = un;
+            f->loop_iter = it;
+            f->loop_budget = bd;
+            f->loop_next = nx;
+            snprintf(f->loop_parent, sizeof f->loop_parent, "%s", cols[6]);
+            f->loop_stopped = strcmp(cols[7], "1") == 0;
+        } else {
             snprintf(err, errsz, "bad step line");
             goto bad;
-        }
-        if (!safe_token(cols[0], STEP_ID_MAX)) {
-            snprintf(err, errsz, "bad step id");
-            goto bad;
-        }
-        f->steps = xrealloc(f->steps, (f->nsteps + 1) * sizeof(step_t));
-        step_t *s = &f->steps[f->nsteps++];
-        memset(s, 0, sizeof *s);
-        snprintf(s->id, sizeof s->id, "%s", cols[0]);
-        s->desc = unesc_line(cols[1]);
-        snprintf(s->state, sizeof s->state, "pending");
-        char *d = cols[2];
-        while (*d) {
-            char *comma = strchr(d, ',');
-            if (comma)
-                *comma = 0;
-            if (!safe_token(d, STEP_ID_MAX)) {
-                snprintf(err, errsz, "bad dep id");
-                goto bad;
-            }
-            s->deps = xrealloc(s->deps, (s->ndeps + 1) * sizeof(char *));
-            s->deps[s->ndeps++] = xstrdup(d);
-            if (!comma)
-                break;
-            d = comma + 1;
-        }
-        if (nc == 4) {
-            long long dl = atoll(cols[3]);
-            if (dl < 0) {
-                snprintf(err, errsz, "bad deadline");
-                goto bad;
-            }
-            s->deadline = dl;
-        } else if (nc == 6) {
-            if (strcmp(cols[3], "pending") != 0 &&
-                strcmp(cols[3], "claimed") != 0 &&
-                strcmp(cols[3], "done") != 0 &&
-                strcmp(cols[3], "failed") != 0 &&
-                strcmp(cols[3], "overdue") != 0 &&
-                strcmp(cols[3], "cancelled") != 0) {
-                snprintf(err, errsz, "bad step state");
-                goto bad;
-            }
-            snprintf(s->state, sizeof s->state, "%s", cols[3]);
-            if (strcmp(cols[4], "") != 0 && !safe_token(cols[4], OWNER_MAX)) {
-                snprintf(err, errsz, "bad step owner");
-                goto bad;
-            }
-            snprintf(s->owner, sizeof s->owner, "%s", cols[4]);
-            long long dl = atoll(cols[5]);
-            if (dl < 0) {
-                snprintf(err, errsz, "bad deadline");
-                goto bad;
-            }
-            s->deadline = dl;
         }
     }
     free(copy);
@@ -320,6 +389,17 @@ static int detect_cycle(const flow_t *f)
     return cyclic;
 }
 
+static int make_flow_id_locked(char *id, size_t cap)
+{
+    for (int try = 0; try < 8; try++) {
+        snprintf(id, cap, "%lld:%08x", (long long)now_epoch(),
+                 (unsigned)rand32());
+        if (!flow_find(id))
+            return 0;
+    }
+    return -1;
+}
+
 static int make_flow_id(char *id, size_t cap)
 {
     for (int try = 0; try < 8; try++) {
@@ -332,6 +412,92 @@ static int make_flow_id(char *id, size_t cap)
             return 0;
     }
     return -1;
+}
+
+/* ---------------- loop spec ---------------- */
+
+static int64_t parse_units(const char *s)
+{
+    if (!isdigit((unsigned char)s[0]) || !s[1])
+        return 0;
+    int64_t n = 0;
+    for (const char *p = s; *p; p++) {
+        if (!isdigit((unsigned char)*p)) {
+            if (!p[1]) {
+                if (*p == 's')
+                    return n;
+                if (*p == 'm')
+                    return n * 60;
+                if (*p == 'h')
+                    return n * 3600;
+            }
+            return 0;
+        }
+        n = n * 10 + (*p - '0');
+        if (n < 0)
+            return 0;
+    }
+    return 0;
+}
+
+/* parses the loop line of a POST /flow body:
+ * `loop<TAB>every <n><s|m|h><TAB>[max <n>] [until <epoch>]`
+ * returns 0 on success, -1 on a malformed spec. */
+static int parse_loop_spec(const char *line, int64_t *interval, int64_t *max,
+                           int64_t *until)
+{
+    *max = 0;
+    *until = 0;
+    char *copy = xstrdup(line);
+    char *save = NULL;
+    char *tok = strtok_r(copy, " \t", &save);
+    if (!tok || strcmp(tok, "loop") != 0) {
+        free(copy);
+        return -1;
+    }
+    tok = strtok_r(NULL, " \t", &save);
+    if (!tok || strcmp(tok, "every") != 0) {
+        free(copy);
+        return -1;
+    }
+    tok = strtok_r(NULL, " \t", &save);
+    int64_t iv = tok ? parse_units(tok) : 0;
+    if (iv < 1) {
+        free(copy);
+        return -1;
+    }
+    while ((tok = strtok_r(NULL, " \t", &save)) != NULL) {
+        char *arg = strtok_r(NULL, " \t", &save);
+        if (!arg) {
+            free(copy);
+            return -1;
+        }
+        int64_t v = atoll(arg);
+        if (strcmp(tok, "max") == 0) {
+            if (v < 1) {
+                free(copy);
+                return -1;
+            }
+            *max = v;
+        } else if (strcmp(tok, "until") == 0) {
+            if (v < 0) {
+                free(copy);
+                return -1;
+            }
+            *until = v;
+        } else {
+            free(copy);
+            return -1;
+        }
+    }
+    free(copy);
+    *interval = iv;
+    return 0;
+}
+
+int flow_is_loop(const flow_t *f)
+{
+    return f->loop_active;
 }
 
 /* ---------------- persistence helpers ---------------- */
@@ -433,13 +599,45 @@ int flow_create(cli_t *e, cli_t *x, const char *body, size_t blen,
         free(lines);
         return -1;
     }
+    if (nlines == 2 && strncmp(lines[1], "loop\t", 5) == 0) {
+        snprintf(err, errsz, "no steps");
+        free(copy);
+        free(lines);
+        return -1;
+    }
+
+    /* an optional LAST line `loop<TAB>every <n><s|m|h>...` turns the flow
+     * into a loop. a line starting with `loop\t` whose every-part does not
+     * parse is rejected (`error: bad loop spec`); any other last line is a
+     * plain step, so old bodies keep working byte for byte. */
+    int64_t loop_iv = 0, loop_max = 0, loop_until = 0;
+    size_t nstep_lines = nlines - 1;
+    if (strncmp(lines[nlines - 1], "loop\t", 5) == 0) {
+        if (parse_loop_spec(lines[nlines - 1], &loop_iv, &loop_max,
+                            &loop_until) != 0) {
+            snprintf(err, errsz, "bad loop spec");
+            free(copy);
+            free(lines);
+            return -1;
+        }
+        nstep_lines--;
+    }
 
     flow_t *f = xcalloc(1, sizeof *f);
     f->name = unesc_line(rawname);
-    f->nsteps = nlines - 1;
+    f->nsteps = nstep_lines;
     f->steps = xcalloc(f->nsteps, sizeof(step_t));
+    if (loop_iv > 0) {
+        f->loop_active = 1;
+        f->loop_interval = loop_iv;
+        f->loop_max = loop_max;
+        f->loop_until = loop_until;
+        f->loop_iter = 1;
+        f->loop_budget = 1;
+        f->loop_next = now_epoch() + loop_iv;
+    }
 
-    for (size_t i = 1; i < nlines; i++) {
+    for (size_t i = 1; i <= nstep_lines; i++) {
         step_t *s = &f->steps[i - 1];
         memset(s, 0, sizeof *s);
         snprintf(s->state, sizeof s->state, "pending");
@@ -552,6 +750,16 @@ int flow_create(cli_t *e, cli_t *x, const char *body, size_t blen,
                         f->id, s->id, xerr);
         }
     }
+    /* loop timer: same best-effort pattern. the lazy check is authoritative;
+     * the reminder only surfaces the next due iteration in the note feed. */
+    if (f->loop_active) {
+        char msg[160];
+        snprintf(msg, sizeof msg, "exoflow:loop:%s", f->id);
+        char xerr[256];
+        if (xs_remind(x, f->loop_next, msg, xerr, sizeof xerr) != 0)
+            fprintf(stderr, "exoflow: cannot register loop timer for %s: %s\n",
+                    f->id, xerr);
+    }
     snprintf(fid, fidcap, "%s", f->id);
     *nsteps_out = f->nsteps;
     free(copy);
@@ -568,6 +776,9 @@ bad:
     return -1;
 }
 
+static int loop_stop_all(cli_t *e, flow_t *f, const char *reason,
+                         char *err, size_t errsz);
+
 int flow_delete(cli_t *e, const char *id, int *existed, char *err, size_t errsz)
 {
     flows_lock();
@@ -580,6 +791,14 @@ int flow_delete(cli_t *e, const char *id, int *existed, char *err, size_t errsz)
         flows_unlock();
         *existed = 0;
         return 0;
+    }
+    /* deleting any record of a loop halts future iterations first, so the
+     * surviving records can never lazily spawn again */
+    if (f->loop_active) {
+        if (loop_stop_all(e, f, "flow deleted", err, errsz) != 0) {
+            flows_unlock();
+            return -1;
+        }
     }
     if (prev)
         prev->next = f->next;
@@ -637,6 +856,252 @@ int flow_cancel(cli_t *e, const char *id, char *err, size_t errsz)
     free(prev_state);
     free(prev_owner);
     return 0;
+}
+
+/* ---------------- loop scheduler (lazy) ----------------
+ * A loop is a chain of flow records, all persisted in exomind. The first
+ * record carries the loop spec and no parent; every later iteration links
+ * `loop_parent` back to it. Scheduling is LAZY, exactly like the deadline
+ * sweep: no background thread, no timer-driven spawn. Every read of
+ * /flows, /flow?id=, /loops, /next and every startup reload runs loop_tick
+ * per record, which spawns the next iteration only when the newest one is
+ * terminal AND `next_run <= now` AND the limits (max / until) allow it.
+ * The exosched reminder `exoflow:loop:<id>` is feed candy only. */
+
+/* id of the loop's first iteration */
+static const char *loop_root_id(const flow_t *f)
+{
+    return f->loop_parent[0] ? f->loop_parent : f->id;
+}
+
+/* the driver record of f's loop: the one with the highest iter label.
+ * Only the driver may schedule the next iteration, so older records with
+ * stale next_run copies can never double-spawn. caller must hold the
+ * registry lock. */
+static flow_t *loop_driver(const flow_t *f)
+{
+    const char *rid = loop_root_id(f);
+    flow_t *best = NULL;
+    for (flow_t *r = g_flows; r; r = r->next) {
+        if (!r->loop_active)
+            continue;
+        if (strcmp(r->id, rid) == 0 || strcmp(r->loop_parent, rid) == 0)
+            if (!best || r->loop_iter > best->loop_iter)
+                best = r;
+    }
+    return best;
+}
+
+static int loop_is_terminal(const flow_t *f)
+{
+    const char *st = flow_status(f);
+    return strcmp(st, "done") == 0 || strcmp(st, "failed") == 0 ||
+           strcmp(st, "cancelled") == 0;
+}
+
+/* best-effort loop audit note; never fails the caller */
+static void loop_note(cli_t *e, const char *text)
+{
+    char err[256];
+    if (exo_note(e, text, err, sizeof err) != 0)
+        fprintf(stderr, "exoflow: loop note failed (%s): %s\n", err, text);
+}
+
+/* deep-copies src's steps into a fresh all-pending flow named <name> */
+static flow_t *loop_clone_steps(const flow_t *src, const char *name)
+{
+    flow_t *nf = xcalloc(1, sizeof *nf);
+    nf->name = xstrdup(name);
+    nf->nsteps = src->nsteps;
+    nf->steps = xcalloc(src->nsteps, sizeof(step_t));
+    for (size_t i = 0; i < src->nsteps; i++) {
+        const step_t *ds = &src->steps[i];
+        step_t *ns = &nf->steps[i];
+        memset(ns, 0, sizeof *ns);
+        snprintf(ns->id, sizeof ns->id, "%s", ds->id);
+        ns->desc = xstrdup(ds->desc);
+        ns->ndeps = ds->ndeps;
+        ns->deps = xcalloc(ds->ndeps, sizeof(char *));
+        for (size_t j = 0; j < ds->ndeps; j++)
+            ns->deps[j] = xstrdup(ds->deps[j]);
+        snprintf(ns->state, sizeof ns->state, "pending");
+        ns->deadline = ds->deadline;
+    }
+    return nf;
+}
+
+/* marks every record of f's loop stopped (no further spawns) and writes
+ * one audit note. caller must hold the registry lock. */
+static int loop_stop_all(cli_t *e, flow_t *f, const char *reason,
+                         char *err, size_t errsz)
+{
+    const char *rid = loop_root_id(f);
+    int changed = 0;
+    for (flow_t *r = g_flows; r; r = r->next) {
+        if (!r->loop_active)
+            continue;
+        if (strcmp(r->id, rid) == 0 || strcmp(r->loop_parent, rid) == 0) {
+            if (!r->loop_stopped || r->loop_next != 0) {
+                r->loop_stopped = 1;
+                r->loop_next = 0;
+                char serr[256];
+                if (persist_flow(e, r, serr, sizeof serr) != 0) {
+                    snprintf(err, errsz, "exomind unavailable: %s", serr);
+                    return -1;
+                }
+                changed = 1;
+            }
+        }
+    }
+    if (changed) {
+        buf_t b = {0};
+        buf_printf(&b, "flow loop %s stopped (%s)", rid, reason);
+        loop_note(e, b.p);
+        buf_free(&b);
+    }
+    return 0;
+}
+
+/* lazy loop check for one flow. called with the registry lock held, from
+ * every read path and the startup reload. spawns the next iteration when
+ * the driver record is terminal and due; finalizes (next_run = 0 + audit
+ * note) when max or until is exhausted. returns -1 only on persistence
+ * failure (nothing was changed). */
+int loop_tick(cli_t *e, cli_t *x, flow_t *f, char *err, size_t errsz)
+{
+    if (!f->loop_active || !loop_is_terminal(f) || f->loop_stopped)
+        return 0;
+    if (loop_driver(f) != f)
+        return 0; /* an older record: the newest iteration drives */
+    if (f->loop_next <= 0)
+        return 0;
+    int64_t now = now_epoch();
+    if (f->loop_next > now)
+        return 0;
+    const char *rid = loop_root_id(f);
+    int cancelled = strcmp(flow_status(f), "cancelled") == 0;
+    /* an explicitly cancelled iteration does not consume max budget: the
+     * replacement keeps the parent's budget and the total counted runs is
+     * unchanged */
+    int64_t budget_after = f->loop_budget + (cancelled ? 0 : 1);
+
+    if (f->loop_max > 0 && budget_after > f->loop_max) {
+        int64_t prev = f->loop_next;
+        f->loop_next = 0;
+        if (persist_flow(e, f, err, errsz) != 0) {
+            f->loop_next = prev;
+            return -1;
+        }
+        buf_t b = {0};
+        buf_printf(&b, "flow loop %s finished (max reached)", rid);
+        loop_note(e, b.p);
+        buf_free(&b);
+        return 0;
+    }
+    if (f->loop_until > 0 && now >= f->loop_until) {
+        int64_t prev = f->loop_next;
+        f->loop_next = 0;
+        if (persist_flow(e, f, err, errsz) != 0) {
+            f->loop_next = prev;
+            return -1;
+        }
+        buf_t b = {0};
+        buf_printf(&b, "flow loop %s finished (until reached)", rid);
+        loop_note(e, b.p);
+        buf_free(&b);
+        return 0;
+    }
+
+    /* spawn the next iteration */
+    int64_t new_next = f->loop_next + f->loop_interval;
+    int64_t prev = f->loop_next;
+    f->loop_next = new_next;
+    if (persist_flow(e, f, err, errsz) != 0) {
+        f->loop_next = prev;
+        return -1;
+    }
+    char nname[64];
+    snprintf(nname, sizeof nname, "iter %lld", (long long)(f->loop_iter + 1));
+    flow_t *nf = loop_clone_steps(f, nname);
+    if (make_flow_id_locked(nf->id, sizeof nf->id) != 0) {
+        flow_free(nf);
+        f->loop_next = prev;
+        snprintf(err, errsz, "cannot allocate flow id");
+        return -1;
+    }
+    nf->loop_active = 1;
+    nf->loop_interval = f->loop_interval;
+    nf->loop_max = f->loop_max;
+    nf->loop_until = f->loop_until;
+    nf->loop_iter = f->loop_iter + 1;
+    nf->loop_budget = budget_after;
+    nf->loop_next = new_next;
+    snprintf(nf->loop_parent, sizeof nf->loop_parent, "%s", rid);
+    if (persist_flow(e, nf, err, errsz) != 0) {
+        /* roll back so the next lazy check retries without duplicating */
+        f->loop_next = prev;
+        char perr[256];
+        if (persist_flow(e, f, perr, sizeof perr) != 0)
+            fprintf(stderr, "exoflow: loop rollback failed for %s: %s\n",
+                    f->id, perr);
+        flow_free(nf);
+        return -1;
+    }
+    /* propagate the rescheduled next_run to the loop's other records so
+     * /loops stays coherent (best effort: the driver's value is the only
+     * authoritative one) */
+    for (flow_t *r = g_flows; r; r = r->next) {
+        if (r == f || r == nf || !r->loop_active)
+            continue;
+        if (strcmp(r->id, rid) == 0 || strcmp(r->loop_parent, rid) == 0) {
+            r->loop_next = new_next;
+            char perr[256];
+            if (persist_flow(e, r, perr, sizeof perr) != 0)
+                fprintf(stderr,
+                        "exoflow: loop reschedule persist failed for %s: %s\n",
+                        r->id, perr);
+        }
+    }
+    nf->next = g_flows;
+    g_flows = nf;
+    g_nflows++;
+    g_gen++;
+    buf_t b = {0};
+    buf_printf(&b, "flow loop %s -> iter %lld at %lld", rid,
+               (long long)nf->loop_iter, (long long)now);
+    loop_note(e, b.p);
+    buf_free(&b);
+    if (x) {
+        /* feed candy only; a due-but-past timer is pointless and exosched
+         * rejects it, so skip the refresh when the new run is overdue */
+        if (new_next > now) {
+            char msg[160];
+            snprintf(msg, sizeof msg, "exoflow:loop:%s", rid);
+            char xerr[256];
+            if (xs_remind(x, new_next, msg, xerr, sizeof xerr) != 0)
+                fprintf(stderr,
+                        "exoflow: loop timer refresh failed for %s: %s\n",
+                        rid, xerr);
+        }
+    }
+    return 0;
+}
+
+/* `stop-loop`: halts every future iteration of the loop; the current
+ * records keep their state. replies 0 on success. caller must hold the
+ * registry lock. */
+int flow_stop_loop(cli_t *e, const char *id, char *err, size_t errsz)
+{
+    flow_t *f = flow_find(id);
+    if (!f) {
+        snprintf(err, errsz, "no such flow");
+        return -1;
+    }
+    if (!f->loop_active) {
+        snprintf(err, errsz, "not a loop");
+        return -1;
+    }
+    return loop_stop_all(e, f, "stop-loop", err, errsz);
 }
 
 /* handles `done [note]`, `failed [note]`, `unclaim`; caller must hold the
@@ -801,7 +1266,7 @@ static int reload_parse_flow(const char *key, const char *val, flow_t **out)
 /* reloads all flows from exomind: /list then one /batch of /gets.
  * returns 0 on success (even with zero flows), -1 if exomind is down or
  * the registry changed mid-reload (caller retries). */
-int flows_reload(cli_t *e)
+int flows_reload(cli_t *e, cli_t *x)
 {
     char err[256];
     flows_lock();
@@ -857,6 +1322,17 @@ int flows_reload(cli_t *e)
                 fprintf(stderr, "exoflow: reload sweep failed for %s: %s\n",
                         parsed[i]->id, serr);
             parsed[i] = NULL; /* now owned by the registry */
+        }
+        /* lazy loop check, after every record is in the registry so the
+         * driver lookup sees the whole loop: a loop whose iteration
+         * finished while the daemon was down resumes from persisted state */
+        for (flow_t *r = g_flows; r; r = r->next) {
+            if (!r->loop_active)
+                continue;
+            char lerr[256];
+            if (loop_tick(e, x, r, lerr, sizeof lerr) != 0)
+                fprintf(stderr, "exoflow: reload loop check failed for %s: "
+                        "%s\n", r->id, lerr);
         }
     }
     flows_unlock();
