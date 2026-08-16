@@ -200,9 +200,9 @@ int tokenize_file(const char *path, tokvec_t *tv)
 
         /* operators / punctuation (2-char first) */
         static const char *OPS2[] = {"==", "!=", "<=", ">=", "&&", "||",
-                                     "->", "++", "--", "+=", "-=", "*=",
-                                     "/=", "%=", "&=", "|=", "^=", "<<",
-                                     ">>"};
+                                     "->", "::", "++", "--", "+=", "-=",
+                                     "*=", "/=", "%=", "&=", "|=", "^=",
+                                     "<<", ">>"};
         int matched = 0;
         for (size_t i = 0; i < sizeof OPS2 / sizeof OPS2[0]; i++) {
             size_t l = strlen(OPS2[i]);

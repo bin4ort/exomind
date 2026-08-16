@@ -116,7 +116,9 @@ static int is_type_tok(const tok_t *t)
         "static", "extern", "register", "inline", "_Bool", "bool", "ssize_t",
         "size_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t", "int8_t",
         "int16_t", "int32_t", "int64_t", "off_t", "FILE", "errno_t",
-        "time_t", NULL};
+        "time_t", "auto", "constexpr", "noexcept", "override", "virtual",
+        "wchar_t", "char8_t", "char16_t", "char32_t", "template",
+        "typename", "class", NULL};
     for (int i = 0; TYPES[i]; i++)
         if (!strcmp(TYPES[i], t->text))
             return 1;
@@ -169,16 +171,33 @@ int collect_functions(tokvec_t *tv, fnvec_t *fv)
             }
             continue;
         }
-        if (depth != 0)
-            continue;
+        /* C++ class/namespace bodies: methods live at inner depths; a
+           detected function's body is skipped wholesale, so scanning
+           every depth is safe (C has no nested functions) */
         if (t->type != T_IDENT || i + 1 >= tv->ntok || !tok_is(&tv->toks[i + 1], "("))
             continue;
+        /* inside a function body a call is not a definition: the walk
+           below only accepts IDENT-or-type before the name, and calls
+           at statement level start with a non-type token, so depth
+           doesn't need to be checked here */
         int j = (int)i - 1;
-        while (j >= 0 && tok_is(&tv->toks[j], "*"))
+        /* C++: methods and namespace-qualified names — walk back over
+           `*` and `::`, treating an identifier before `::` as a class */
+        while (j >= 0 && (tok_is(&tv->toks[j], "*") || tok_is(&tv->toks[j], "::")))
             j--;
-        if (j < 0 || !is_type_tok(&tv->toks[j]))
+        if (j < 0 || (!is_type_tok(&tv->toks[j]) && !tok_is(&tv->toks[j], "@nonnull")))
             continue;
-        int par = 0, returns_void = tok_is(&tv->toks[j], "void");
+        /* `Foo::bar(` — the class name itself is not a type token */
+        if (!is_type_tok(&tv->toks[j])) {
+            j = (int)i - 1;
+            while (j >= 0 && (tok_is(&tv->toks[j], "*") || tok_is(&tv->toks[j], "::")))
+                j--;
+            while (j >= 1 && tok_is(&tv->toks[j - 1], "::"))
+                j--;
+            while (j >= 0 && tok_is(&tv->toks[j], "*"))
+                j--;
+        }
+        int par = 0, returns_void = is_type_tok(&tv->toks[j]) && tok_is(&tv->toks[j], "void");
         int returns_ptr = 0, never_null = 0;
         for (int x = j; x <= (int)i; x++)
             if (tok_is(&tv->toks[x], "*"))

@@ -58,9 +58,43 @@ DIR_N=$(grep -c "$FIND" "$TDIR/dir.out")
 check "dir: analyzes all files" "$([ "$DIR_N" -ge "$BAD_N" ] && echo 0 || echo 1)" "n=$DIR_N"
 check "dir: exit 1" "$([ "$DIR_RC" -eq 1 ] && echo 0 || echo 1)" "rc=$DIR_RC"
 
-timeout 30 "$BIN" fixtures --ignore 'fixtures/good.c' > "$TDIR/ig.out" 2>/dev/null
+mkdir -p "$TDIR/igdir"
+cp fixtures/bad.c fixtures/good.c "$TDIR/igdir/"
+timeout 30 "$BIN" "$TDIR/igdir" --ignore '*good.c' > "$TDIR/ig.out" 2>/dev/null
 IG_N=$(grep -c "$FIND" "$TDIR/ig.out")
 check "ignore: good.c excluded" "$([ "$IG_N" -eq "$BAD_N" ] && echo 0 || echo 1)" "n=$IG_N"
+
+# =============== adapters: cpp / sh / py =================================
+timeout 30 "$BIN" fixtures/bad.cpp > "$TDIR/cpp.out" 2>/dev/null
+check "cpp: findings present" "$([ "$(grep -c "$FIND" "$TDIR/cpp.out")" -ge 4 ] && echo 0 || echo 1)" ""
+check "cpp: missing-error-path fires" "$(grep -q ' missing-error-path ' "$TDIR/cpp.out" && echo 0 || echo 1)" ""
+check "cpp: unchecked-deref-alloc fires" "$(grep -q ' unchecked-deref-alloc ' "$TDIR/cpp.out" && echo 0 || echo 1)" ""
+timeout 30 "$BIN" fixtures/good.cpp > "$TDIR/cppg.out" 2>/dev/null
+check "cpp good: 0 findings" "$([ "$(grep -c "$FIND" "$TDIR/cppg.out")" -eq 0 ] && echo 0 || echo 1)" ""
+timeout 30 "$BIN" fixtures/bad.sh > "$TDIR/sh.out" 2>/dev/null
+for ID in shell-unquoted-rm shell-unquoted-test shell-cd-unchecked shell-backtick; do
+    check "sh: $ID fires" "$(grep -q " $ID " "$TDIR/sh.out" && echo 0 || echo 1)" ""
+done
+timeout 30 "$BIN" fixtures/good.sh > "$TDIR/shg.out" 2>/dev/null
+check "sh good: 0 findings" "$([ "$(grep -c "$FIND" "$TDIR/shg.out")" -eq 0 ] && echo 0 || echo 1)" ""
+timeout 30 "$BIN" fixtures/bad.py > "$TDIR/py.out" 2>/dev/null
+for ID in py-bare-except py-mutable-default py-assert-validation py-os-system; do
+    check "py: $ID fires" "$(grep -q " $ID " "$TDIR/py.out" && echo 0 || echo 1)" ""
+done
+timeout 30 "$BIN" fixtures/good.py > "$TDIR/pyg.out" 2>/dev/null
+check "py good: 0 findings" "$([ "$(grep -c "$FIND" "$TDIR/pyg.out")" -eq 0 ] && echo 0 || echo 1)" ""
+
+# =============== rules engine ===========================================
+mkdir -p "$TDIR/rules"
+printf 'minor\nTODO|FIXME\n' > "$TDIR/rules/debt-x"
+printf 'major\nAKIA[0-9A-Z]{16}\n' > "$TDIR/rules/secrets-x"
+printf 'minor\n.\n' > "$TDIR/rules/hygiene-no-eol"
+printf 'int main(void) {\n    // TODO later\n    char *k = "AKIAIOSFODNN7EXAMPLE";\n    return 0;\n}' > "$TDIR/rule.c"
+timeout 30 "$BIN" "$TDIR/rule.c" --rules "$TDIR/rules" > "$TDIR/rl.out" 2>/dev/null
+check "rules: debt fires" "$(grep -q ' debt-x ' "$TDIR/rl.out" && echo 0 || echo 1)" ""
+check "rules: secrets fires" "$(grep -q ' secrets-x ' "$TDIR/rl.out" && echo 0 || echo 1)" ""
+check "rules: no-eol fires" "$(grep -q ' hygiene-no-eol ' "$TDIR/rl.out" && echo 0 || echo 1)" ""
+check "rules: exit 1" "$([ "$(grep -c "$FIND" "$TDIR/rl.out")" -gt 0 ] && echo 0 || echo 1)" ""
 
 # =============== json ====================================================
 timeout 30 "$BIN" fixtures/bad.c --json > "$TDIR/j.out" 2>/dev/null

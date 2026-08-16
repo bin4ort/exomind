@@ -1,5 +1,9 @@
 # exoqms-code
 
+**Multi-language QMS code-safety module** (v0.2.0): C/C++ analysis,
+shell and python line-based adapters, and a generic text-rule engine —
+audits any project in any language.
+
 **Code-safety QMS module: static C analyzer for error-handling quality.**
 
 The premise (production experience): when error paths are missing, a simple

@@ -2,7 +2,7 @@ CC      ?= cc
 CFLAGS  ?= -O2
 CFLAGS  += -std=c11 -Wall -Wextra -D_POSIX_C_SOURCE=200809L
 
-SRC := src/main.c src/tokenize.c src/analyze.c
+SRC := src/main.c src/tokenize.c src/analyze.c src/linemodes.c
 OBJ := $(SRC:src/%.c=build/%.o)
 BIN := build/exoqms-code
 

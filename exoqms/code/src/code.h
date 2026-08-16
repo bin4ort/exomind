@@ -17,6 +17,7 @@
 #define EXOQMS_CODE_H
 
 #include <stddef.h>
+#include <regex.h>
 #include <stdint.h>
 
 #define MAX_LINE 65536
@@ -100,5 +101,24 @@ void analyze_file(const char *path, tokvec_t *tv, const fnvec_t *fv,
 void findvec_free(findvec_t *fv);
 
 int is_known_err_fn(const char *name, size_t len);
+
+typedef struct {
+    char check[64];
+    char severity[8];
+    regex_t re;
+    int builtin_noeol;
+} rule_t;
+
+typedef struct {
+    rule_t *r;
+    size_t n;
+    size_t cap;
+} rulevec_t;
+
+/* line-based adapters and the generic rules engine (linemodes.c) */
+int analyze_text_file(const char *path, const char *lang, const char *buf,
+                      size_t n, void *rv, findvec_t *out);
+int rules_load_dir(const char *dir, void *rv_out, char *err, size_t errsz);
+void rules_free_all(void *rv);
 
 #endif

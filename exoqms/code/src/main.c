@@ -119,28 +119,62 @@ static void sv_free(strvec_t *sv)
     sv->cap = 0;
 }
 
-static int is_c_file(const char *p)
+
+/* per-file language for --lang auto: extension based */
+static const char *lang_of(const char *p, const char *forced)
 {
+    if (forced && strcmp(forced, "auto") != 0)
+        return forced;
     size_t n = strlen(p);
+    if (n > 4 && (!strcmp(p + n - 4, ".cpp") || !strcmp(p + n - 4, ".hpp") ||
+                  !strcmp(p + n - 4, ".ccx")))
+        return "cpp";
+    if (n > 3 && (!strcmp(p + n - 3, ".cc") || !strcmp(p + n - 3, ".hh") ||
+                  !strcmp(p + n - 3, ".cxx") || !strcmp(p + n - 3, ".hxx")))
+        return "cpp";
     if (n > 2 && (!strcmp(p + n - 2, ".c") || !strcmp(p + n - 2, ".h")))
-        return !strstr(p, "/fixtures/"); /* QA fixtures are intentionally dirty */
-    return 0;
+        return "c";
+    if (n > 3 && (!strcmp(p + n - 3, ".sh") || !strcmp(p + n - 3, ".bs")))
+        return "sh";
+    if (n > 3 && !strcmp(p + n - 3, ".py"))
+        return "py";
+    if (n > 5 && !strcmp(p + n - 5, ".bash"))
+        return "sh";
+    return NULL;
 }
 
-static void walk_dir(const char *dir, strvec_t *files)
+static int is_scan_file(const char *p, const char *lang)
+{
+    if (lang && strcmp(lang, "rules") == 0)
+        return 1; /* every text file is a rules target */
+    if (lang && strcmp(lang, "auto") != 0)
+        return lang_of(p, lang) != NULL; /* forced language */
+    return lang_of(p, NULL) != NULL;     /* auto: any supported */
+}
+
+static void walk_dir(const char *dir, strvec_t *files, const char *lang,
+                     strvec_t *ignores)
 {
     DIR *d = opendir(dir);
     if (!d)
         return;
     struct dirent *e;
     while ((e = readdir(d)) != NULL) {
-        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..") ||
+            !strcmp(e->d_name, ".git"))
             continue;
         char path[4096];
         snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+        int ign = 0;
+        for (size_t j = 0; j < ignores->n && !ign; j++)
+            if (fnmatch(ignores->items[j], path, 0) == 0 ||
+                fnmatch(ignores->items[j], e->d_name, 0) == 0)
+                ign = 1;
+        if (ign)
+            continue;
         if (e->d_type == DT_DIR) {
-            walk_dir(path, files);
-        } else if (is_c_file(path)) {
+            walk_dir(path, files, lang, ignores);
+        } else if (is_scan_file(path, lang)) {
             sv_push(files, path);
         }
     }
@@ -153,10 +187,16 @@ int main(int argc, char **argv)
     strvec_t ignores = {0};
     allowvec_t allows = {0};
     int json = 0;
+    const char *lang = "auto";
+    const char *rules_dir_path = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--json"))
             json = 1;
+        else if (!strcmp(argv[i], "--lang") && i + 1 < argc)
+            lang = argv[++i];
+        else if (!strcmp(argv[i], "--rules") && i + 1 < argc)
+            rules_dir_path = argv[++i];
         else if (!strcmp(argv[i], "--ignore") && i + 1 < argc)
             sv_push(&ignores, argv[++i]);
         else if (!strcmp(argv[i], "--allow") && i + 1 < argc) {
@@ -166,19 +206,22 @@ int main(int argc, char **argv)
             }
         }
         else if (!strcmp(argv[i], "--version")) {
-            printf("exoqms-code v0.1.0\n");
+            printf("exoqms-code v0.2.0\n");
             return 0;
         } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             printf(
-                "exoqms-code: static C analyzer for error-handling quality\n\n"
-                "usage: exoqms-code <file-or-dir>... [--json] [--ignore <glob>]\n\n"
-                "checks:\n"
-                "  unchecked-return       result of an error-returning call dropped\n"
-                "  missing-error-path     error result used without an if-not branch\n"
-                "  empty-error-branch     failure branch present but empty\n"
-                "  uninitialized-use      local read before assignment\n"
-                "  swallowed-error        if (err != 0) { } - error eaten\n"
-                "  unchecked-deref-alloc  malloc family result dereferenced unguarded\n");
+                "exoqms-code: multi-language quality analyzer\n\n"
+                "usage: exoqms-code <file-or-dir>... [--lang c|cpp|sh|py|rules|auto]\n"
+                "       [--rules <dir>] [--json] [--ignore <glob>] [--allow <file>]\n\n"
+                "c/cpp: unchecked-return, missing-error-path, empty-error-branch,\n"
+                "       uninitialized-use, swallowed-error, unchecked-deref-alloc\n"
+                "sh:    shell-unquoted-rm, shell-unquoted-test, shell-no-shebang,\n"
+                "       shell-cd-unchecked, shell-backtick\n"
+                "py:    py-bare-except, py-mutable-default, py-assert-validation,\n"
+                "       py-os-system\n"
+                "--rules <dir>: generic rule engine - one rule per file, file name =\n"
+                "  check id, line 1 severity, line 2 POSIX ERE matched per line.\n"
+                "  Special id hygiene-no-eol flags files without trailing newline.\n");
             return 0;
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "exoqms-code: unknown option %s\n", argv[i]);
@@ -191,13 +234,33 @@ int main(int argc, char **argv)
         fprintf(stderr, "exoqms-code: no input\n");
         return 2;
     }
+    if (lang && strcmp(lang, "c") != 0 && strcmp(lang, "cpp") != 0 &&
+        strcmp(lang, "sh") != 0 && strcmp(lang, "py") != 0 &&
+        strcmp(lang, "rules") != 0 && strcmp(lang, "auto") != 0) {
+        fprintf(stderr, "exoqms-code: unknown language %s\n", lang);
+        return 2;
+    }
+    /* rules engine: load rules once; with --rules and no explicit
+       language, every text file is a target */
+    rulevec_t rv = {0};
+    char rerr[256] = {0};
+    int rules_mode = rules_dir_path && strcmp(rules_dir_path, "-") != 0;
+    if (rules_mode && strcmp(lang, "auto") == 0)
+        lang = "rules";
+    if (rules_mode &&
+        rules_load_dir(rules_dir_path, &rv, rerr, sizeof rerr) != 0) {
+        fprintf(stderr, "exoqms-code: %s\n", rerr);
+        return 2;
+    }
 
     strvec_t files = {0};
     for (size_t i = 0; i < paths.n; i++) {
-        if (is_c_file(paths.items[i])) {
+        struct stat st;
+        int is_dir = stat(paths.items[i], &st) == 0 && S_ISDIR(st.st_mode);
+        if (is_dir) {
+            walk_dir(paths.items[i], &files, lang, &ignores);
+        } else if (is_scan_file(paths.items[i], lang)) {
             sv_push(&files, paths.items[i]);
-        } else {
-            walk_dir(paths.items[i], &files);
         }
     }
 
@@ -217,16 +280,33 @@ int main(int argc, char **argv)
         if (ignored)
             continue;
 
-        tokvec_t tv;
-        tokvec_init(&tv);
-        if (tokenize_file(path, &tv) != 0) {
-            tokvec_free(&tv);
-            continue;
-        }
-        fnvec_t fv = {0};
-        collect_functions(&tv, &fv);
         findvec_t out = {0};
-        analyze_file(path, &tv, &fv, &out);
+        const char *flang = rules_mode ? "rules" : lang_of(path, lang);
+        if (flang && (strcmp(flang, "sh") == 0 || strcmp(flang, "py") == 0 ||
+                      strcmp(flang, "rules") == 0)) {
+            FILE *f = fopen(path, "rb");
+            if (f) {
+                static const size_t CAP = 16u * 1024u * 1024u;
+                char *buf = malloc(CAP + 1);
+                if (buf) {
+                    size_t n = fread(buf, 1, CAP, f);
+                    analyze_text_file(path, flang, buf, n,
+                                      rules_mode ? &rv : NULL, &out);
+                    free(buf);
+                }
+                fclose(f);
+            }
+        } else if (flang && (strcmp(flang, "c") == 0 || strcmp(flang, "cpp") == 0)) {
+            tokvec_t tv;
+            tokvec_init(&tv);
+            if (tokenize_file(path, &tv) == 0) {
+                fnvec_t fv = {0};
+                collect_functions(&tv, &fv);
+                analyze_file(path, &tv, &fv, &out);
+                fnvec_free(&fv);
+            }
+            tokvec_free(&tv);
+        }
 
         for (size_t k = 0; k < out.nf; k++) {
             finding_t *f = &out.f[k];
@@ -249,9 +329,8 @@ int main(int argc, char **argv)
             nf++;
         }
         findvec_free(&out);
-        fnvec_free(&fv);
-        tokvec_free(&tv);
     }
+    rules_free_all(&rv);
 
     if (json)
         printf("]\n");
@@ -260,5 +339,10 @@ int main(int argc, char **argv)
     sv_free(&files);
     sv_free(&paths);
     sv_free(&ignores);
+    for (size_t i = 0; i < allows.n; i++) {
+        free(allows.a[i].path);
+        free(allows.a[i].check);
+    }
+    free(allows.a);
     return nf ? 1 : 0;
 }
