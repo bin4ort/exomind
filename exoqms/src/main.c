@@ -60,6 +60,9 @@ static void usage(const char *argv0)
             "  --ui <path>        exoqms-ui binary for ui-audit (default none)\n"
             "  --code <path>      exoqms-code binary for code-safety (default none)\n"
             "  --svg <path>       exoqms-svg binary for asset-logic (default none)\n"
+            "  --rules <dir>      rule files for debt/hygiene/secrets\n"
+            "                     (default: rules/ next to --code, else\n"
+            "                     <repo>/exoqms/code/rules)\n"
            "  --repo <dir>       stack repo root for docs/stack.tsv (default .)\n"
            "  --agents <a,b,c>   active agent ids for the dogfood check\n"
            "  --notes24h <n>     min notes in last 24h for the dogfood check\n"
@@ -119,6 +122,8 @@ int main(int argc, char **argv)
             snprintf(cfg.code_path, sizeof cfg.code_path, "%s", argv[++i]);
         else if (!strcmp(a, "--svg") && i + 1 < argc)
             snprintf(cfg.svg_path, sizeof cfg.svg_path, "%s", argv[++i]);
+        else if (!strcmp(a, "--rules") && i + 1 < argc)
+            snprintf(cfg.rules_path, sizeof cfg.rules_path, "%s", argv[++i]);
         else if (!strcmp(a, "--repo") && i + 1 < argc)
             snprintf(cfg.repo, sizeof cfg.repo, "%s", argv[++i]);
         else if (!strcmp(a, "--agents") && i + 1 < argc) {
@@ -149,6 +154,20 @@ int main(int argc, char **argv)
     }
     if (token)
         http_set_token(token);
+
+    /* universal project config: <repo>/.exoqms.json */
+    pcfg_defaults(&cfg.pcfg);
+    int pcrc = pcfg_load(&cfg.pcfg, cfg.repo);
+    if (pcrc == 0)
+        fprintf(stderr, "exoqms: loaded project config %s/.exoqms.json "
+                        "(debt threshold %d)\n", cfg.repo,
+                        cfg.pcfg.debt_threshold);
+    else if (pcrc < 0)
+        fprintf(stderr, "exoqms: warning: malformed project config; using "
+                        "defaults\n");
+    else
+        fprintf(stderr, "exoqms: no %s/.exoqms.json; universal checks use "
+                        "defaults\n", cfg.repo);
 
     int lfd = socket(AF_INET, SOCK_STREAM, 0);
     if (lfd < 0) {
@@ -272,6 +291,7 @@ int main(int argc, char **argv)
     }
     pthread_mutex_unlock(&conn_mu);
     qms_free(&q);
+    pcfg_free(&cfg.pcfg);
     free(agents);
 
     fprintf(stderr, "exoqms: shutdown complete\n");

@@ -171,7 +171,8 @@ chmod +x "$TDIR/stub-svg"
 
 cat > "$TDIR/stub-hang" <<'EOF'
 #!/bin/sh
-sleep 30
+# sleeps 31s: distinct from other swarm pollers' sleep 30
+sleep 31
 exit 0
 EOF
 chmod +x "$TDIR/stub-hang"
@@ -235,7 +236,7 @@ em_set "agent:b2:status" ok
 
 # ============================================================================
 t "ping answers pong" "pong" "$(timeout 5 curl -s $BASE:$QMS_A/ping)"
-t_contains "GET / is self-describing" "exoqms v0.1.0" \
+t_contains "GET / is self-describing" "exoqms v0.2.0" \
     "$(timeout 5 curl -s $BASE:$QMS_A/)"
 
 # ---- objectives (ISO 9001 6.2) ---------------------------------------------
@@ -476,7 +477,7 @@ HANGREP=$(timeout 5 curl -s -H "Authorization: Bearer sekrit" \
 t_contains "hanging ui-audit times out and fails" "timed out" "$HANGREP"
 t "timeout killed child within ~5s budget" 1 "$([ $DUR -le 12 ] && echo 1 || echo 0)"
 sleep 1
-t "no stray sleep 30 left behind" 0 "$(pgrep -f 'sleep 30' | wc -l)"
+t "no stray sleep 31 left behind" 0 "$(pgrep -f 'sleep 31' | wc -l)"
 t "daemon alive after timeout kill" "pong" \
     "$(timeout 5 curl -s -H "Authorization: Bearer sekrit" $BASE:$QMS_B/ping)"
 

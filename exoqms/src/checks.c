@@ -178,9 +178,61 @@ static void check_component_tests(check_ctx_t *ctx, finding_t *f)
     snprintf(manifest, sizeof manifest, "%s/docs/stack.tsv", ctx->cfg->repo);
     comp_t *comps = NULL;
     size_t n = 0;
-    if (manifest_parse(manifest, &comps, &n) != 0) {
-        set_finding(f, "component-tests", R_SKIP,
-                    "stack manifest not found: %s", manifest);
+    int have_manifest = manifest_parse(manifest, &comps, &n) == 0;
+    if (!have_manifest) {
+        /* universal mode: no stack manifest — whole-project test commands
+         * come from .exoqms.json ("test") and run from the repo root */
+        if (ctx->cfg->pcfg.n_test == 0) {
+            set_finding(f, "component-tests", R_SKIP,
+                        "stack manifest not found: %s (no .exoqms.json "
+                        "test commands either)", manifest);
+            return;
+        }
+        size_t ran = 0, passed = 0;
+        buf_t ev = {0};
+        for (size_t i = 0; i < ctx->cfg->pcfg.n_test; i++) {
+            char *argv[4] = {"sh", "-c", ctx->cfg->pcfg.test_cmds[i], NULL};
+            char *out = NULL;
+            size_t olen = 0;
+            char err[256];
+            int rc = run_child(argv, ctx->cfg->repo, CHECK_TIMEOUT_S, &out,
+                               &olen, err, sizeof err);
+            char *summary = NULL;
+            if (out) {
+                char *save = NULL;
+                for (char *l = strtok_r(out, "\n", &save); l;
+                     l = strtok_r(NULL, "\n", &save))
+                    summary = l;
+                if (summary && strlen(summary) > 200)
+                    summary[200] = 0;
+            }
+            ran++;
+            if (rc == 0) {
+                passed++;
+                buf_printf(&ev, "test[%zu]: pass (%s)\n", i,
+                           summary && summary[0] ? summary : "exit 0");
+            } else if (rc == -2) {
+                buf_printf(&ev, "test[%zu]: FAIL timed out (killed)\n", i);
+            } else if (rc == 1) {
+                buf_printf(&ev, "test[%zu]: FAIL exit %s\n", i,
+                           summary && summary[0] ? summary : "nonzero");
+            } else {
+                buf_printf(&ev, "test[%zu]: FAIL %s\n", i, err);
+            }
+            free(out);
+        }
+        if (ran == passed)
+            set_finding(f, "component-tests", R_PASS, "%zu/%zu project test "
+                        "commands passed", passed, ran);
+        else
+            set_finding(f, "component-tests", R_FAIL, "%zu/%zu project test "
+                        "commands passed", passed, ran);
+        if (ev.len + strlen(f->evidence) + 2 < EVID_MAX) {
+            strncat(f->evidence, "\n", EVID_MAX - strlen(f->evidence) - 1);
+            strncat(f->evidence, ev.p ? ev.p : "",
+                    EVID_MAX - strlen(f->evidence) - 1);
+        }
+        buf_free(&ev);
         return;
     }
     if (n == 0) {
@@ -251,6 +303,40 @@ static void check_doc_compliance(check_ctx_t *ctx, finding_t *f)
 {
     char manifest[2048];
     snprintf(manifest, sizeof manifest, "%s/docs/stack.tsv", ctx->cfg->repo);
+    if (access(manifest, F_OK) != 0 && ctx->cfg->pcfg.n_docs > 0) {
+        /* universal mode: no stack manifest — the .exoqms.json "docs"
+         * list names the files every project must ship */
+        size_t missing = 0;
+        buf_t ev = {0};
+        for (size_t i = 0; i < ctx->cfg->pcfg.n_docs; i++) {
+            char doc[2048];
+            snprintf(doc, sizeof doc, "%s/%s", ctx->cfg->repo,
+                     ctx->cfg->pcfg.docs[i]);
+            if (access(doc, F_OK) != 0) {
+                missing++;
+                buf_printf(&ev, "missing %s\n", ctx->cfg->pcfg.docs[i]);
+            } else {
+                buf_printf(&ev, "present %s\n", ctx->cfg->pcfg.docs[i]);
+            }
+        }
+        if (missing == 0)
+            set_finding(f, "doc-compliance", R_PASS,
+                        "%zu/%zu required docs present (.exoqms.json)",
+                        ctx->cfg->pcfg.n_docs - missing,
+                        ctx->cfg->pcfg.n_docs);
+        else
+            set_finding(f, "doc-compliance", R_FAIL,
+                        "%zu/%zu required docs present (.exoqms.json)",
+                        ctx->cfg->pcfg.n_docs - missing,
+                        ctx->cfg->pcfg.n_docs);
+        if (ev.len + strlen(f->evidence) + 2 < EVID_MAX) {
+            strncat(f->evidence, "\n", EVID_MAX - strlen(f->evidence) - 1);
+            strncat(f->evidence, ev.p ? ev.p : "",
+                    EVID_MAX - strlen(f->evidence) - 1);
+        }
+        buf_free(&ev);
+        return;
+    }
     char exo_url[512];
     snprintf(exo_url, sizeof exo_url, "http://%s:%d", ctx->exo->host,
              ctx->exo->port);
@@ -597,71 +683,6 @@ static void json_severity_count(const char *out, int *n, int *maj, int *min)
     }
 }
 
-/* the manifest source dirs (column 2 of docs/stack.tsv) resolved against
- * the repo root, space-separated; NULL when none are usable. This is the
- * default scan target of the code-safety check: the stack audits its own
- * C source. */
-static char *manifest_src_dirs(cfg_t *cfg)
-{
-    char manifest[2048];
-    snprintf(manifest, sizeof manifest, "%s/docs/stack.tsv", cfg->repo);
-    FILE *f = fopen(manifest, "r");
-    if (!f)
-        return NULL;
-    char dirs[16][2048];
-    size_t nd = 0;
-    char line[4096];
-    while (fgets(line, sizeof line, f)) {
-        trim_crlf(line);
-        if (!line[0] || line[0] == '#')
-            continue;
-        char *col[8];
-        int nc = tab_split(line, col, 8);
-        if (nc < 2 || !col[1][0])
-            continue;
-        char resolved[2048];
-        struct stat st;
-        if (col[1][0] == '/')
-            snprintf(resolved, sizeof resolved, "%s", col[1]);
-        else
-            snprintf(resolved, sizeof resolved, "%s/%s", cfg->repo, col[1]);
-        if (stat(resolved, &st) != 0 || !S_ISDIR(st.st_mode))
-            continue;
-        /* the repo root covers every subdir: skip it if others exist,
-           and dedupe identical entries */
-        int dup = 0;
-        for (size_t i = 0; i < nd; i++)
-            if (strcmp(dirs[i], resolved) == 0)
-                dup = 1;
-        if (!dup && nd < 16)
-            snprintf(dirs[nd++], sizeof dirs[0], "%s", resolved);
-    }
-    fclose(f);
-    if (nd == 0)
-        return NULL;
-    buf_t b = {0};
-    for (size_t i = 0; i < nd; i++) {
-        /* the repo root (or its `/.` spelling) covers every subdir:
-           skip it when subdirs are listed */
-        int is_root = strcmp(dirs[i], cfg->repo) == 0;
-        size_t rl = strlen(cfg->repo);
-        if (!is_root && strlen(dirs[i]) == rl + 2 &&
-            strncmp(dirs[i], cfg->repo, rl) == 0 &&
-            strcmp(dirs[i] + rl, "/.") == 0)
-            is_root = 1;
-        if (nd > 1 && is_root)
-            continue;
-        buf_printf(&b, "%s ", dirs[i]);
-    }
-    if (!b.len) {
-        buf_printf(&b, "%s ", cfg->repo);
-    }
-    char *out = b.p;
-    b.p = NULL;
-    buf_free(&b);
-    return out;
-}
-
 /* append up to 200 chars of child output to the evidence line */
 static void finding_snippet(finding_t *f, const char *out, size_t olen)
 {
@@ -684,6 +705,11 @@ static void check_code_safety(check_ctx_t *ctx, finding_t *f)
                     "no code binary configured (--code)");
         return;
     }
+    if (!ctx->cfg->pcfg.rules_codesafety) {
+        set_finding(f, "code-safety", R_SKIP,
+                    "disabled by .exoqms.json (rules.code-safety=false)");
+        return;
+    }
     char *default_dirs = NULL;
     const char *target = ctx->target;
     if (!target || !target[0]) {
@@ -698,13 +724,25 @@ static void check_code_safety(check_ctx_t *ctx, finding_t *f)
         target = default_dirs;
     }
     char *dirs = xstrdup(target);
-    char *argv[16];
+    char *argv[40];
     int n = 0;
     argv[n++] = ctx->cfg->code_path;
     char *save = NULL;
-    for (char *p = strtok_r(dirs, " ", &save); p && n < 14;
+    for (char *p = strtok_r(dirs, " ", &save); p && n < 36;
          p = strtok_r(NULL, " ", &save))
         argv[n++] = p;
+    /* language-adaptive: --lang auto (or the first .exoqms.json
+     * languages[] entry when the project pins one) */
+    const char *lang = "auto";
+    if (ctx->cfg->pcfg.n_languages > 0 && ctx->cfg->pcfg.languages[0][0])
+        lang = ctx->cfg->pcfg.languages[0];
+    argv[n++] = "--lang";
+    argv[n++] = (char *)lang;
+    /* project ignore globs from .exoqms.json */
+    for (size_t i = 0; i < ctx->cfg->pcfg.n_ignore && n < 38; i++) {
+        argv[n++] = "--ignore";
+        argv[n++] = ctx->cfg->pcfg.ignore[i];
+    }
     /* documented exceptions: <repo>/.exoqms-allow (file:line:check lines) */
     char allowpath[2048];
     snprintf(allowpath, sizeof allowpath, "%s/.exoqms-allow",
@@ -748,6 +786,253 @@ static void check_code_safety(check_ctx_t *ctx, finding_t *f)
     free(out);
     free(dirs);
     free(default_dirs);
+}
+
+/* ---------- checks 8/9/10: universal rules engine (debt, hygiene,
+ * secrets) — exoqms-code --rules. Contract with the rule engine: rule
+ * file names are the check ids (`debt-*`, `hygiene-*`, `secrets-*`);
+ * the daemon runs exoqms-code <repo> --rules <dir> --ignore <globs>
+ * --json ONCE per audit (memoized in the ctx) and partitions the
+ * findings by check-id prefix. */
+
+/* where the rule files live: --rules config, else <dirname(code)>/rules,
+ * else <repo>/exoqms/code/rules */
+static const char *rules_dir(cfg_t *cfg, char *buf, size_t cap)
+{
+    struct stat st;
+    if (cfg->rules_path[0]) {
+        if (stat(cfg->rules_path, &st) == 0 && S_ISDIR(st.st_mode)) {
+            snprintf(buf, cap, "%s", cfg->rules_path);
+            return buf;
+        }
+        return NULL;
+    }
+    if (cfg->code_path[0]) {
+        snprintf(buf, cap, "%s", cfg->code_path);
+        char *slash = strrchr(buf, '/');
+        if (slash) {
+            snprintf(slash + 1, cap - (size_t)(slash + 1 - buf), "rules");
+        } else {
+            snprintf(buf, cap, "rules");
+        }
+        if (stat(buf, &st) == 0 && S_ISDIR(st.st_mode))
+            return buf;
+    }
+    snprintf(buf, cap, "%s/exoqms/code/rules", cfg->repo);
+    if (stat(buf, &st) == 0 && S_ISDIR(st.st_mode))
+        return buf;
+    return NULL;
+}
+
+/* run the shared rules scan once per audit; output memoized in ctx.
+ * returns 0 ok (child exit 0 or 1, output in *out), -1 cannot run
+ * (reason in err), -2 timed out, 2+ unexpected child exit */
+static int rules_scan(check_ctx_t *ctx, char **out, size_t *outlen,
+                      char *err, size_t errsz)
+{
+    if (ctx->rules_cached) {
+        *out = ctx->rules_json;
+        *outlen = ctx->rules_len;
+        return 0;
+    }
+    if (!ctx->cfg->code_path[0]) {
+        snprintf(err, errsz, "no code binary configured (--code)");
+        return -1;
+    }
+    char dirbuf[2048];
+    const char *rdir = rules_dir(ctx->cfg, dirbuf, sizeof dirbuf);
+    if (!rdir) {
+        snprintf(err, errsz, "no rules dir (--rules, next to --code, or "
+                 "<repo>/exoqms/code/rules)");
+        return -1;
+    }
+    char *argv[40];
+    int n = 0;
+    argv[n++] = ctx->cfg->code_path;
+    argv[n++] = (char *)ctx->cfg->repo;
+    argv[n++] = "--rules";
+    argv[n++] = (char *)rdir;
+    for (size_t i = 0; i < ctx->cfg->pcfg.n_ignore && n < 36; i++) {
+        argv[n++] = "--ignore";
+        argv[n++] = ctx->cfg->pcfg.ignore[i];
+    }
+    argv[n++] = "--json";
+    argv[n] = NULL;
+    int rc = run_child(argv, ctx->cfg->repo, CHECK_TIMEOUT_S, out, outlen,
+                       err, errsz);
+    ctx->rules_cached = 1;
+    ctx->rules_json = *out;
+    ctx->rules_len = *outlen;
+    if (rc == -2) {
+        snprintf(err, errsz, "rules scan timed out after %ds and was "
+                 "killed", CHECK_TIMEOUT_S);
+        return -2;
+    }
+    if (rc == -1)
+        return -1;
+    return rc;
+}
+
+/* count findings whose check id starts with `prefix`; append one
+ * `file:line` evidence line per finding. When mask=1 the matched line
+ * is never echoed: it is replaced with *** (secrets requirement).
+ * On success *res stays R_PASS and 0 is returned; otherwise *res is
+ * R_SKIP or R_FAIL with the reason in err. */
+static int universal_count(check_ctx_t *ctx, const char *prefix, int mask,
+                           int *count, buf_t *ev, res_t *res, char *err,
+                           size_t errsz)
+{
+    char *out = NULL;
+    size_t olen = 0;
+    int rc = rules_scan(ctx, &out, &olen, err, errsz);
+    if (rc == -2) {
+        *res = R_FAIL;
+        return -1;
+    }
+    if (rc == -1) {
+        *res = R_SKIP;
+        return -1;
+    }
+    if (rc > 1) {
+        *res = R_FAIL;
+        snprintf(err, errsz, "rules engine exited %d: %s", rc,
+                 out && out[0] ? out : "(no output)");
+        return -1;
+    }
+    *count = 0;
+    size_t pos = 0;
+    const char *elem;
+    size_t elen;
+    size_t plen = strlen(prefix);
+    while (json_array_each(out, olen, &pos, &elem, &elen)) {
+        char *ck = json_field(elem, elen, "check");
+        if (!ck)
+            continue;
+        if (strncmp(ck, prefix, plen) != 0) {
+            free(ck);
+            continue;
+        }
+        (*count)++;
+        if (ev) {
+            char *fl = json_field(elem, elen, "file");
+            char *ln = json_field(elem, elen, "line");
+            if (mask)
+                buf_printf(ev, "%s:%s ***\n", fl ? fl : "?",
+                           ln ? ln : "?");
+            else
+                buf_printf(ev, "%s:%s %s\n", fl ? fl : "?", ln ? ln : "?",
+                           ck);
+            free(fl);
+            free(ln);
+        }
+        free(ck);
+    }
+    *res = R_PASS;
+    return 0;
+}
+
+static void finding_append_lines(finding_t *f, const buf_t *ev)
+{
+    if (!ev || !ev->len)
+        return;
+    if (ev->len + strlen(f->evidence) + 2 < EVID_MAX) {
+        strncat(f->evidence, "\n", EVID_MAX - strlen(f->evidence) - 1);
+        strncat(f->evidence, ev->p, EVID_MAX - strlen(f->evidence) - 1);
+    }
+}
+
+static void check_debt(check_ctx_t *ctx, finding_t *f)
+{
+    if (!ctx->cfg->code_path[0]) {
+        set_finding(f, "debt", R_SKIP, "no code binary configured (--code)");
+        return;
+    }
+    if (!ctx->cfg->pcfg.rules_debt) {
+        set_finding(f, "debt", R_SKIP,
+                    "disabled by .exoqms.json (rules.debt=false)");
+        return;
+    }
+    int count = 0;
+    buf_t ev = {0};
+    char err[256] = {0};
+    res_t res = R_PASS;
+    if (universal_count(ctx, "debt-", 0, &count, &ev, &res, err,
+                        sizeof err) != 0) {
+        set_finding(f, "debt", res, "%s", err);
+        buf_free(&ev);
+        return;
+    }
+    int thr = ctx->cfg->pcfg.debt_threshold;
+    if (count <= thr)
+        set_finding(f, "debt", R_PASS,
+                    "%d debt finding(s), threshold %d", count, thr);
+    else
+        set_finding(f, "debt", R_FAIL,
+                    "%d debt finding(s) > threshold %d", count, thr);
+    finding_append_lines(f, &ev);
+    buf_free(&ev);
+}
+
+static void check_hygiene(check_ctx_t *ctx, finding_t *f)
+{
+    if (!ctx->cfg->code_path[0]) {
+        set_finding(f, "hygiene", R_SKIP,
+                    "no code binary configured (--code)");
+        return;
+    }
+    if (!ctx->cfg->pcfg.rules_hygiene) {
+        set_finding(f, "hygiene", R_SKIP,
+                    "disabled by .exoqms.json (rules.hygiene=false)");
+        return;
+    }
+    int count = 0;
+    buf_t ev = {0};
+    char err[256] = {0};
+    res_t res = R_PASS;
+    if (universal_count(ctx, "hygiene-", 0, &count, &ev, &res, err,
+                        sizeof err) != 0) {
+        set_finding(f, "hygiene", res, "%s", err);
+        buf_free(&ev);
+        return;
+    }
+    if (count == 0)
+        set_finding(f, "hygiene", R_PASS, "0 hygiene finding(s)");
+    else
+        set_finding(f, "hygiene", R_FAIL, "%d hygiene finding(s)",
+                    count);
+    finding_append_lines(f, &ev);
+    buf_free(&ev);
+}
+
+static void check_secrets(check_ctx_t *ctx, finding_t *f)
+{
+    if (!ctx->cfg->code_path[0]) {
+        set_finding(f, "secrets", R_SKIP,
+                    "no code binary configured (--code)");
+        return;
+    }
+    if (!ctx->cfg->pcfg.rules_secrets) {
+        set_finding(f, "secrets", R_SKIP,
+                    "disabled by .exoqms.json (rules.secrets=false)");
+        return;
+    }
+    int count = 0;
+    buf_t ev = {0};
+    char err[256] = {0};
+    res_t res = R_PASS;
+    if (universal_count(ctx, "secrets-", 1, &count, &ev, &res, err,
+                        sizeof err) != 0) {
+        set_finding(f, "secrets", res, "%s", err);
+        buf_free(&ev);
+        return;
+    }
+    if (count == 0)
+        set_finding(f, "secrets", R_PASS, "0 secrets finding(s)");
+    else
+        set_finding(f, "secrets", R_FAIL,
+                    "%d secrets finding(s) (matched lines masked)", count);
+    finding_append_lines(f, &ev);
+    buf_free(&ev);
 }
 
 static void check_asset_logic(check_ctx_t *ctx, finding_t *f)
@@ -809,6 +1094,12 @@ int check_run(const char *id, check_ctx_t *ctx, finding_t *f)
         check_metrics(ctx, f);
     else if (!strcmp(id, "code-safety"))
         check_code_safety(ctx, f);
+    else if (!strcmp(id, "debt"))
+        check_debt(ctx, f);
+    else if (!strcmp(id, "hygiene"))
+        check_hygiene(ctx, f);
+    else if (!strcmp(id, "secrets"))
+        check_secrets(ctx, f);
     else if (!strcmp(id, "asset-logic"))
         check_asset_logic(ctx, f);
     else
@@ -816,4 +1107,14 @@ int check_run(const char *id, check_ctx_t *ctx, finding_t *f)
     if (!f->id[0])
         snprintf(f->id, sizeof f->id, "%s", id);
     return 0;
+}
+
+void ctx_cleanup(check_ctx_t *ctx)
+{
+    if (ctx->rules_json) {
+        free(ctx->rules_json);
+        ctx->rules_json = NULL;
+    }
+    ctx->rules_cached = 0;
+    ctx->rules_len = 0;
 }

@@ -241,10 +241,12 @@ static const char *spec_text(void)
         "9001-flavored quality objectives (6.2), monitoring and\n"
         "measurement (9.1), non-conformity + corrective action (8.7,\n"
         "10.2) and ISO 19011 audit programs. Durable state lives in\n"
-        "exomind under `exoqms:*` keys. The audit program runs the seven\n"
+        "exomind under `exoqms:*` keys. The audit program runs the ten\n"
         "checks defined in exoqms/standard.md, invoking exodoc, exoqms-ui,\n"
         "exoqms-code and exoqms-svg as child processes under a 5s hard\n"
-        "timeout each.\n"
+        "timeout each. The universal checks (debt, hygiene, secrets) run\n"
+        "exoqms-code --rules against the rule files and partition the\n"
+        "findings by check-id prefix (`debt-*`, `hygiene-*`, `secrets-*`).\n"
         "\n"
         "All endpoints answer in plain text; add `json=1` to listings\n"
         "for JSON. Errors are `error: <reason>`. Wire format for bodies:\n"
@@ -310,7 +312,15 @@ static const char *spec_text(void)
         "stack's own C source; default target = the manifest source dirs,\n"
         "passes when 0 major findings — minor findings are non-fatal),\n"
         "`asset-logic` (exoqms-svg on the stack's own SVG assets; default\n"
-        "target = the repo root, passes when 0 major findings). Answer:\n"
+        "target = the repo root, passes when 0 major findings). The\n"
+        "universal checks: `debt` (passes when debt-* findings <= the\n"
+        "thresholds.debt from .exoqms.json, default 10), `hygiene`\n"
+        "(passes when 0 hygiene-* findings), `secrets` (passes when 0\n"
+        "secrets-* findings; matched lines are masked to *** in the\n"
+        "evidence). Without a stack manifest the component-tests check\n"
+        "runs the `test` commands from .exoqms.json against the whole\n"
+        "project, and doc-compliance verifies the `docs` file list.\n"
+        "Answer:\n"
         "`ok <audit-id> <score>%`.\n"
         "GET /audit?id= prints the record line plus one findings line per\n"
         "check: `check<TAB>result<TAB>evidence`.\n"
@@ -337,7 +347,7 @@ static const char *spec_text(void)
         "usage: exoqms [--host <addr>] [--port <n>]\n"
         "              [--exomind URL] [--exosched URL] [--exodoc <path>]\n"
         "              [--ui <path>] [--code <path>] [--svg <path>]\n"
-        "              [--repo <dir>] [--agents <a,b,c>]\n"
+        "              [--rules <dir>] [--repo <dir>] [--agents <a,b,c>]\n"
         "              [--notes24h <n>] [--token <t>] [--help] [--version]\n";
 }
 
@@ -347,7 +357,8 @@ static const char *known_check(const char *id)
 {
     static const char *known[] = {"component-tests", "doc-compliance",
                                   "dogfood", "ui-audit", "metrics",
-                                  "code-safety", "asset-logic"};
+                                  "code-safety", "asset-logic", "debt",
+                                  "hygiene", "secrets"};
     for (size_t i = 0; i < sizeof known / sizeof known[0]; i++)
         if (!strcmp(known[i], id))
             return known[i];
@@ -797,9 +808,13 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
                 ids[i] != (char *)"ui-audit" &&
                 ids[i] != (char *)"metrics" &&
                 ids[i] != (char *)"code-safety" &&
-                ids[i] != (char *)"asset-logic")
+                ids[i] != (char *)"asset-logic" &&
+                ids[i] != (char *)"debt" &&
+                ids[i] != (char *)"hygiene" &&
+                ids[i] != (char *)"secrets")
                 free(ids[i]);
         }
+        ctx_cleanup(&ctx);
         int pass = 0, fail = 0, skip = 0;
         buf_t blob = {0};
         for (int i = 0; i < nfinds; i++) {
