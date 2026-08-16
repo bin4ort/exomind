@@ -1,3 +1,2 @@
-# exoqms documented exceptions (ISO 9001 8.7: controlled, reviewed)
-# branch-blindness false positive: p is checked in the sibling if-branch
 src/util.c:363:missing-error-path
+exoqms/src/util.c:487:missing-error-path

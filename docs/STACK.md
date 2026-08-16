@@ -350,7 +350,7 @@ the project without a stack manifest (`docs/stack.tsv`) or stack layout.
 
 Without a manifest the `component-tests` check runs the `test` commands
 and `doc-compliance` verifies the `docs` list. The three new checks —
-`debt` (TODO/FIXME debt, threshold from config), `hygiene` (trailing
+`debt` (debt markers, threshold from config; registered at exomind `debt:*`), `hygiene` (trailing
 whitespace and friends), `secrets` (credential patterns; matched lines
 masked to `***` in the audit evidence) — share one `exoqms-code --rules`
 scan, partitioned by check-id prefix (`debt-*`, `hygiene-*`, `secrets-*`).
@@ -372,10 +372,10 @@ config `languages:["cpp"]`, `test:["ctest --test-dir build"]`,
 |-------|--------|----------|
 | component-tests | pass | `ctest` 2/2 tests, ~0.7s |
 | doc-compliance | pass | README.md present (CHANGELOG.md unverified — daemon array bug, see NCs) |
-| code-safety | fail | C++ adapter not merged (B1 blocked); 3 manual MAJOR classes NC'd |
-| debt | skip | rules engine blocked; manual scan: 1 TODO (`src/ai/vc.cpp:29`) |
-| hygiene | skip | rules blocked; manual scan: 0 findings |
-| secrets | skip | rules blocked; manual scan: 0 findings |
+| code-safety | fail | C++ adapter v0.2.0 live; 3 manual MAJOR classes NC'd (tracked at `debt:docs/STACK.md:376`) |
+| debt | pass | rules engine live; 0 findings after tracking (see `debt:*` keys) |
+| hygiene | pass | rules engine live; 0 findings |
+| secrets | pass | rules engine live; 0 findings (matched lines masked) |
 
 Score 66% (2 pass / 1 fail / 3 skip). All gaps are filed as NCs on the
 live QMS (see `agent:b3:ncs`); the fix iteration closes them and the

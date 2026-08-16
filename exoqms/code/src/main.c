@@ -265,6 +265,7 @@ int main(int argc, char **argv)
     }
 
     size_t nf = 0, n_major = 0;
+    int printed_any = 0;
     if (json)
         printf("[");
 
@@ -290,6 +291,12 @@ int main(int argc, char **argv)
                 char *buf = malloc(CAP + 1);
                 if (buf) {
                     size_t n = fread(buf, 1, CAP, f);
+                    if (n == 0 && ferror(f)) {
+                        /* read error, not EOF: skip the file */
+                        free(buf);
+                        fclose(f);
+                        continue;
+                    }
                     analyze_text_file(path, flang, buf, n,
                                       rules_mode ? &rv : NULL, &out);
                     free(buf);
@@ -317,9 +324,24 @@ int main(int argc, char **argv)
                 continue;
             }
             if (json) {
-                printf("%s{\"check\":\"%s\",\"severity\":\"%s\",\"file\":\"%s\",\"line\":%d,\"col\":%d,\"reason\":\"%s\"}",
-                       k == 0 && fi == 0 ? "" : ",", f->check, f->severity,
-                       path, f->line, f->col, f->reason);
+                printf("%s{\"check\":\"%s\",\"severity\":\"%s\",\"file\":\"%s\",\"line\":%d,\"col\":%d,\"reason\":\"",
+                       printed_any ? "," : "", f->check, f->severity,
+                       path, f->line, f->col);
+                for (const char *r = f->reason; *r; r++) {
+                    unsigned char c = (unsigned char)*r;
+                    if (c == '"' || c == '\\')
+                        printf("\\%c", c);
+                    else if (c == '\n')
+                        printf("\\n");
+                    else if (c == '\t')
+                        printf("\\t");
+                    else if (c < 0x20)
+                        printf("\\u%04x", c);
+                    else
+                        putchar(c);
+                }
+                printf("\"}");
+                printed_any = 1;
             } else {
                 printf("%s %s %s:%d:%d %s\n", f->severity, f->check, path,
                        f->line, f->col, f->reason);

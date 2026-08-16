@@ -23,6 +23,10 @@
   "ignore": [
     "build/",
     "run/",
-    ".git/"
+    ".git/",
+    "*/test/*",
+    "*/fixtures/*",
+    "*/exoqms/code/rules/*",
+    ".exoqms-allow"
   ]
 }

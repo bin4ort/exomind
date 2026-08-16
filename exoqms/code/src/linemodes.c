@@ -133,6 +133,8 @@ static void match_line_rules(const char *path, const char *buf, size_t n,
             eol++;
         size_t len = eol - pos;
         char *line = strndup(buf + pos, len);
+        if (!line)
+            break; /* OOM: stop scanning this file */
         for (size_t i = 0; i < rv->n; i++) {
             rule_t *rl = &rv->r[i];
             if (rl->builtin_noeol)
@@ -174,6 +176,8 @@ static void shell_scan(const char *buf, size_t n, findvec_t *out)
             eol++;
         size_t len = eol - pos;
         char *line = strndup(buf + pos, len);
+        if (!line)
+            break; /* OOM: stop scanning this file */
         if (first && len > 0 && !(line[0] == '#' && len > 1 && line[1] == '!'))
             fnd_add(out, "shell-no-shebang", "minor", 1, 1, "no shebang");
         first = 0;
@@ -209,6 +213,8 @@ static void python_scan(const char *buf, size_t n, findvec_t *out)
             eol++;
         size_t len = eol - pos;
         char *line = strndup(buf + pos, len);
+        if (!line)
+            break; /* OOM: stop scanning this file */
         if (regex_search(line, "^[[:space:]]*except[[:space:]]*:", NULL))
             fnd_add(out, "py-bare-except", "major", (int)ln, 1,
                     "bare except: catches every error silently");
