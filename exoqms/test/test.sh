@@ -49,8 +49,8 @@ cc -O2 -std=c11 -Wall -Wextra -pthread -D_POSIX_C_SOURCE=200809L \
     -o "$TDIR/exomind"
 
 # ---------- fixtures --------------------------------------------------------
-mkdir -p "$TDIR/repo/docs" "$TDIR/repo/okc" "$TDIR/badrepo/docs" \
-         "$TDIR/badrepo/badcomp"
+mkdir -p "$TDIR/repo/docs" "$TDIR/repo/okc" "$TDIR/repo/kit" \
+         "$TDIR/badrepo/docs" "$TDIR/badrepo/badcomp"
 
 cat > "$TDIR/repo/docs/stack.tsv" <<EOF
 # b1 exoqms fixture manifest: name<TAB>dir<TAB>port<TAB>build_cmd<TAB>test_cmd<TAB>version_flag
@@ -152,6 +152,19 @@ exit 0
 EOF
 chmod +x "$TDIR/stub-code"
 
+cat > "$TDIR/stub-kit" <<'EOF'
+#!/bin/sh
+# exokit stub: pass, or a major finding when the flag file exists
+if [ -n "${STUB_KIT_MAJOR_FLAG:-}" ] && [ -f "$STUB_KIT_MAJOR_FLAG" ]; then
+    printf '[{"check":"example-fail","severity":"major","file":"kit/examples.tsv","line":3,"reason":"add expected 5 got 6"}]'
+    exit 1
+fi
+if [ -n "${STUB_KIT_TRACE:-}" ]; then printf '%s\n' "$@" > "$STUB_KIT_TRACE"; fi
+printf 'pass\n'
+exit 0
+EOF
+chmod +x "$TDIR/stub-kit"
+
 cat > "$TDIR/stub-svg" <<'EOF'
 #!/bin/sh
 # exoqms-svg stub: JSON findings with severity major/minor (flag files)
@@ -213,9 +226,11 @@ start_qms() { # name port token extra...
 }
 
 start_qms qmsa $QMS_A "" --repo "$TDIR/repo" --ui "$TDIR/stub-ui" \
-    --code "$TDIR/stub-code" --svg "$TDIR/stub-svg" \
+    --code "$TDIR/stub-code" --kit "$TDIR/stub-kit" --svg "$TDIR/stub-svg" \
     --agents b1,b2 --notes24h 1 \
     ENV:STUB_UI_FLAG="$TDIR/ui-flag" \
+    ENV:STUB_KIT_MAJOR_FLAG="$TDIR/kit-major" \
+    ENV:STUB_KIT_TRACE="$TDIR/kit-trace" \
     ENV:STUB_CODE_MAJOR_FLAG="$TDIR/code-major" \
     ENV:STUB_CODE_MINOR_FLAG="$TDIR/code-minor" \
     ENV:STUB_CODE_TRACE="$TDIR/code-trace" \
@@ -223,7 +238,7 @@ start_qms qmsa $QMS_A "" --repo "$TDIR/repo" --ui "$TDIR/stub-ui" \
     ENV:STUB_SVG_MINOR_FLAG="$TDIR/svg-minor" \
     ENV:STUB_SVG_TRACE="$TDIR/svg-trace"
 start_qms qmsb $QMS_B sekrit --repo "$TDIR/repo" --ui "$TDIR/stub-hang" \
-    --code "$TDIR/stub-hang" --svg "$TDIR/stub-hang" \
+    --code "$TDIR/stub-hang" --kit "$TDIR/stub-hang" --svg "$TDIR/stub-hang" \
     --agents b1,b2 --notes24h 1
 start_qms qmsc $QMS_C "" --repo "$TDIR/badrepo" --ui "$TDIR/stub-ui" \
     --agents b1,b2 --notes24h 100000
@@ -327,8 +342,9 @@ AUDID=$(printf '%s' "$AUD" | awk '{print $2}')
 t_contains "full audit runs, ok + score" "ok $AUDID 100%" "$AUD"
 REP=$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$AUDID")
 fcount() { printf '%s\n' "$REP" | awk -F'\t' -v c="$1" -v r="$2" '$1==c && $2==r {n++} END {print n+0}'; }
-t "audit report has 7 findings" 7 \
-    "$(printf '%s\n' "$REP" | awk -F'\t' '$1=="component-tests"||$1=="doc-compliance"||$1=="dogfood"||$1=="ui-audit"||$1=="metrics"||$1=="code-safety"||$1=="asset-logic" {n++} END {print n+0}')"
+t "audit report has 8 findings" 8 \
+    "$(printf '%s\n' "$REP" | awk -F'\t' '$1=="component-tests"||$1=="doc-compliance"||$1=="dogfood"||$1=="ui-audit"||$1=="metrics"||$1=="code-safety"||$1=="asset-logic"||$1=="kit-fidelity" {n++} END {print n+0}')"
+t "kit-fidelity passed in default program" 1 "$(fcount kit-fidelity pass)"
 t "component-tests passed" 1 "$(fcount component-tests pass)"
 t "doc-compliance passed" 1 "$(fcount doc-compliance pass)"
 t "dogfood passed" 1 "$(fcount dogfood pass)"
@@ -402,6 +418,29 @@ t "code-safety fails on major finding" 1 \
 t_contains "code-safety failure names check" "unchecked-fopen" \
     "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$CS3ID")"
 rm -f "$TDIR/code-major"
+
+# ---- kit-fidelity (exokit) --------------------------------------------------
+KF1=$(timeout 20 curl -s -d $'kit clean\tkit-fidelity' $BASE:$QMS_A/audit)
+KF1ID=$(printf '%s' "$KF1" | awk '{print $2}')
+t "kit-fidelity passes with green ledger" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$KF1ID" | awk -F'\t' '$1=="kit-fidelity" && $2=="pass" {n++} END {print n+0}')"
+t "kit-fidelity invokes audit --kit <repo>/kit" 1 \
+    "$([ -f "$TDIR/kit-trace" ] && grep -q 'audit' "$TDIR/kit-trace" && grep -q -- '--kit' "$TDIR/kit-trace" && grep -q "$TDIR/repo/kit" "$TDIR/kit-trace" && echo 1 || echo 0)"
+
+if [ ! -f "$TDIR/kit-major" ]; then touch "$TDIR/kit-major"; fi
+KF2=$(timeout 20 curl -s -d $'kit dirty\tkit-fidelity' $BASE:$QMS_A/audit)
+KF2ID=$(printf '%s' "$KF2" | awk '{print $2}')
+t "kit-fidelity fails on ledger drift" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$KF2ID" | awk -F'\t' '$1=="kit-fidelity" && $2=="fail" {n++} END {print n+0}')"
+t_contains "kit-fidelity failure names check" "example-fail" \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$KF2ID")"
+rm -f "$TDIR/kit-major"
+
+# kit-fidelity skips when the repo has no kit/ dir
+KF3=$(timeout 20 curl -s -d $'kit absent\tkit-fidelity' $BASE:$QMS_C/audit)
+KF3ID=$(printf '%s' "$KF3" | awk '{print $2}')
+t "kit-fidelity skips without kit/ dir" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_C/audit?id=$KF3ID" | awk -F'\t' '$1=="kit-fidelity" && $2=="skip" {n++} END {print n+0}')"
 
 # ---- asset-logic (exoqms-svg) ----------------------------------------------
 AS1=$(timeout 20 curl -s -d $'svg clean\tasset-logic' $BASE:$QMS_A/audit)
@@ -538,7 +577,7 @@ t "garbage request tolerated" 1 \
     "$(printf '%s' "$GARB" | grep -cE 'HTTP/1.1 (400|404|200)')"
 t "daemon alive after fuzz" "pong" "$(timeout 5 curl -s $BASE:$QMS_A/ping)"
 t_contains "audit json parses" 1 \
-    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$AUDID&json=1" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(1 if d["score"]==100 and len(d["findings"])==7 else 0)')"
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$AUDID&json=1" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(1 if d["score"]==100 and len(d["findings"])==8 else 0)')"
 t_contains "audits json parses" 1 \
     "$(timeout 5 curl -s "$BASE:$QMS_A/audits?json=1" | python3 -c 'import sys,json;print(1 if len(json.load(sys.stdin))>=4 else 0)')"
 

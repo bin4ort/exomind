@@ -120,6 +120,8 @@ int main(int argc, char **argv)
             snprintf(cfg.ui_path, sizeof cfg.ui_path, "%s", argv[++i]);
         else if (!strcmp(a, "--code") && i + 1 < argc)
             snprintf(cfg.code_path, sizeof cfg.code_path, "%s", argv[++i]);
+        else if (!strcmp(a, "--kit") && i + 1 < argc)
+            snprintf(cfg.kit_path, sizeof cfg.kit_path, "%s", argv[++i]);
         else if (!strcmp(a, "--svg") && i + 1 < argc)
             snprintf(cfg.svg_path, sizeof cfg.svg_path, "%s", argv[++i]);
         else if (!strcmp(a, "--rules") && i + 1 < argc)

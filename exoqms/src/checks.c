@@ -1261,6 +1261,60 @@ out_notes:
 
 /* ---------- check: docs-coverage (every manifest component must carry
  * a README and a test command - the merge gate) ---------- */
+static void check_kit_fidelity(check_ctx_t *ctx, finding_t *f)
+{
+    /* the behavioral development kit (exokit): if the repo carries a
+     * kit/, the audit gates on it — every contract entry needs examples
+     * and every example must pass against the current implementation. */
+    if (!ctx->cfg->kit_path[0]) {
+        set_finding(f, "kit-fidelity", R_SKIP,
+                    "no kit binary configured (--kit)");
+        return;
+    }
+    /* a kit is only expected when the repo has one */
+    char kitdir[2048];
+    snprintf(kitdir, sizeof kitdir, "%s/kit", ctx->cfg->repo);
+    struct stat st;
+    if (stat(kitdir, &st) != 0) {
+        set_finding(f, "kit-fidelity", R_SKIP,
+                    "no kit/ directory in the repo (nothing to verify)");
+        return;
+    }
+    char *argv[16];
+    int n = 0;
+    argv[n++] = ctx->cfg->kit_path;
+    argv[n++] = "audit";
+    argv[n++] = "--kit";
+    argv[n++] = kitdir;
+    argv[n] = NULL;
+    char *out = NULL;
+    size_t olen = 0;
+    char err[256];
+    int rc = run_child(argv, ctx->cfg->repo, CHECK_TIMEOUT_S, &out, &olen,
+                       err, sizeof err);
+    int nf = 0, maj = 0, min = 0;
+    json_severity_count(out, &nf, &maj, &min);
+    if (rc == -2) {
+        set_finding(f, "kit-fidelity", R_FAIL,
+                    "timed out after %ds auditing the kit", CHECK_TIMEOUT_S);
+    } else if (rc == -1) {
+        set_finding(f, "kit-fidelity", R_FAIL, "%s", err);
+    } else if (maj > 0) {
+        set_finding(f, "kit-fidelity", R_FAIL,
+                    "%d major finding(s) in the kit ledger", maj);
+        finding_snippet(f, out, olen);
+    } else if (rc != 0) {
+        set_finding(f, "kit-fidelity", R_FAIL,
+                    "kit audit exit %d on %s: %s", rc, kitdir,
+                    out && out[0] ? out : "(no output)");
+    } else {
+        set_finding(f, "kit-fidelity", R_PASS,
+                    "kit ledger green: every contract entry exemplified and "
+                    "verified");
+    }
+    free(out);
+}
+
 static void check_docs_coverage(check_ctx_t *ctx, finding_t *f)
 {
     char manifest[2048];
@@ -1345,6 +1399,8 @@ int check_run(const char *id, check_ctx_t *ctx, finding_t *f)
         check_agent_health(ctx, f);
     else if (!strcmp(id, "docs-coverage"))
         check_docs_coverage(ctx, f);
+    else if (!strcmp(id, "kit-fidelity"))
+        check_kit_fidelity(ctx, f);
     else
         set_finding(f, id, R_SKIP, "unknown check id");
     if (!f->id[0])

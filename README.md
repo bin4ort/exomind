@@ -19,6 +19,7 @@ others run, audited by the quality system, and dogfooded in the process.
 | 7657 | **exoqms** | universal Quality Management System: objectives, NCs, audit programs, trends, field modules for any language | [exoqms/](exoqms/README.md) |
 | 7658 | **exocrawl** | AI-native research: independent private metasearch, token-efficient HTML→text extraction, concurrent scraping | [exocrawl/](exocrawl/README.md) |
 | 7659 | **exocontext** | context continuity: bounded recency-ranked digest of an agent's state and notes | [exocontext/](exocontext/README.md) |
+| — | **exokit** | behavioral development kit: every software carries its own contract + ledger + runner shims; translate by regenerating from the contract | [exokit/](exokit/README.md) |
 
 All components: C11, POSIX, zero compile dependencies (TLS in exocrawl
 uses the ubiquitous `curl` binary). Every API is plain text and
@@ -30,7 +31,7 @@ Zero dependencies: a C11 compiler and POSIX.
 
 ```sh
 make            # produces build/exomind
-make exosched exoflow exodoc exoqms exocrawl exocontext
+make exosched exoflow exodoc exoqms exocrawl exocontext exokit
 make test test-exosched test-exoflow test-exodoc test-exoqms test-exocrawl
 ```
 
@@ -157,6 +158,11 @@ the stack itself holding the state:
 5. **Research** (exocrawl) provides external knowledge: private
    metasearch and clean-text extraction, feeding standards and findings
    back into the memory.
+6. **The kit** (exokit) makes every software its own SDK: the software
+   carries a behavioral contract (function inventory + examples ledger +
+   runner shims), and any development — especially language translation —
+   regenerates from the contract instead of porting code. The QMS gates
+   on it (`kit-fidelity`).
 
 ## Knowledge corpus
 

@@ -359,7 +359,7 @@ static const char *known_check(const char *id)
                                   "dogfood", "ui-audit", "metrics",
                                   "code-safety", "asset-logic", "debt",
                                   "hygiene", "secrets", "agent-health",
-                                  "docs-coverage"};
+                                  "docs-coverage", "kit-fidelity"};
     for (size_t i = 0; i < sizeof known / sizeof known[0]; i++)
         if (!strcmp(known[i], id))
             return known[i];
@@ -769,6 +769,7 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
             ids[nids++] = (char *)"metrics";
             ids[nids++] = (char *)"code-safety";
             ids[nids++] = (char *)"asset-logic";
+            ids[nids++] = (char *)"kit-fidelity";
         } else {
             char *copy = xstrdup(criteria);
             char *save = NULL;
@@ -812,7 +813,8 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
                 ids[i] != (char *)"asset-logic" &&
                 ids[i] != (char *)"debt" &&
                 ids[i] != (char *)"hygiene" &&
-                ids[i] != (char *)"secrets")
+                ids[i] != (char *)"secrets" &&
+                ids[i] != (char *)"kit-fidelity")
                 free(ids[i]);
         }
         ctx_cleanup(&ctx);

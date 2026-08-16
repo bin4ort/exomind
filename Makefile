@@ -44,6 +44,12 @@ exocontext:
 
 test-exocontext: all
 	$(MAKE) -C exocontext test
+
+exokit:
+	$(MAKE) -C exokit
+
+test-exokit: all
+	$(MAKE) -C exokit test
 	@if [ -f exoflow/test/test-integration.sh ]; then \
 		bash exoflow/test/test-integration.sh; \
 	fi
@@ -179,4 +185,4 @@ test-exodoc: all
 		fi; \
 	fi
 
-.PHONY: all test clean exosched test-exosched exoflow test-exoflow exodoc test-exodoc exoqms qms-modules test-exoqms audit-stack qms-universal-test exocrawl test-exocrawl exocontext test-exocontext
+.PHONY: all test clean exosched test-exosched exoflow test-exoflow exodoc test-exodoc exoqms qms-modules test-exoqms audit-stack qms-universal-test exocrawl test-exocrawl exocontext test-exocontext exokit test-exokit
