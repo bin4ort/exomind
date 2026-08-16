@@ -465,9 +465,9 @@ static void handle_spec(int fd)
     http_out(fd, 200, "text/plain; charset=utf-8",
              "exocrawl v0.1.0 - AI-native web research daemon\n"
              "plain text, lowercase ok/error replies, token-efficient\n\n"
-             "GET /search?q=<query>[&n=10][&engines=searxng,ddg][&json=1]\n"
-             "  private metasearch (SearXNG instances + DuckDuckGo HTML,\n"
-             "  rotated, no accounts/cookies) -> rank<TAB>title<TAB>url<TAB>snippet\n"
+             "GET /search?q=<query>[&n=10][&engines=ddg,mojeek,marginalia,bing,wikipedia|all][&json=1]\n"
+             "  independent private metasearch (own adapters, no third-party\n"
+             "  aggregator; ads filtered, rotated, no accounts/cookies)\n"
              "GET /fetch?url=<http(s) url>[&max=8000][&links=1][&images=1]\n"
              "  HTML -> clean plain text (boilerplate removed, headings as\n"
              "  ##, links/images appended as sections when requested)\n"
@@ -585,6 +585,7 @@ int main(int argc, char **argv)
     g_cfg.port = 7658;
     g_cfg.concurrency = 16;
     g_cfg.pace_ms = 200;
+    net_init(&g_net);
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--port") && i + 1 < argc)
             g_cfg.port = atoi(argv[++i]);
@@ -598,6 +599,8 @@ int main(int argc, char **argv)
             g_cfg.use_cache = 1, g_cfg.exomind = argv[++i];
         else if (!strcmp(argv[i], "--proxy") && i + 1 < argc)
             g_net.proxy = argv[++i];
+        else if (!strcmp(argv[i], "--engine-base") && i + 1 < argc)
+            g_net.engine_base = argv[++i];
         else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             usage(argv[0]);
             return 0;
@@ -607,7 +610,6 @@ int main(int argc, char **argv)
             return 1;
         }
     }
-    net_init(&g_net);
     if (pool_init(&g_pool, g_cfg.concurrency) != 0) {
         fprintf(stderr, "exocrawl: pool init failed\n");
         return 1;

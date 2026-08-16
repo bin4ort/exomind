@@ -14,9 +14,10 @@ rotation.
 - **Token efficiency** — `/fetch` strips nav/ads/footers/cookie banners;
   headings become `# `, lists `- `, code stays verbatim. A 50 KB HTML page
   becomes a few hundred tokens.
-- **Private search** — SearXNG JSON API across rotated instances plus a
-  DuckDuckGo HTML fallback; sponsored results are filtered out. No API
-  keys, no accounts, no cookies.
+- **Independent private search** — five engines fetched directly and parsed
+  by our own adapters: DuckDuckGo HTML, Mojeek, Marginalia, Bing, and the
+  Wikipedia opensearch API. No third-party aggregator (no SearXNG), no API
+  keys, no accounts, no cookies; sponsored results filtered per engine.
 - **Broad scraping** — `/scrape` fetches many URLs concurrently (worker
   pool) with per-host pacing (default 150 ms) and rotating identities;
   403/429 gets bounded retries with a different identity.
@@ -43,7 +44,7 @@ Self-describing: `GET /` prints the full spec.
 
 | method | path | purpose |
 |--------|------|---------|
-| GET | `/search?q=...&n=10&engines=searxng,ddg&json=1` | private metasearch → `rank<TAB>title<TAB>url<TAB>snippet` |
+| GET | `/search?q=...&n=10&engines=ddg,mojeek,marginalia,bing,wikipedia\|all&json=1` | independent metasearch → `rank<TAB>title<TAB>url<TAB>snippet` |
 | GET | `/fetch?url=...&max=8000&links=1&images=1` | HTML → clean plain text (+ `## links` / `## images` sections) |
 | POST | `/scrape` | one URL per line `[TAB max]`, concurrent fetch-all |
 | GET | `/stats` | counters (fetches, errors, cache_hits, bytes) |
@@ -66,14 +67,16 @@ enforces Bearer auth.
 
 - No JavaScript execution — single-page apps yield their static content only.
 - No browser-grade CSS/layout: extraction is content-order based.
-- Public SearXNG instances can be rate-limited or down; the engine list is
-  rotated and configurable (edit `src/search.c` or extend the flag set).
+- Engines can be rate-limited or captcha-gated (Bing especially); UA
+  rotation and bounded retries mitigate this, and the engine list is
+  configurable (edit the table in `src/search.c`).
 - `robots.txt` is not consulted by default (research mode); rate limits and
   pacing are the politeness mechanism.
 
 ## Tests
 
-`make test-exocrawl` — hermetic: local mock web serves a test page, fake
-SearXNG JSON and DDG HTML; asserts extraction (boilerplate removal,
-headings, links, images, entities, pre verbatim), /fetch caps, /scrape
-concurrency, 403 retry, stats counters, auth. ASAN-clean.
+`make test-exocrawl` — hermetic: local mock web serves fixtures for all
+five engines plus a test page; asserts extraction (boilerplate removal,
+headings, links, images, entities, pre verbatim), every engine's parser,
+ad filtering, redirect decoding, /fetch caps, /scrape concurrency, 403
+retry, stats counters, auth. ASAN-clean.

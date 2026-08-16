@@ -14,20 +14,21 @@ fi
 TDIR=$(mktemp -d /tmp/opencode/exocrawl-XXXXXX)
 trap 'pkill -f "mock_web.py" 2>/dev/null; rm -rf "$TDIR"' EXIT
 
-# kill any stale daemon squatting on the test port
-OLDPID=$(ss -tlnp 2>/dev/null | grep ":$CRL " | grep -oP 'pid=\K[0-9]+' | head -1)
-[ -n "$OLDPID" ] && kill $OLDPID 2>/dev/null
 
 PORT=$((18500 + RANDOM % 500))
 CRL=7777
 BASE="http://127.0.0.1:$CRL"
 WEB="http://127.0.0.1:$PORT"
 
+# kill any stale daemon squatting on the test port
+OLDPID=$(ss -tlnp 2>/dev/null | grep ":$CRL " | grep -oP 'pid=\K[0-9]+' | head -1)
+[ -n "$OLDPID" ] && kill $OLDPID 2>/dev/null
+
 python3 test/mock_web.py $PORT > /dev/null 2>&1 &
 MOCK_PID=$!
 sleep 1
 
-setsid nohup "$BIN" --port $CRL --concurrency 8 --pace-ms 0 \
+setsid nohup "$BIN" --port $CRL --concurrency 8 --pace-ms 0 --engine-base "http://127.0.0.1:$PORT" \
     > "$TDIR/crawl.log" 2>&1 < /dev/null &
 CRL_PID=$!
 sleep 1
@@ -80,6 +81,18 @@ S=$(timeout 60 curl -s -X POST $BASE/scrape --data-binary "$BODY")
 check "scrape: ok count" "$(echo "$S" | head -1 | grep -q '^ok 4$' && echo 0 || echo 1)" "$S"
 check "scrape: 3 fetched" "$([ "$(echo "$S" | grep -c ' ok$')" -eq 3 ] && echo 0 || echo 1)" ""
 check "scrape: 1 error" "$([ "$(echo "$S" | grep -c 'error: http 403')" -eq 1 ] && echo 0 || echo 1)" "$S"
+
+# =============== independent search engines =============================
+SE=$(timeout 30 curl -s "$BASE/search?q=test&n=8&engines=ddg,mojeek,marginalia,bing,wikipedia")
+check "search: ddg result" "$(echo "$SE" | grep -q 'DDG Result Title' && echo 0 || echo 1)" "$SE"
+check "search: ddg url decoded" "$(echo "$SE" | grep -q 'example.org/page' && echo 0 || echo 1)" ""
+check "search: ddg ad filtered" "$(echo "$SE" | grep -q 'Sponsored Ad' && echo 1 || echo 0)" ""
+check "search: mojeek result" "$(echo "$SE" | grep -q 'Mojeek One' && echo 0 || echo 1)" ""
+check "search: marginalia result" "$(echo "$SE" | grep -q 'Marginalia X' && echo 0 || echo 1)" ""
+check "search: bing result" "$(echo "$SE" | grep -q 'Bing B' && echo 0 || echo 1)" ""
+check "search: wikipedia result" "$(echo "$SE" | grep -q 'Wiki One' && echo 0 || echo 1)" ""
+SE2=$(timeout 30 curl -s "$BASE/search?q=test&n=2&engines=mojeek")
+check "search: engine filter" "$(echo "$SE2" | grep -q 'Mojeek One' && ! echo "$SE2" | grep -q 'DDG Result' && echo 0 || echo 1)" "$SE2"
 
 # =============== stats ==================================================
 ST=$(timeout 5 curl -s $BASE/stats)

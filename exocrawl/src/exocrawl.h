@@ -54,6 +54,7 @@ typedef struct {
     size_t nuas;
     size_t ua_idx;
     const char *proxy;   /* optional HTTP proxy */
+    const char *engine_base; /* test override: prefix for engine urls */
     int timeout_ms;
 } net_t;
 

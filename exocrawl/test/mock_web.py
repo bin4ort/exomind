@@ -30,6 +30,7 @@ SEARXNG = json.dumps({
 
 DDG = """<html><body>
 <div class="result"><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Fpage&amp;rut=x">DDG Result Title</a><a class="result__snippet" href="x">DDG snippet text here</a></div>
+<div class="result"><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fad.example%2Fsponsored&amp;rut=y">Sponsored Ad</a><a class="result__snippet" href="x">buy now</a></div>
 </body></html>"""
 
 class H(http.server.BaseHTTPRequestHandler):
@@ -37,12 +38,29 @@ class H(http.server.BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if "/html/" in self.path:
+        if self.path.startswith("/ddg/"):
+            body = DDG.encode()
+        elif "/html/" in self.path:
             body = PAGE.encode()
+        elif self.path.startswith("/mojeek/"):
+            body = ('<html><body><ul class="results-standard">'
+                    '<li class="result"><a class="title" href="https://mojeek.example/one">Mojeek One</a>'
+                    '<p class="s">Mojeek snippet one</p></li>'
+                    '</ul></body></html>').encode()
+        elif self.path.startswith("/marginalia/"):
+            body = ('<html><body><ul><li class="results-item">'
+                    '<a class="title" href="https://marg.example/x">Marginalia X</a>'
+                    '<div class="description">Marginalia snippet x</div></li>'
+                    '</ul></body></html>').encode()
+        elif self.path.startswith("/bing/"):
+            body = ('<html><body><ol id="b_results"><li class="b_algo">'
+                    '<h2><a href="https://bing.example/b">Bing B</a></h2>'
+                    '<p>Bing snippet b</p></li></ol></body></html>').encode()
+        elif self.path.startswith("/wikipedia/"):
+            body = ('["query",["Wiki One","Wiki Two"],["Wiki description one","Wiki description two"],'
+                    '["https://wiki.example/One","https://wiki.example/Two"]]').encode()
         elif "/search?" in self.path:
             body = SEARXNG.encode()
-        elif "/ddg/" in self.path:
-            body = DDG.encode()
         elif self.path.startswith("/deny"):
             self.send_response(403)
             self.end_headers()
