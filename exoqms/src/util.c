@@ -485,8 +485,24 @@ char *json_field(const char *json, size_t len, const char *field)
             }
             /* raw scalar or array/object: copy the token */
             const char *s = p;
-            while (p < end && *p != ',' && *p != '}' && *p != ']')
-                p++;
+            if (*p == '[' || *p == '{') {
+                int depth = 0;
+                while (p < end) {
+                    if (*p == '[' || *p == '{')
+                        depth++;
+                    else if (*p == ']' || *p == '}') {
+                        depth--;
+                        if (depth == 0) {
+                            p++;
+                            break;
+                        }
+                    }
+                    p++;
+                }
+            } else {
+                while (p < end && *p != ',' && *p != '}' && *p != ']')
+                    p++;
+            }
             return xstrndup(s, (size_t)(p - s));
         }
         p = json_skip_value(p, end);

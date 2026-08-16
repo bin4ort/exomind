@@ -89,7 +89,7 @@ mkdir -p "$TDIR/rules"
 printf 'minor\nTODO|FIXME\n' > "$TDIR/rules/debt-x"
 printf 'major\nAKIA[0-9A-Z]{16}\n' > "$TDIR/rules/secrets-x"
 printf 'minor\n.\n' > "$TDIR/rules/hygiene-no-eol"
-printf 'int main(void) {\n    // later\n    char *k = "AKIAEXAMPLE0000000000000000";\n    return 0;\n}' > "$TDIR/rule.c"
+printf 'int main(void) {\n    // TODO later\n    char *k = "AKIAIOSFODNN7EXAMPLE";\n    return 0;\n}' > "$TDIR/rule.c"
 timeout 30 "$BIN" "$TDIR/rule.c" --rules "$TDIR/rules" > "$TDIR/rl.out" 2>/dev/null
 check "rules: debt fires" "$(grep -q ' debt-x ' "$TDIR/rl.out" && echo 0 || echo 1)" ""
 check "rules: secrets fires" "$(grep -q ' secrets-x ' "$TDIR/rl.out" && echo 0 || echo 1)" ""
