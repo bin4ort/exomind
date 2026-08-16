@@ -32,6 +32,12 @@ exoflow:
 
 test-exoflow: all
 	$(MAKE) -C exoflow test
+
+exocrawl:
+	$(MAKE) -C exocrawl
+
+test-exocrawl: all
+	$(MAKE) -C exocrawl test
 	@if [ -f exoflow/test/test-integration.sh ]; then \
 		bash exoflow/test/test-integration.sh; \
 	fi
@@ -167,4 +173,4 @@ test-exodoc: all
 		fi; \
 	fi
 
-.PHONY: all test clean exosched test-exosched exoflow test-exoflow exodoc test-exodoc exoqms qms-modules test-exoqms audit-stack qms-universal-test
+.PHONY: all test clean exosched test-exosched exoflow test-exoflow exodoc test-exodoc exoqms qms-modules test-exoqms audit-stack qms-universal-test exocrawl test-exocrawl

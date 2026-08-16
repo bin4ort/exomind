@@ -8,3 +8,4 @@ exosched	exosched	7655
 exoflow	exoflow	7656
 exoqms	exoqms	7657		./build/exoqms --version
 exodoc	exodoc			make test
+exocrawl	exocrawl	7658		make test
