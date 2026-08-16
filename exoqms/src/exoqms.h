@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <pthread.h>
 
-#define EXOQMS_VERSION "0.1.0"
+#define EXOQMS_VERSION "0.2.0"
 #define OBJ_KEY_PREFIX "exoqms:obj:"
 #define NC_KEY_PREFIX "exoqms:nc:"
 #define AUDIT_KEY_PREFIX "exoqms:audit:"
@@ -31,6 +31,12 @@ char *unesc_line(const char *s);
 char *json_escape(const char *s, size_t n);
 void trim_crlf(char *s);
 int tab_split(char *s, char **f, int maxf);
+
+/* ---- minimal JSON (pattern: exomind src/util.c) ---- */
+char *json_field(const char *json, size_t len, const char *field);
+int json_array_each(const char *json, size_t len, size_t *pos,
+                    const char **elem, size_t *elen);
+char **json_arr_strings(const char *elem, size_t elen, size_t *n);
 
 typedef struct {
     char *p;
@@ -133,15 +139,34 @@ typedef struct {
     char evidence[4096];
 } finding_t;
 
+/* ---- project.c : <repo>/.exoqms.json universal project config ---- */
+typedef struct {
+    int rules_debt;       /* 1 = enabled (default) */
+    int rules_hygiene;
+    int rules_secrets;
+    int rules_codesafety;
+    int debt_threshold;   /* default 10 */
+    char **test_cmds;     /* whole-project test commands (no manifest mode) */
+    size_t n_test;
+    char **docs;          /* required docs (no manifest doc-compliance) */
+    size_t n_docs;
+    char **ignore;        /* ignore globs passed to the analysis tools */
+    size_t n_ignore;
+    char **languages;     /* language override for code-safety */
+    size_t n_languages;
+} pcfg_t;
+
 typedef struct cfg {
     char exodoc_path[1024];
     char ui_path[1024];
     char code_path[1024];
     char svg_path[1024];
+    char rules_path[1024];
     char repo[1024];
     char agents[1024];
     int notes24h;
     char exosched_url[256];
+    pcfg_t pcfg;
 } cfg_t;
 
 typedef struct {
@@ -149,15 +174,26 @@ typedef struct {
     exo_t *exo;
     const char *target; /* ui-audit target, may be NULL */
     const char *agents; /* dogfood agent override, may be NULL */
+    /* memo for the shared exoqms-code --rules scan (debt/hygiene/secrets) */
+    char *rules_json;
+    size_t rules_len;
+    int rules_cached;
 } check_ctx_t;
 
 int check_run(const char *id, check_ctx_t *ctx, finding_t *f);
 int run_child(char *const argv[], const char *cwd, long timeout_s,
               char **out, size_t *outlen, char *err, size_t errsz);
 void cfg_defaults(cfg_t *cfg);
+void ctx_cleanup(check_ctx_t *ctx);
 int trend_values(exo_t *e, int64_t **vals, int *n, char **list, size_t *llen);
 const char *trend_verdict(int64_t *vals, int n, int *flag);
 
+void pcfg_defaults(pcfg_t *p);
+void pcfg_free(pcfg_t *p);
+/* load <repo>/.exoqms.json into *p (defaults first). Returns 0 on
+ * success, 1 when absent, -1 when malformed (defaults kept, warned to
+ * stderr). Never crashes on malformed input. */
+int pcfg_load(pcfg_t *p, const char *repo);
 /* ---- http.c : the API ---- */
 void http_set_token(const char *tok);
 int http_handle_conn(int fd, exo_t *e, cfg_t *cfg, qms_t *q);

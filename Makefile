@@ -96,6 +96,41 @@ audit-stack: all exoqms
 	timeout 30 curl -s "$$URL/audit?id=$$ID"; \
 	if [ -n "$$DAEMON_PID" ]; then kill "$$DAEMON_PID" 2>/dev/null || true; fi
 
+# Universal QMS audit of the stack's own repo (iter7): the .exoqms.json
+# config adds the three universal rules checks (debt, hygiene, secrets)
+# on top of the classic seven, with the code-safety scan language-adaptive
+# (--lang auto). Runs on a private daemon port 7691 against the SHARED
+# exomind 7654 so the audit record and any NCs live in the swarm's memory.
+# Kills only the daemon it started; never touches 7654/7655/7656/7657.
+qms-universal-test: all exoqms
+	@echo "== universal QMS audit of the stack repo (.exoqms.json) =="; \
+	URL="http://127.0.0.1:7691"; DAEMON_PID=""; \
+	if ! timeout 3 curl -s -m 2 "$$URL/ping" | grep -q pong; then \
+		echo "starting exoqms on 7691 (state backend: shared exomind 7654)"; \
+		setsid nohup ./exoqms/build/exoqms --port 7691 \
+			--exomind http://127.0.0.1:7654 \
+			--exosched http://127.0.0.1:7655 \
+			--exodoc $(CURDIR)/exodoc/build/exodoc \
+			--ui $(CURDIR)/exoqms/ui/build/exoqms-ui \
+			--code $(CURDIR)/exoqms/code/build/exoqms-code \
+			--svg $(CURDIR)/exoqms/svg/build/exoqms-svg \
+			--repo $(CURDIR) --agents a,b,b1,b2,b3,e \
+			</dev/null >/tmp/exoqms-universal-stack.log 2>&1 & \
+		DAEMON_PID=$$!; \
+		for i in 1 2 3 4 5; do \
+			timeout 3 curl -s -m 2 "$$URL/ping" | grep -q pong && break; \
+			sleep 1; \
+		done; \
+	fi; \
+	RESP=$$(timeout 90 curl -s -X POST "$$URL/audit?target=$(CURDIR)" \
+		--data-binary "$$(printf 'audit-stack-universal\tcomponent-tests,doc-compliance,dogfood,ui-audit,metrics,code-safety,debt,hygiene,secrets,asset-logic\ta,b,b1,b2,b3,e')"); \
+	echo "$$RESP"; \
+	echo "score line: $$(echo "$$RESP" | grep -oE '[0-9]+%')"; \
+	ID=$$(echo "$$RESP" | awk '{print $$2}'); \
+	echo "findings:"; \
+	timeout 30 curl -s "$$URL/audit?id=$$ID"; \
+	if [ -n "$$DAEMON_PID" ]; then kill "$$DAEMON_PID" 2>/dev/null || true; fi
+
 clean:
 	rm -rf build
 
@@ -132,4 +167,4 @@ test-exodoc: all
 		fi; \
 	fi
 
-.PHONY: all test clean exosched test-exosched exoflow test-exoflow exodoc test-exodoc exoqms qms-modules test-exoqms audit-stack
+.PHONY: all test clean exosched test-exosched exoflow test-exoflow exodoc test-exodoc exoqms qms-modules test-exoqms audit-stack qms-universal-test

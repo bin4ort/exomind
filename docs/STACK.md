@@ -13,7 +13,7 @@ each directory's README; this page is the map.
 | [exomind](../README.md) | 0.3.0 | 7654 | durable long-term memory |
 | [exosched](../exosched/README.md) | 0.2.0 | 7655 | scheduled reminders + push |
 | [exoflow](../exoflow/README.md) | 0.1.0 | 7656 | dependency-graph orchestrator |
-| [exoqms](../exoqms/README.md) | 0.1.0 | 7657 | quality management system |
+| [exoqms](../exoqms/README.md) | 0.2.0 | 7657 | quality management system |
 | [exodoc](../exodoc/README.md) | 0.1.0 | — (batch) | documentation auditor |
 
 ## Why this stack exists: the AI-native philosophy
@@ -321,3 +321,62 @@ local binary exists, those checks degrade to `SKIP` — the gate then holds
 on the doc checks alone (purpose, sections, version token, honesty), so CI
 can run without a live stack, and a `FAIL` in that degraded state triggers
 an offline cross-check audit before the build is failed.
+
+## Universal QMS (iter7)
+
+The QMS went universal: any project, any language. A project pins its
+quality contract in a root `.exoqms.json`; the daemon reads it and audits
+the project without a stack manifest (`docs/stack.tsv`) or stack layout.
+
+| key | meaning | default |
+|-----|---------|---------|
+| `languages` | `["auto"]` detects by extension, or pin e.g. `["cpp"]` | auto |
+| `rules` | booleans: `debt`, `hygiene`, `secrets`, `code-safety` | all on |
+| `thresholds.debt` | max `debt-*` findings before the check fails | 10 |
+| `test` | whole-project test commands (run from repo root, 5s budget each) | none → skip |
+| `docs` | required doc files (`doc-compliance` in universal mode) | none → manifest mode |
+| `ignore` | globs passed to the analyzer scans (`build/`, `run/`, ...) | none |
+
+```json
+{
+  "languages": ["auto"],
+  "rules": {"debt": true, "hygiene": true, "secrets": true, "code-safety": true},
+  "thresholds": {"debt": 10},
+  "test": ["make test", "make -C exosched test"],
+  "docs": ["README.md", "docs/STACK.md"],
+  "ignore": ["build/", "run/", ".git/"]
+}
+```
+
+Without a manifest the `component-tests` check runs the `test` commands
+and `doc-compliance` verifies the `docs` list. The three new checks —
+`debt` (TODO/FIXME debt, threshold from config), `hygiene` (trailing
+whitespace and friends), `secrets` (credential patterns; matched lines
+masked to `***` in the audit evidence) — share one `exoqms-code --rules`
+scan, partitioned by check-id prefix (`debt-*`, `hygiene-*`, `secrets-*`).
+`code-safety` runs the analyzer with `--lang` from `languages` and the
+project `ignore` globs.
+
+Run the stack's own universal self-audit with `make qms-universal-test`
+(private daemon on 7691, shared exomind 7654 backend, ten-check audit).
+
+### first foreign project: OCS-Studio pre-audit
+
+OCS-Studio (C++20/Qt6 voice-transformation app) is the first project
+outside the stack to be audited (mirror at `/tmp/opencode/ocs-qms`,
+config `languages:["cpp"]`, `test:["ctest --test-dir build"]`,
+`docs:["README.md","CHANGELOG.md"]`, `ignore:["build/","install/",
+"assets/"]`). Pre-audit results (reproducible across two runs):
+
+| check | result | evidence |
+|-------|--------|----------|
+| component-tests | pass | `ctest` 2/2 tests, ~0.7s |
+| doc-compliance | pass | README.md present (CHANGELOG.md unverified — daemon array bug, see NCs) |
+| code-safety | fail | C++ adapter not merged (B1 blocked); 3 manual MAJOR classes NC'd |
+| debt | skip | rules engine blocked; manual scan: 1 TODO (`src/ai/vc.cpp:29`) |
+| hygiene | skip | rules blocked; manual scan: 0 findings |
+| secrets | skip | rules blocked; manual scan: 0 findings |
+
+Score 66% (2 pass / 1 fail / 3 skip). All gaps are filed as NCs on the
+live QMS (see `agent:b3:ncs`); the fix iteration closes them and the
+audit becomes the project's own quality gate.

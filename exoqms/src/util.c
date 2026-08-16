@@ -267,3 +267,294 @@ int tab_split(char *s, char **f, int maxf)
     }
     return n;
 }
+
+/* ---- minimal JSON (pattern: exomind src/util.c) ---- */
+
+static int json_hexval(int c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static const char *json_skip_ws(const char *p, const char *end)
+{
+    while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'))
+        p++;
+    return p;
+}
+
+static int json_utf8_encode(uint32_t cp, char out[4])
+{
+    if (cp < 0x80) {
+        out[0] = (char)cp;
+        return 1;
+    }
+    if (cp < 0x800) {
+        out[0] = (char)(0xC0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        out[0] = (char)(0xE0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    out[0] = (char)(0xF0 | (cp >> 18));
+    out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (cp & 0x3F));
+    return 4;
+}
+
+/* p points at the opening quote; returns pointer past closing quote */
+static const char *json_parse_string(const char *p, const char *end, char **out)
+{
+    size_t cap = 32, len = 0;
+    char *buf = xmalloc(cap);
+    p++;
+    while (p < end) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '"') {
+            p++;
+            break;
+        }
+        int esc = 0;
+        if (c == '\\') {
+            esc = 1;
+            p++;
+            if (p >= end)
+                goto fail;
+            char e = *p++;
+            switch (e) {
+            case '"': case '\\': case '/':
+                c = (unsigned char)e;
+                break;
+            case 'n': c = '\n'; break;
+            case 't': c = '\t'; break;
+            case 'r': c = '\r'; break;
+            case 'b': c = '\b'; break;
+            case 'f': c = '\f'; break;
+            case 'u': {
+                if (p + 4 > end)
+                    goto fail;
+                uint32_t cp = 0;
+                for (int i = 0; i < 4; i++) {
+                    int h = json_hexval((unsigned char)p[i]);
+                    if (h < 0)
+                        goto fail;
+                    cp = cp * 16 + (uint32_t)h;
+                }
+                p += 4;
+                if (cp >= 0xD800 && cp <= 0xDBFF && p + 6 <= end &&
+                    p[0] == '\\' && p[1] == 'u') {
+                    uint32_t lo = 0;
+                    for (int i = 0; i < 4; i++) {
+                        int h = json_hexval((unsigned char)p[2 + i]);
+                        if (h < 0) {
+                            lo = 0;
+                            break;
+                        }
+                        lo = lo * 16 + (uint32_t)h;
+                    }
+                    if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                        cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                        p += 6;
+                    }
+                }
+                char tmp[4];
+                int m = json_utf8_encode(cp, tmp);
+                for (int i = 0; i < m; i++) {
+                    if (len + 1 >= cap) {
+                        cap *= 2;
+                        buf = xrealloc(buf, cap);
+                    }
+                    buf[len++] = tmp[i];
+                }
+                continue;
+            }
+            default:
+                goto fail;
+            }
+        }
+        if (len + 1 >= cap) {
+            cap *= 2;
+            buf = xrealloc(buf, cap);
+        }
+        buf[len++] = (char)c;
+        if (!esc)
+            p++;
+    }
+    if (len + 1 >= cap) {
+        cap *= 2;
+        buf = xrealloc(buf, cap);
+    }
+    buf[len] = 0;
+    *out = buf;
+    return p;
+fail:
+    free(buf);
+    return NULL;
+}
+
+/* skip a complete JSON value starting at p; NULL on malformed input */
+static const char *json_skip_value(const char *p, const char *end)
+{
+    p = json_skip_ws(p, end);
+    if (p >= end)
+        return NULL;
+    char c = *p;
+    if (c == '"') {
+        char *tmp = NULL;
+        p = json_parse_string(p, end, &tmp);
+        free(tmp);
+        return p;
+    }
+    if (c == '{' || c == '[') {
+        char open = c, close = (c == '{') ? '}' : ']';
+        int depth = 0;
+        while (p < end) {
+            c = *p;
+            if (c == '"') {
+                char *tmp = NULL;
+                p = json_parse_string(p, end, &tmp);
+                free(tmp);
+                if (!p)
+                    return NULL;
+                continue;
+            }
+            if (c == open)
+                depth++;
+            else if (c == close) {
+                depth--;
+                p++;
+                if (depth == 0)
+                    return p;
+                continue;
+            }
+            p++;
+        }
+        return NULL;
+    }
+    while (p < end && *p != ',' && *p != '}' && *p != ']' &&
+           *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r')
+        p++;
+    return p;
+}
+
+char *json_field(const char *json, size_t len, const char *field)
+{
+    const char *end = json + len;
+    const char *p = json_skip_ws(json, end);
+    if (p >= end || *p != '{')
+        return NULL;
+    p++;
+    while (p < end) {
+        p = json_skip_ws(p, end);
+        if (p >= end || *p == '}')
+            break;
+        if (*p == ',') {
+            p++;
+            continue;
+        }
+        if (*p != '"')
+            return NULL;
+        char *k = NULL;
+        p = json_parse_string(p, end, &k);
+        if (!p)
+            return NULL;
+        int match = (k && strcmp(k, field) == 0);
+        p = json_skip_ws(p, end);
+        if (p >= end || *p != ':') {
+            free(k);
+            return NULL;
+        }
+        p = json_skip_ws(p + 1, end);
+        if (p >= end) {
+            free(k);
+            return NULL;
+        }
+        if (match) {
+            free(k);
+            if (*p == '"') {
+                char *v = NULL;
+                p = json_parse_string(p, end, &v);
+                return v; /* NULL on malformed */
+            }
+            /* raw scalar or array/object: copy the token */
+            const char *s = p;
+            while (p < end && *p != ',' && *p != '}' && *p != ']')
+                p++;
+            return xstrndup(s, (size_t)(p - s));
+        }
+        p = json_skip_value(p, end);
+        free(k);
+        if (!p)
+            return NULL;
+    }
+    return NULL;
+}
+
+int json_array_each(const char *json, size_t len, size_t *pos,
+                    const char **elem, size_t *elen)
+{
+    const char *end = json + len;
+    const char *p;
+    if (*pos == 0) {
+        p = json_skip_ws(json, end);
+        if (p >= end || *p != '[')
+            return 0;
+        p++;
+    } else {
+        p = json + *pos;
+    }
+    for (;;) {
+        p = json_skip_ws(p, end);
+        if (p >= end)
+            return 0;
+        if (*p == ']') {
+            *pos = (size_t)(p - json);
+            return 0;
+        }
+        if (*p == ',') {
+            p++;
+            continue;
+        }
+        break;
+    }
+    const char *s = p;
+    p = json_skip_value(p, end);
+    if (!p)
+        return 0;
+    *elem = s;
+    *elen = (size_t)(p - s);
+    *pos = (size_t)(p - json);
+    return 1;
+}
+
+char **json_arr_strings(const char *elem, size_t elen, size_t *n)
+{
+    size_t pos = 0;
+    char **arr = NULL;
+    size_t cap = 0, cnt = 0;
+    const char *e;
+    size_t l;
+    while (json_array_each(elem, elen, &pos, &e, &l)) {
+        const char *p = json_skip_ws(e, e + l);
+        if (!p || *p != '"')
+            continue;
+        char *s = NULL;
+        p = json_parse_string(p, e + l, &s);
+        if (p) {
+            if (cnt == cap) {
+                cap = cap ? cap * 2 : 8;
+                arr = xrealloc(arr, cap * sizeof(char *));
+            }
+            arr[cnt++] = s;
+        }
+    }
+    *n = cnt;
+    return arr;
+}

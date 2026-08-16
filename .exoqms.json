@@ -1,0 +1,28 @@
+{
+  "languages": ["auto"],
+  "rules": {
+    "debt": true,
+    "hygiene": true,
+    "secrets": true,
+    "code-safety": true
+  },
+  "thresholds": {
+    "debt": 10
+  },
+  "test": [
+    "make test",
+    "make -C exosched test",
+    "make -C exoflow test",
+    "make -C exodoc test",
+    "make -C exoqms test && make -C exoqms/ui test && make -C exoqms/code test && make -C exoqms/svg test"
+  ],
+  "docs": [
+    "README.md",
+    "docs/STACK.md"
+  ],
+  "ignore": [
+    "build/",
+    "run/",
+    ".git/"
+  ]
+}
