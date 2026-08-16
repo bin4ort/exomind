@@ -811,7 +811,18 @@ static const char *rules_dir(cfg_t *cfg, char *buf, size_t cap)
         snprintf(buf, cap, "%s", cfg->code_path);
         char *slash = strrchr(buf, '/');
         if (slash) {
+            /* <dir>/<binary> -> <dir>/rules, then ../rules (source tree) */
             snprintf(slash + 1, cap - (size_t)(slash + 1 - buf), "rules");
+            if (stat(buf, &st) != 0 || !S_ISDIR(st.st_mode)) {
+                char *s2 = strrchr(buf, '/'); /* the "/rules" part */
+                if (s2) {
+                    *s2 = 0; /* drop "rules": back to <dir> */
+                    char *s3 = strrchr(buf, '/'); /* the dir's basename */
+                    if (s3)
+                        snprintf(s3 + 1, cap - (size_t)(s3 + 1 - buf),
+                                 "rules");
+                }
+            }
         } else {
             snprintf(buf, cap, "rules");
         }

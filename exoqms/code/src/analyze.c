@@ -574,6 +574,10 @@ static void analyze_body(tok_t *toks, size_t begin, size_t end,
                 if (i > begin && (tok_is(&toks[i - 1], "->") ||
                                   tok_is(&toks[i - 1], ".")))
                     continue;
+                /* C++ namespace/type qualifiers are not variables */
+                if (i + 1 < end && (tok_is(&toks[i + 1], "::") ||
+                                    toks[i + 1].type == T_IDENT))
+                    continue;
                 /* for-init: `for (i = 0; ...)` - the target is a write */
                 if (i + 1 < end && tok_is(&toks[i + 1], "=")) {
                     var_t *wt = var_get(&vars, t->text);
@@ -618,6 +622,18 @@ static void analyze_body(tok_t *toks, size_t begin, size_t end,
                           tok_is(&toks[i - 1], ".")))
             continue;
 
+        /* C++: namespace/class qualifiers `X::Y` - X is never a variable */
+        if (i + 1 < end && tok_is(&toks[i + 1], "::"))
+            continue;
+        /* C++: bare `Type name` - an identifier followed by an identifier
+           is a type name (the only valid parse of `a b;` is a declaration) */
+        if (i + 1 < end && toks[i + 1].type == T_IDENT)
+            continue;
+        /* C++: `Type & name` - reference-typed declarations */
+        if (i + 2 < end && tok_is(&toks[i + 1], "&") &&
+            !tok_is(&toks[i + 2], "&") && toks[i + 2].type == T_IDENT)
+            continue;
+
         /* typedef names are types, never variables */
         if (is_typedef_name(fv, t->text))
             continue;
@@ -650,6 +666,14 @@ static void analyze_body(tok_t *toks, size_t begin, size_t end,
             (i + 1 >= end || !tok_is(&toks[i + 1], "(")) &&
             !tok_is(&toks[i - 1], "@nonnull"))
             is_decl = 1;
+        /* `NS::Type name`: a class-type object is constructor-initialized */
+        if (is_decl && i > begin + 1 && toks[i - 1].type == T_IDENT &&
+            i > begin + 2 && tok_is(&toks[i - 2], "::")) {
+            var_t *obj = var_add(&vars, t->text, 0);
+            if (obj)
+                obj->state = 4; /* constructed, not uninitialized */
+            continue;
+        }
         /* multi-declaration continuation: `pt_t a, b;` - the name after
            a comma whose previous name is a fresh (state 1) declaration */
         if (!is_decl && i > begin + 1 && tok_is(&toks[i - 1], ",") &&

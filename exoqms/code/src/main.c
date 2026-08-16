@@ -166,10 +166,29 @@ static void walk_dir(const char *dir, strvec_t *files, const char *lang,
         char path[4096];
         snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
         int ign = 0;
-        for (size_t j = 0; j < ignores->n && !ign; j++)
-            if (fnmatch(ignores->items[j], path, 0) == 0 ||
-                fnmatch(ignores->items[j], e->d_name, 0) == 0)
+        for (size_t j = 0; j < ignores->n && !ign; j++) {
+            /* strip a trailing slash: "build/" means any build segment */
+            const char *pat = ignores->items[j];
+            size_t pl = strlen(pat);
+            char patbuf[512];
+            if (pl > 1 && pat[pl - 1] == '/') {
+                snprintf(patbuf, sizeof patbuf, "%.*s", (int)(pl - 1), pat);
+                pat = patbuf;
+                pl--;
+            }
+            if (fnmatch(pat, path, 0) == 0 ||
+                fnmatch(pat, e->d_name, 0) == 0) {
                 ign = 1;
+                break;
+            }
+            /* segment match: /dir/build/ or dir/build in any position */
+            char seg[1024];
+            snprintf(seg, sizeof seg, "/%s/", pat);
+            if (strstr(path, seg)) {
+                ign = 1;
+                break;
+            }
+        }
         if (ign)
             continue;
         if (e->d_type == DT_DIR) {
