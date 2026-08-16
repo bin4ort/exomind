@@ -9,13 +9,15 @@ EXOCRAWL="${1:-http://127.0.0.1:7658}"
 EXOMIND="${2:-http://127.0.0.1:7654}"
 MAX="${MAX_NORM:-30000}"
 
-declare -a IDS=("rfc2119" "rfc8259" "pep8" "wcag22" "nng10")
+declare -a IDS=("rfc2119" "rfc8259" "pep8" "wcag22" "nng10" "rfc3986" "a11y")
 declare -a URLS=(
   "https://www.rfc-editor.org/rfc/rfc2119.txt"
   "https://www.rfc-editor.org/rfc/rfc8259.txt"
   "https://peps.python.org/pep-0008/"
   "https://www.w3.org/TR/WCAG22/"
   "https://www.nngroup.com/articles/ten-usability-heuristics/"
+  "https://www.rfc-editor.org/rfc/rfc3986.txt"
+  "https://www.w3.org/WAI/fundamentals/accessibility-intro/"
 )
 declare -a NAMES=(
   "RFC 2119 - Key words for use in RFCs (MUST/SHOULD language)"
@@ -23,6 +25,8 @@ declare -a NAMES=(
   "PEP 8 - Style Guide for Python Code"
   "WCAG 2.2 - Web Content Accessibility Guidelines"
   "NN/g 10 Usability Heuristics for User Interface Design"
+  "RFC 3986 - Uniform Resource Identifier (URI): Generic Syntax"
+  "W3C WAI - Introduction to Web Accessibility"
 )
 
 i=0
@@ -36,7 +40,7 @@ for id in "${IDS[@]}"; do
     fi
     echo "fetch $id <- ${URLS[$i]}"
     TEXT=$(timeout 60 curl -s --max-time 55 \
-        "$EXOCRAWL/fetch?url=${URLS[$i]}&max=$MAX" 2>/dev/null)
+        "$EXOCRAWL/fetch?url=${URLS[$i]}&max=$MAX&polite=0" 2>/dev/null)
     if [ -z "$TEXT" ] || echo "$TEXT" | grep -q '^error:'; then
         echo "  FAIL: $TEXT"
         curl -s --max-time 5 "$EXOMIND/set?key=norm:$id" \

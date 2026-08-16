@@ -25,6 +25,11 @@ static const char *BLOCK_TAGS[] = {
     "ol", "header", "hr", "figure", NULL};
 
 static const char *HEADING_TAGS[] = {"h1", "h2", "h3", "h4", "h5", "h6", NULL};
+static const char *INLINE_TAGS[] = {
+    "b", "i", "em", "strong", "span", "a", "u", "s", "del", "ins", "small",
+    "sub", "sup", "mark", "code", "abbr", "cite", "q", "label", "button",
+    "font", "kbd", "samp", "var", NULL
+};
 
 static const char *BOILER_ATTR[] = {
     "nav", "menu", "sidebar", "footer", "header", "ads", "advert", "sponsor",
@@ -242,6 +247,22 @@ typedef struct {
 
 static void walk(ctx_t *c, const char *p, const char *end);
 
+/* ensure a space between words split by an inline tag (<b>bold</b>and)
+ * unless the sink is at a line boundary or in preformatted text */
+static void inline_separate(ctx_t *c)
+{
+    if (c->sink.in_pre)
+        return;
+    if (c->sink.b.len &&
+        c->sink.b.p[c->sink.b.len - 1] != ' ' &&
+        c->sink.b.p[c->sink.b.len - 1] != '\n' &&
+        c->sink.b.len < c->sink.max) {
+        c->sink.b.p[c->sink.b.len++] = ' ';
+        if (c->sink.b.p)
+            c->sink.b.p[c->sink.b.len] = 0;
+    }
+}
+
 static void walk_text(ctx_t *c, const char *t, size_t n)
 {
     if (c->in_skip)
@@ -290,6 +311,8 @@ static void walk_tag(ctx_t *c, const char *p, const char *end)
     tag[nlen] = 0;
 
     if (closing) {
+        if (in_list(tag, nlen, INLINE_TAGS))
+            inline_separate(c);
         if (c->in_skip && c->skip_depth > 0)
             c->skip_depth--;
         if (c->skip_depth == 0 && c->in_skip)
@@ -365,6 +388,8 @@ static void walk_tag(ctx_t *c, const char *p, const char *end)
     if (ci_eq(tag, nlen, "pre") || ci_eq(tag, nlen, "code")) {
         c->sink.in_pre = 1;
     }
+    if (in_list(tag, nlen, INLINE_TAGS))
+        inline_separate(c);
     if (in_list(tag, nlen, HEADING_TAGS)) {
         c->sink.pending_heading = (int)tag[1] - '0';
     } else if (ci_eq(tag, nlen, "li")) {

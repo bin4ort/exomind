@@ -38,6 +38,12 @@ exocrawl:
 
 test-exocrawl: all
 	$(MAKE) -C exocrawl test
+
+exocontext:
+	$(MAKE) -C exocontext
+
+test-exocontext: all
+	$(MAKE) -C exocontext test
 	@if [ -f exoflow/test/test-integration.sh ]; then \
 		bash exoflow/test/test-integration.sh; \
 	fi
@@ -173,4 +179,4 @@ test-exodoc: all
 		fi; \
 	fi
 
-.PHONY: all test clean exosched test-exosched exoflow test-exoflow exodoc test-exodoc exoqms qms-modules test-exoqms audit-stack qms-universal-test exocrawl test-exocrawl
+.PHONY: all test clean exosched test-exosched exoflow test-exoflow exodoc test-exodoc exoqms qms-modules test-exoqms audit-stack qms-universal-test exocrawl test-exocrawl exocontext test-exocontext

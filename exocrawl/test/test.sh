@@ -50,6 +50,31 @@ check "ping" "$(timeout 5 curl -s $BASE/ping | grep -q pong && echo 0 || echo 1)
 SPEC=$(timeout 5 curl -s $BASE/)
 check "self-describing spec" "$(echo "$SPEC" | grep -q '/search' && echo 0 || echo 1)" ""
 
+# =============== extraction regression corpus (issue:008) =================
+# HTML fixtures in test/corpus/*.html pin the extractor's output: any
+# change to html.c must reproduce the expected *.txt byte-for-byte, or the
+# corpus is updated consciously.
+CORPUS_DIR="$(pwd)/test/corpus"
+CFAILS=0
+for f in "$CORPUS_DIR"/*.html; do
+    base=${f%.html}
+    exp="$base.txt"
+    [ -f "$exp" ] || continue
+    if timeout 5 "$BIN" --extract "$f" > "$TDIR/corpus-out.txt" 2>/dev/null; then
+        if cmp -s "$TDIR/corpus-out.txt" "$exp"; then
+            PASS=$((PASS + 1))
+            printf 'PASS corpus %s\n' "$(basename "$base")"
+        else
+            printf 'FAIL corpus %s\n' "$(basename "$base")"
+            CFAILS=$((CFAILS + 1))
+        fi
+    else
+        printf 'FAIL corpus %s (extract error)\n' "$(basename "$base")"
+        CFAILS=$((CFAILS + 1))
+    fi
+done
+[ "$CFAILS" -eq 0 ] || FAILED=$((FAILED + CFAILS))
+
 # =============== extraction: /fetch =====================================
 OUT=$(timeout 30 curl -s "$BASE/fetch?url=$WEB/html/")
 check "fetch: title as heading" "$(echo "$OUT" | grep -q '# Test Article Title' && echo 0 || echo 1)" "$OUT"

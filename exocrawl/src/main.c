@@ -217,6 +217,7 @@ typedef struct {
     const char *url;
     size_t max;
     int links, images;
+    int polite; /* 0: skip the robots.txt check (explicit request) */
     char *result; /* malloc'd text */
     int status;   /* 0 ok, -1 error */
     char err[256];
@@ -302,7 +303,7 @@ static void fetch_worker(fetch_job_t *j)
     pace_wait(host, g_cfg.pace_ms);
     char pol[16];
     robots_policy(host, j->url, pol, sizeof pol);
-    if (strcmp(pol, "deny") == 0) {
+    if (!j->polite && strcmp(pol, "deny") == 0) {
         snprintf(j->err, sizeof j->err, "robots.txt disallows");
         j->status = -1;
         return;
@@ -394,6 +395,8 @@ static void handle_fetch(int fd, const char *query, const char *body)
     j.max = max;
     j.links = links;
     j.images = images;
+    if (query_param(query, "polite", lb, sizeof lb) && lb[0] == '0')
+        j.polite = 1;
     fetch_worker(&j);
     if (j.status != 0) {
         char out[512];
@@ -681,6 +684,47 @@ int main(int argc, char **argv)
             g_cfg.use_cache = 1, g_cfg.exomind = argv[++i];
         else if (!strcmp(argv[i], "--robots"))
             g_cfg.robots = 1;
+        else if (!strcmp(argv[i], "--extract") && i + 1 < argc) {
+            /* offline extractor: read the file, print the extracted text.
+             * Used by the extraction regression corpus (issue:008). */
+            FILE *f = fopen(argv[++i], "rb");
+            if (!f) {
+                fprintf(stderr, "exocrawl: cannot open %s: %s\n",
+                        argv[i], strerror(errno));
+                return 1;
+            }
+            char *html = NULL;
+            size_t hlen = 0;
+            for (;;) {
+                char chunk[8192];
+                size_t n = fread(chunk, 1, sizeof chunk, f);
+                if (n == 0)
+                    break;
+                char *grown = realloc(html, hlen + n + 1);
+                if (!grown) {
+                    fprintf(stderr, "exocrawl: out of memory\n");
+                    free(html);
+                    fclose(f);
+                    return 1;
+                }
+                html = grown;
+                memcpy(html + hlen, chunk, n);
+                hlen += n;
+            }
+            fclose(f);
+            if (html)
+                html[hlen] = 0;
+            page_t p;
+            page_extract(html ? html : "", hlen, "https://corpus.local/", &p,
+                         1u << 20);
+            if (p.title && p.title[0])
+                printf("# %s\n\n", p.title);
+            if (p.text)
+                printf("%s", p.text);
+            page_free(&p);
+            free(html);
+            return 0;
+        }
         else if (!strcmp(argv[i], "--proxy") && i + 1 < argc)
             g_net.proxy = argv[++i];
         else if (!strcmp(argv[i], "--engine-base") && i + 1 < argc)

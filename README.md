@@ -18,6 +18,7 @@ others run, audited by the quality system, and dogfooded in the process.
 | — | **exodoc** | documentation auditor: ISO 9001 §7.5-flavored standard, live API conformance | [exodoc/](exodoc/README.md) |
 | 7657 | **exoqms** | universal Quality Management System: objectives, NCs, audit programs, trends, field modules for any language | [exoqms/](exoqms/README.md) |
 | 7658 | **exocrawl** | AI-native research: independent private metasearch, token-efficient HTML→text extraction, concurrent scraping | [exocrawl/](exocrawl/README.md) |
+| 7659 | **exocontext** | context continuity: bounded recency-ranked digest of an agent's state and notes | [exocontext/](exocontext/README.md) |
 
 All components: C11, POSIX, zero compile dependencies (TLS in exocrawl
 uses the ubiquitous `curl` binary). Every API is plain text and
@@ -29,7 +30,7 @@ Zero dependencies: a C11 compiler and POSIX.
 
 ```sh
 make            # produces build/exomind
-make exosched exoflow exodoc exoqms exocrawl
+make exosched exoflow exodoc exoqms exocrawl exocontext
 make test test-exosched test-exoflow test-exodoc test-exoqms test-exocrawl
 ```
 
@@ -43,6 +44,7 @@ make test test-exosched test-exoflow test-exodoc test-exoqms test-exocrawl
   --exodoc ./exodoc/build/exodoc --ui ./exoqms/ui/build/exoqms-ui \
   --code ./exoqms/code/build/exoqms-code --svg ./exoqms/svg/build/exoqms-svg --repo "$PWD" &
 ./exocrawl/build/exocrawl --port 7658 --cache exomind &
+./exocontext/build/exocontext --port 7659 --exomind http://127.0.0.1:7654 &
 ```
 
 Every daemon answers `GET /` with its complete specification; `--token

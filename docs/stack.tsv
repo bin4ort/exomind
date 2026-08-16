@@ -10,3 +10,4 @@ exoflow	exoflow	7656		./build/exoflow --version
 exoqms	exoqms	7657		./build/exoqms --version
 exodoc	exodoc			make test
 exocrawl	exocrawl	7658		make test
+exocontext	exocontext	7659		./build/exocontext --version
