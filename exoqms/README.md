@@ -1,6 +1,6 @@
 # exoqms — the Quality Management System for the AI-native stack
 
-`exoqms` v0.1.0 is a QMS daemon (C11, zero dependencies: libc + pthread
+`exoqms` v0.2.0 is a QMS daemon (C11, zero dependencies: libc + pthread
 only) that turns the ISO 9000 family into running code for the exomind
 stack. It holds quality objectives, runs ISO 19011 audit programs
 against the live stack, records non-conformities (NCs) with a
@@ -150,6 +150,44 @@ The score is `100 * pass / (pass + fail)` rounded, `skip` not counted.
 
 Each check runs under a hard 5s timeout; children that overrun are
 SIGKILLed and the check fails with `timed out`.
+
+## the universal project config (iter7, v0.2.0)
+
+Any project — inside the stack or foreign — can be audited via a
+`.exoqms.json` at the repo root. The daemon loads it on startup (the
+`--repo` directory) and it drives the audit program:
+
+```json
+{
+  "languages": ["auto"],
+  "rules": {"debt": true, "hygiene": true, "secrets": true, "code-safety": true},
+  "thresholds": {"debt": 10},
+  "test": ["ctest --test-dir build"],
+  "docs": ["README.md", "CHANGELOG.md"],
+  "ignore": ["build/", "install/", "assets/"]
+}
+```
+
+All keys optional; malformed JSON degrades to defaults with a stderr
+warning. `languages` pins the code-safety analyzer (`auto` = detect),
+`rules` toggles the new checks, `thresholds.debt` is the maximum number
+of `debt-*` findings that still passes, `test` runs whole-project test
+commands (5s budget each, from the repo root) when there is no stack
+manifest, `docs` names the required files for `doc-compliance` in that
+mode, and `ignore` globs are handed to the analyzer scans.
+
+The three universal checks share one `exoqms-code --rules` scan per
+audit (memoized), partitioned by check-id prefix:
+
+| check | passes when |
+|-------|-------------|
+| debt | `debt-*` findings ≤ `thresholds.debt` (default 10) |
+| hygiene | 0 `hygiene-*` findings |
+| secrets | 0 `secrets-*` findings (matched lines masked to `***`) |
+
+The rule files live in the `--rules` directory, else `rules/` next to
+the `--code` binary, else `<repo>/exoqms/code/rules`; without them the
+checks report `skip` so a half-wired deployment degrades honestly.
 
 ## the field modules
 
