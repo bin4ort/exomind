@@ -341,6 +341,24 @@ t "audits list has 1 line" 1 "$(timeout 5 curl -s "$BASE:$QMS_A/audits" | grep -
 t_nc "unknown check id rejected" \
     "$(timeout 5 curl -s -d $'x\tnosuchcheck' $BASE:$QMS_A/audit)"
 
+# ---- agent-health (freeze detection) ---------------------------------------
+# simulate: a fired exosched reminder for a silent agent (exosched writes
+# "fired timer" notes; the zombie agent has no activity and no done marker)
+timeout 5 curl -s -X POST "$EM/note" -d 'fired timer sim:123 agent:zombie: freeze probe at 9999999999999' > /dev/null
+AH=$(timeout 20 curl -s -d $'freeze sim\tagent-health\tzombie' $BASE:$QMS_A/audit)
+AHID=$(printf '%s' "$AH" | awk '{print $2}')
+AHREP=$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$AHID")
+t "agent-health: silent agent flagged frozen" 1 \
+    "$(printf '%s\n' "$AHREP" | awk -F'\t' '$1=="agent-health" && $2=="fail" {n++} END {print n+0}')"
+t_contains "agent-health: freeze evidence" "likely frozen" "$AHREP"
+em_set "agent:zombie:done" ok
+AH2=$(timeout 20 curl -s -d $'freeze sim2\tagent-health\tzombie' $BASE:$QMS_A/audit)
+AH2ID=$(printf '%s' "$AH2" | awk '{print $2}')
+AH2REP=$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$AH2ID")
+t "agent-health: done marker clears" 1 \
+    "$(printf '%s\n' "$AH2REP" | awk -F'\t' '$1=="agent-health" && $2=="pass" {n++} END {print n+0}')"
+timeout 5 curl -s "$EM/del?key=agent:zombie:done" > /dev/null
+
 # ---- ui-audit variants ------------------------------------------------------
 UI1=$(timeout 20 curl -s -d $'ui check\tui-audit' $BASE:$QMS_A/audit)
 t_contains "ui-audit without target skips" "ok " "$UI1"

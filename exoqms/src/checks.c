@@ -1088,6 +1088,146 @@ static void check_asset_logic(check_ctx_t *ctx, finding_t *f)
     free(out);
 }
 
+
+/* ---------- check: agent-health (scheduler-driven freeze detection) -----
+ * For every agent in --agents: if an exosched reminder mentioning the
+ * agent has FIRED (a "fired timer" note), and the agent's latest
+ * activity note is older than that fire, the agent is likely frozen:
+ * reminder fired, no response, no deliverable. The orchestrator
+ * redeploys the agent or takes the task over. */
+typedef struct {
+    char agent[128];
+    int64_t fired;
+} fired_ent_t;
+
+static void check_agent_health(check_ctx_t *ctx, finding_t *f)
+{
+    const char *agents = ctx->agents && ctx->agents[0] ? ctx->agents
+                                                        : ctx->cfg->agents;
+    char err[256];
+    buf_t ev = {0};
+    char *copy = xstrdup(agents);
+    char *save = NULL;
+    int frozen = 0, total = 0;
+
+    /* one scan of the fired-timer notes */
+    fired_ent_t fired[64];
+    size_t nfired = 0;
+    char *resp = NULL;
+    size_t rlen = 0;
+    int status = 0;
+    if (exo_request(ctx->exo, "GET", "/notes?limit=500&q=fired", NULL, 0, 0,
+                    &resp, &rlen, &status, err, sizeof err) != 0) {
+        set_finding(f, "agent-health", R_FAIL,
+                    "exomind unreachable: %s", err);
+        free(resp);
+        free(copy);
+        buf_free(&ev);
+        return;
+    }
+    if (resp) {
+        char *line = strdup(resp);
+        char *lsave = NULL;
+        for (char *l = strtok_r(line, "\n", &lsave); l;
+             l = strtok_r(NULL, "\n", &lsave)) {
+            if (!strstr(l, "fired timer"))
+                continue;
+            /* find the agent id inside the message: "agent:<id>" -
+               only accept the token when it starts a word */
+            const char *ag = l;
+            int found = 0;
+            while ((ag = strstr(ag, "agent:")) != NULL) {
+                if (ag == l || ag[-1] == ' ' || ag[-1] == '\t') {
+                    found = 1;
+                    break;
+                }
+                ag += 6;
+            }
+            if (!found)
+                continue;
+            char id[128];
+            size_t w = 0;
+            for (const char *p = ag + 6; *p && *p != ':' && *p != ' ' &&
+                 *p != '\t' && w + 1 < sizeof id; p++)
+                id[w++] = *p;
+            id[w] = 0;
+            if (!id[0])
+                continue;
+            int64_t ep = 0;
+            sscanf(l, "note:%lld:", (long long *)&ep);
+            if (nfired < 64) {
+                snprintf(fired[nfired].agent, sizeof fired[nfired].agent,
+                         "%s", id);
+                fired[nfired].fired = ep;
+                nfired++;
+            }
+        }
+        free(line);
+    }
+    free(resp);
+
+    for (char *a = strtok_r(copy, ",", &save); a; a = strtok_r(NULL, ",", &save)) {
+        while (*a == ' ')
+            a++;
+        if (!a[0])
+            continue;
+        total++;
+        int64_t fire = 0;
+        for (size_t i = 0; i < nfired; i++)
+            if (strcmp(fired[i].agent, a) == 0 && fired[i].fired > fire)
+                fire = fired[i].fired;
+
+        /* latest activity: newest AGENT note mentioning the agent
+           (exclude the fired-timer notes exosched wrote itself) */
+        char q[1024];
+        snprintf(q, sizeof q, "/notes?limit=100&q=agent%%3A%s", a);
+        int64_t act = 0;
+        if (exo_request(ctx->exo, "GET", q, NULL, 0, 0, &resp, &rlen,
+                        &status, err, sizeof err) == 0 && resp) {
+            char *line = strdup(resp);
+            char *lsave = NULL;
+            for (char *l = strtok_r(line, "\n", &lsave); l;
+                 l = strtok_r(NULL, "\n", &lsave)) {
+                if (strstr(l, "fired timer"))
+                    continue;
+                int64_t ep = 0;
+                sscanf(l, "note:%lld:", (long long *)&ep);
+                if (ep > act)
+                    act = ep;
+            }
+            free(line);
+            free(resp);
+            resp = NULL;
+        }
+        /* deliverable signal: the agent marked itself done */
+        char dk[512];
+        snprintf(dk, sizeof dk, "agent:%s:done", a);
+        char *dv = NULL;
+        int done_marker = 0;
+        if (exo_get(ctx->exo, dk, &dv, err, sizeof err) == 0 && dv)
+            done_marker = 1;
+        free(dv);
+        if (fire > 0 && fire > act && !done_marker) {
+            frozen++;
+            buf_printf(&ev,
+                       "agent %s: reminder fired %lld, last activity %lld "
+                       "(--likely frozen: no response, no deliverable)\n",
+                       a, (long long)fire, (long long)act);
+        }
+    }
+    free(copy);
+    if (total == 0) {
+        set_finding(f, "agent-health", R_SKIP, "no agents configured");
+    } else if (frozen > 0) {
+        set_finding(f, "agent-health", R_FAIL, "%d/%d agents frozen:\n%s",
+                    frozen, total, ev.p ? ev.p : "");
+    } else {
+        set_finding(f, "agent-health", R_PASS, "%d/%d agents responsive "
+                    "(reminders answered or none fired)", total, total);
+    }
+    buf_free(&ev);
+}
+
 /* ---------- dispatch ---------- */
 
 int check_run(const char *id, check_ctx_t *ctx, finding_t *f)
@@ -1113,6 +1253,8 @@ int check_run(const char *id, check_ctx_t *ctx, finding_t *f)
         check_secrets(ctx, f);
     else if (!strcmp(id, "asset-logic"))
         check_asset_logic(ctx, f);
+    else if (!strcmp(id, "agent-health"))
+        check_agent_health(ctx, f);
     else
         set_finding(f, id, R_SKIP, "unknown check id");
     if (!f->id[0])

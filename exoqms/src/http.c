@@ -358,7 +358,7 @@ static const char *known_check(const char *id)
     static const char *known[] = {"component-tests", "doc-compliance",
                                   "dogfood", "ui-audit", "metrics",
                                   "code-safety", "asset-logic", "debt",
-                                  "hygiene", "secrets"};
+                                  "hygiene", "secrets", "agent-health"};
     for (size_t i = 0; i < sizeof known / sizeof known[0]; i++)
         if (!strcmp(known[i], id))
             return known[i];
