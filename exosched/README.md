@@ -108,6 +108,9 @@ dead clients are purged on the next broadcast, pings get pongs.
 
 ## tests
 
+`make test-exosched` runs the full suite; the QMS gate runs
+`./build/exosched --version`.
+
 `bash test/test.sh` runs its own private exomind (port 7660, data in
 /tmp/exosched_test) and exosched (port 7661); it never touches a
 shared exomind. Needs `curl`, `python3` (the WebSocket client) and

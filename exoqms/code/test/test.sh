@@ -84,6 +84,55 @@ done
 timeout 30 "$BIN" fixtures/good.py > "$TDIR/pyg.out" 2>/dev/null
 check "py good: 0 findings" "$([ "$(grep -c "$FIND" "$TDIR/pyg.out")" -eq 0 ] && echo 0 || echo 1)" ""
 
+# =============== new adapters: go / rust / js / docker ===================
+mkdir -p "$TDIR/lang"
+cat > "$TDIR/lang/bad.go" <<'GEOF'
+package main
+
+func f() error {
+    data, err := readFile("x")
+    if err != nil {
+        return err
+    }
+    n, err := process(data)
+    return n
+}
+
+func g() {
+    defer conn.Close()
+}
+GEOF
+cat > "$TDIR/lang/good.go" <<'GEOF'
+package main
+
+func f() error {
+    data, err := readFile("x")
+    if err != nil {
+        return err
+    }
+    return process(data)
+}
+GEOF
+printf 'let x = eval(code);\ndiv.innerHTML = data;\nconsole.log("hi");\n' > "$TDIR/lang/bad.js"
+printf 'let x = 1;\ndiv.textContent = data;\n' > "$TDIR/lang/good.js"
+printf 'fn main() {\n    let x = v.unwrap();\n    let y = w.expect("w");\n}\n' > "$TDIR/lang/bad.rs"
+printf 'FROM ubuntu:latest\nADD app.tar /app\n' > "$TDIR/lang/Dockerfile"
+timeout 30 "$BIN" "$TDIR/lang/bad.go" > "$TDIR/go.out" 2>/dev/null
+check "go: unchecked err flagged" "$(grep -q ' go-unchecked-err ' "$TDIR/go.out" && echo 0 || echo 1)" ""
+check "go: ignored defer flagged" "$(grep -q ' go-ignored-defer ' "$TDIR/go.out" && echo 0 || echo 1)" ""
+timeout 30 "$BIN" "$TDIR/lang/good.go" > "$TDIR/gog.out" 2>/dev/null
+check "go good: 0 findings" "$([ "$(grep -c "$FIND" "$TDIR/gog.out")" -eq 0 ] && echo 0 || echo 1)" ""
+timeout 30 "$BIN" "$TDIR/lang/bad.js" > "$TDIR/js.out" 2>/dev/null
+for ID in js-eval js-innerhtml js-console-log; do
+    check "js: $ID fires" "$(grep -q " $ID " "$TDIR/js.out" && echo 0 || echo 1)" ""
+done
+timeout 30 "$BIN" "$TDIR/lang/bad.rs" > "$TDIR/rs.out" 2>/dev/null
+check "rust: unwrap flagged" "$(grep -q ' rust-unwrap ' "$TDIR/rs.out" && echo 0 || echo 1)" ""
+check "rust: expect flagged" "$(grep -q ' rust-expect ' "$TDIR/rs.out" && echo 0 || echo 1)" ""
+timeout 30 "$BIN" "$TDIR/lang/Dockerfile" > "$TDIR/dk.out" 2>/dev/null
+check "docker: latest flagged" "$(grep -q ' docker-latest ' "$TDIR/dk.out" && echo 0 || echo 1)" ""
+check "docker: ADD flagged" "$(grep -q ' docker-add ' "$TDIR/dk.out" && echo 0 || echo 1)" ""
+
 # =============== rules engine ===========================================
 mkdir -p "$TDIR/rules"
 printf 'minor\nTODO|FIXME\n' > "$TDIR/rules/debt-x"

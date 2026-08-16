@@ -1,4 +1,4 @@
-# exocrawl
+# exocrawl v0.1.0
 
 **AI-native web research daemon — token-efficient, private, concurrent.**
 
@@ -30,7 +30,7 @@ rotation.
 ## Build & run
 
 ```sh
-make exocrawl          # exocrawl/build/exocrawl (zero compile deps)
+make exocrawl          # exocrawl v0.1.0/build/exocrawl (zero compile deps)
 make test-exocrawl     # hermetic suite (local mock web, 26 checks)
 ./exocrawl/build/exocrawl --port 7658 --cache exomind
 ```
@@ -40,7 +40,8 @@ Flags: `--port` (7658), `--token`, `--concurrency` (16), `--pace-ms`
 
 ## API
 
-Self-describing: `GET /` prints the full spec.
+Self-describing: `GET /` prints the full spec (the `/` endpoint itself
+is the documentation; this file is the human view).
 
 | method | path | purpose |
 |--------|------|---------|
@@ -62,6 +63,17 @@ enforces Bearer auth.
 - HTML entities decoded (named + numeric, incl. UTF-8 output).
 - Relative URLs resolved against the page URL.
 - Limits: 200 links / 100 images per page; `max` caps the whole output.
+
+## Internals
+
+- **Transport** — the curl binary provides TLS; everything else is
+  native C: request building, UA rotation, bounded retries, per-host
+  pacing (a worker pool fans out `/scrape`), HTML→text extraction, and
+  the per-engine parsers.
+- **Cache** — with `--cache exomind`, extracted text is stored under
+  `exocrawl:cache:*` keys (24 h TTL) and served on repeat fetches.
+- **Identity** — stateless requests with rotating user agents; no
+  cookies, no referrer, no JS.
 
 ## Honest limitations
 

@@ -29,6 +29,11 @@ void pcfg_free(pcfg_t *p)
     for (size_t i = 0; i < p->n_docs; i++)
         free(p->docs[i]);
     free(p->docs);
+    for (size_t i = 0; i < p->n_secrets_allow; i++)
+        free(p->secrets_allow[i]);
+    free(p->secrets_allow);
+    p->secrets_allow = NULL;
+    p->n_secrets_allow = 0;
     for (size_t i = 0; i < p->n_ignore; i++)
         free(p->ignore[i]);
     free(p->ignore);
@@ -130,6 +135,10 @@ int pcfg_load(pcfg_t *p, const char *repo)
     free(raw);
     raw = json_field(buf, len, "languages");
     p->languages = read_str_array(raw, raw ? strlen(raw) : 0, &p->n_languages);
+    free(raw);
+    raw = json_field(buf, len, "secrets_allow");
+    p->secrets_allow =
+        read_str_array(raw, raw ? strlen(raw) : 0, &p->n_secrets_allow);
     free(raw);
 
     free(buf);

@@ -229,6 +229,9 @@ Auth: start exoflow with `--token <secret>`; every endpoint then requires
 
 ## integration tests
 
+`make test-exoflow` runs the full suite; the QMS gate runs
+`./build/exoflow --version`.
+
 `exoflow/test/test-integration.sh` spawns a private stack — exomind on
 **7674**, exosched on **7675**, exoflow on **7676**, temp data under
 `/tmp/b2-exoflow-int` — and proves the loop end-to-end:

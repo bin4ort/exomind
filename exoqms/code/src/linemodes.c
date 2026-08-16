@@ -246,8 +246,147 @@ static int looks_binary(const char *buf, size_t n)
     return 0;
 }
 
+/* ---------------- Go adapter (line-based; no Go toolchain needed) ------ */
+
+static void go_scan(const char *buf, size_t n, findvec_t *out)
+{
+    size_t pos = 0, ln = 1;
+    while (pos < n) {
+        size_t eol = pos;
+        while (eol < n && buf[eol] != '\n')
+            eol++;
+        size_t len = eol - pos;
+        char *line = strndup(buf + pos, len);
+        if (!line)
+            break;
+        /* the classic Go bug: err assigned but never checked. the check
+           may live on the same line (`if err := f(); err != nil`) or on
+           the next line (the idiomatic `err := f()\nif err != nil`) */
+        int assigns_err = (strstr(line, "err := ") || strstr(line, ", err := ") ||
+                           strstr(line, "err = ")) != NULL;
+        int checked = strstr(line, "err != nil") || strstr(line, "if err") ||
+                      strstr(line, "//") != NULL;
+        if (assigns_err && !checked) {
+            /* lookahead: next non-empty line starts the check */
+            size_t nxt = eol < n ? eol + 1 : n;
+            while (nxt < n && (buf[nxt] == '\n' || buf[nxt] == ' ' ||
+                               buf[nxt] == '\t'))
+                nxt++;
+            int next_checked = 0;
+            if (nxt < n) {
+                size_t ne = nxt;
+                while (ne < n && buf[ne] != '\n')
+                    ne++;
+                char *nl = strndup(buf + nxt, ne - nxt);
+                if (nl) {
+                    next_checked = strstr(nl, "err != nil") || strstr(nl, "if err") != NULL;
+                    free(nl);
+                }
+            }
+            if (!next_checked) {
+                fnd_add(out, "go-unchecked-err", "major", (int)ln, 1,
+                        "err assigned but never checked (if err != nil)");
+            }
+        }
+        /* deferred error-returning calls are silently ignored */
+        if (regex_search(line, "defer .*\\.(Close|Remove|Unlock|Rollback)\\(", NULL))
+            fnd_add(out, "go-ignored-defer", "minor", (int)ln, 1,
+                    "deferred error-returning call");
+        ln++;
+        free(line);
+        pos = eol < n ? eol + 1 : eol;
+    }
+}
+
+/* ---------------- Rust adapter ---------------- */
+
+static void rust_scan(const char *buf, size_t n, findvec_t *out)
+{
+    size_t pos = 0, ln = 1;
+    while (pos < n) {
+        size_t eol = pos;
+        while (eol < n && buf[eol] != '\n')
+            eol++;
+        size_t len = eol - pos;
+        char *line = strndup(buf + pos, len);
+        if (!line)
+            break;
+        if (strstr(line, ".unwrap()") || strstr(line, ".unwrap("))
+            fnd_add(out, "rust-unwrap", "major", (int)ln, 1,
+                    ".unwrap() panics on error: propagate or handle");
+        if (strstr(line, ".expect("))
+            fnd_add(out, "rust-expect", "minor", (int)ln, 1,
+                    ".expect() panics on error");
+        if (strstr(line, "unreachable!()"))
+            fnd_add(out, "rust-unreachable", "minor", (int)ln, 1,
+                    "unreachable!() panics at runtime");
+        ln++;
+        free(line);
+        pos = eol < n ? eol + 1 : eol;
+    }
+}
+
+/* ---------------- JS/TS adapter ---------------- */
+
+static void js_scan(const char *buf, size_t n, findvec_t *out)
+{
+    size_t pos = 0, ln = 1;
+    while (pos < n) {
+        size_t eol = pos;
+        while (eol < n && buf[eol] != '\n')
+            eol++;
+        size_t len = eol - pos;
+        char *line = strndup(buf + pos, len);
+        if (!line)
+            break;
+        if (strstr(line, "eval("))
+            fnd_add(out, "js-eval", "major", (int)ln, 1,
+                    "eval() executes strings as code");
+        if (strstr(line, "innerHTML =") || strstr(line, "innerHTML="))
+            fnd_add(out, "js-innerhtml", "minor", (int)ln, 1,
+                    "innerHTML injection surface; prefer textContent");
+        if (strstr(line, "console.log") && strstr(line, "//") == NULL)
+            fnd_add(out, "js-console-log", "minor", (int)ln, 1,
+                    "console.log left in production code");
+        ln++;
+        free(line);
+        pos = eol < n ? eol + 1 : eol;
+    }
+}
+
+/* ---------------- Dockerfile adapter ---------------- */
+
+static void docker_scan(const char *buf, size_t n, findvec_t *out)
+{
+    size_t pos = 0, ln = 1;
+    while (pos < n) {
+        size_t eol = pos;
+        while (eol < n && buf[eol] != '\n')
+            eol++;
+        size_t len = eol - pos;
+        char *line = strndup(buf + pos, len);
+        if (!line)
+            break;
+        if (strncmp(line, "FROM ", 5) == 0) {
+            if (strstr(line, ":latest") || strstr(line, ":latest "))
+                fnd_add(out, "docker-latest", "minor", (int)ln, 1,
+                        "unpinned :latest base image");
+            else if (strchr(line + 5, ':') == NULL)
+                fnd_add(out, "docker-unpinned", "major", (int)ln, 1,
+                        "FROM without a pinned tag or digest");
+        }
+        if (strncmp(line, "ADD ", 4) == 0)
+            fnd_add(out, "docker-add", "minor", (int)ln, 1,
+                    "prefer COPY over ADD (ADD auto-extracts archives)");
+        ln++;
+        free(line);
+        pos = eol < n ? eol + 1 : eol;
+    }
+}
+
 /* entry point: analyze one text file by language. lang: "sh", "py",
- * or "rules" (rv must hold the loaded rules). Returns 0. */
+ * "go", "rust", "js", "docker", or "rules" (rv must hold the loaded
+ * rules). Returns 0. */
 int analyze_text_file(const char *path, const char *lang, const char *buf,
                       size_t n, void *rv, findvec_t *out)
 {
@@ -258,6 +397,14 @@ int analyze_text_file(const char *path, const char *lang, const char *buf,
         shell_scan(buf, n, out);
     else if (strcmp(lang, "py") == 0)
         python_scan(buf, n, out);
+    else if (strcmp(lang, "go") == 0)
+        go_scan(buf, n, out);
+    else if (strcmp(lang, "rust") == 0)
+        rust_scan(buf, n, out);
+    else if (strcmp(lang, "js") == 0)
+        js_scan(buf, n, out);
+    else if (strcmp(lang, "docker") == 0)
+        docker_scan(buf, n, out);
     else if (strcmp(lang, "rules") == 0 && rv)
         match_line_rules(path, buf, n, rv, out);
     return 0;

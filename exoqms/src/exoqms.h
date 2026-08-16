@@ -154,6 +154,8 @@ typedef struct {
     size_t n_ignore;
     char **languages;     /* language override for code-safety */
     size_t n_languages;
+    char **secrets_allow; /* path substrings excluded from secrets */
+    size_t n_secrets_allow;
 } pcfg_t;
 
 typedef struct cfg {

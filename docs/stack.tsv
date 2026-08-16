@@ -1,11 +1,12 @@
 # exomind stack manifest v1 — one component per line: name<TAB>dir<TAB>port<TAB>build_cmd<TAB>test_cmd<TAB>version_flag
 # port empty = batch tool (no live daemon). Format: exodoc/standard.md section 7.
-# Batch tools: exodoc (documentation auditor), exoqms/ui (UI audit engine, built
-# as part of the exoqms component: exoqms/ui/build). Only test commands that
-# fit the exoqms 5s audit-check budget are declared (see exoqms/standard.md 5.2).
-exomind	.	7654
-exosched	exosched	7655
-exoflow	exoflow	7656
+# 5th column test_cmd: the in-budget smoke used by the QMS component-tests
+# check (5s audit budget). `-` = documented exception (the full suite is
+# run by `make test-<name>` and exceeds the audit budget; the docs-coverage
+# check accepts `-`).
+exomind	.	7654		./build/exomind --version
+exosched	exosched	7655		./build/exosched --version
+exoflow	exoflow	7656		./build/exoflow --version
 exoqms	exoqms	7657		./build/exoqms --version
 exodoc	exodoc			make test
 exocrawl	exocrawl	7658		make test

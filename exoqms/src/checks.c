@@ -889,7 +889,10 @@ static int rules_scan(check_ctx_t *ctx, char **out, size_t *outlen,
  * is never echoed: it is replaced with *** (secrets requirement).
  * On success *res stays R_PASS and 0 is returned; otherwise *res is
  * R_SKIP or R_FAIL with the reason in err. */
+/* allow: optional list of path substrings; findings whose file matches
+ * are excluded (secrets allowlist) */
 static int universal_count(check_ctx_t *ctx, const char *prefix, int mask,
+                           char *const *allow, size_t nallow,
                            int *count, buf_t *ev, res_t *res, char *err,
                            size_t errsz)
 {
@@ -922,6 +925,22 @@ static int universal_count(check_ctx_t *ctx, const char *prefix, int mask,
         if (strncmp(ck, prefix, plen) != 0) {
             free(ck);
             continue;
+        }
+        if (allow && nallow > 0) {
+            char *fl = json_field(elem, elen, "file");
+            int skip = 0;
+            if (fl) {
+                for (size_t a = 0; a < nallow; a++)
+                    if (strstr(fl, allow[a])) {
+                        skip = 1;
+                        break;
+                    }
+                free(fl);
+            }
+            if (skip) {
+                free(ck);
+                continue;
+            }
         }
         (*count)++;
         if (ev) {
@@ -967,7 +986,7 @@ static void check_debt(check_ctx_t *ctx, finding_t *f)
     buf_t ev = {0};
     char err[256] = {0};
     res_t res = R_PASS;
-    if (universal_count(ctx, "debt-", 0, &count, &ev, &res, err,
+    if (universal_count(ctx, "debt-", 0, NULL, 0, &count, &ev, &res, err,
                         sizeof err) != 0) {
         set_finding(f, "debt", res, "%s", err);
         buf_free(&ev);
@@ -1000,8 +1019,8 @@ static void check_hygiene(check_ctx_t *ctx, finding_t *f)
     buf_t ev = {0};
     char err[256] = {0};
     res_t res = R_PASS;
-    if (universal_count(ctx, "hygiene-", 0, &count, &ev, &res, err,
-                        sizeof err) != 0) {
+    if (universal_count(ctx, "hygiene-", 0, NULL, 0, &count, &ev, &res,
+                        err, sizeof err) != 0) {
         set_finding(f, "hygiene", res, "%s", err);
         buf_free(&ev);
         return;
@@ -1031,8 +1050,9 @@ static void check_secrets(check_ctx_t *ctx, finding_t *f)
     buf_t ev = {0};
     char err[256] = {0};
     res_t res = R_PASS;
-    if (universal_count(ctx, "secrets-", 1, &count, &ev, &res, err,
-                        sizeof err) != 0) {
+    if (universal_count(ctx, "secrets-", 1, ctx->cfg->pcfg.secrets_allow,
+                        ctx->cfg->pcfg.n_secrets_allow, &count, &ev, &res,
+                        err, sizeof err) != 0) {
         set_finding(f, "secrets", res, "%s", err);
         buf_free(&ev);
         return;
@@ -1228,6 +1248,63 @@ static void check_agent_health(check_ctx_t *ctx, finding_t *f)
     buf_free(&ev);
 }
 
+/* ---------- check: docs-coverage (every manifest component must carry
+ * a README and a test command - the merge gate) ---------- */
+static void check_docs_coverage(check_ctx_t *ctx, finding_t *f)
+{
+    char manifest[2048];
+    snprintf(manifest, sizeof manifest, "%s/docs/stack.tsv", ctx->cfg->repo);
+    FILE *fp = fopen(manifest, "r");
+    if (!fp) {
+        set_finding(f, "docs-coverage", R_SKIP,
+                    "no docs/stack.tsv manifest (project mode?)");
+        return;
+    }
+    buf_t ev = {0};
+    int missing = 0, total = 0;
+    char line[4096];
+    while (fgets(line, sizeof line, fp)) {
+        trim_crlf(line);
+        if (!line[0] || line[0] == '#')
+            continue;
+        char *col[8];
+        int nc = tab_split(line, col, 8);
+        if (nc < 2 || !col[0][0] || !col[1][0])
+            continue;
+        total++;
+        char dir[2048];
+        if (col[1][0] == '/')
+            snprintf(dir, sizeof dir, "%s", col[1]);
+        else
+            snprintf(dir, sizeof dir, "%s/%s", ctx->cfg->repo, col[1]);
+        struct stat st;
+        char readme[4096];
+        snprintf(readme, sizeof readme, "%s/README.md", dir);
+        if (stat(readme, &st) != 0 || !S_ISREG(st.st_mode)) {
+            missing++;
+            buf_printf(&ev, "%s: no README.md\n", col[0]);
+        }
+        /* 5th column = test command; `-` is the documented exception
+           (suite exceeds the 5s audit budget) */
+        if (nc < 5 || !col[4][0] || (col[4][0] == '-' && !col[4][1])) {
+            missing++;
+            buf_printf(&ev, "%s: no test command (5th column)\n", col[0]);
+        }
+    }
+    fclose(fp);
+    if (total == 0) {
+        set_finding(f, "docs-coverage", R_SKIP, "empty manifest");
+    } else if (missing > 0) {
+        set_finding(f, "docs-coverage", R_FAIL, "%d/%d components missing "
+                    "README or test command:\n%s", missing, total,
+                    ev.p ? ev.p : "");
+    } else {
+        set_finding(f, "docs-coverage", R_PASS, "%d/%d components carry "
+                    "README + test command", total, total);
+    }
+    buf_free(&ev);
+}
+
 /* ---------- dispatch ---------- */
 
 int check_run(const char *id, check_ctx_t *ctx, finding_t *f)
@@ -1255,6 +1332,8 @@ int check_run(const char *id, check_ctx_t *ctx, finding_t *f)
         check_asset_logic(ctx, f);
     else if (!strcmp(id, "agent-health"))
         check_agent_health(ctx, f);
+    else if (!strcmp(id, "docs-coverage"))
+        check_docs_coverage(ctx, f);
     else
         set_finding(f, id, R_SKIP, "unknown check id");
     if (!f->id[0])

@@ -138,8 +138,15 @@ static const char *lang_of(const char *p, const char *forced)
         return "sh";
     if (n > 3 && !strcmp(p + n - 3, ".py"))
         return "py";
+    if (n > 3 && (!strcmp(p + n - 3, ".go") || !strcmp(p + n - 3, ".rs")))
+        return n > 3 && !strcmp(p + n - 3, ".go") ? "go" : "rust";
+    if (n > 3 && (!strcmp(p + n - 3, ".js") || !strcmp(p + n - 3, ".ts") ||
+                  !strcmp(p + n - 3, ".mjs")))
+        return "js";
     if (n > 5 && !strcmp(p + n - 5, ".bash"))
         return "sh";
+    if (strstr(p, "Dockerfile"))
+        return "docker";
     return NULL;
 }
 
@@ -238,6 +245,10 @@ int main(int argc, char **argv)
                 "       shell-cd-unchecked, shell-backtick\n"
                 "py:    py-bare-except, py-mutable-default, py-assert-validation,\n"
                 "       py-os-system\n"
+                "go:    go-unchecked-err, go-ignored-defer (line-based, no toolchain)\n"
+                "rust:  rust-unwrap, rust-expect, rust-unreachable (line-based)\n"
+                "js:    js-eval, js-innerhtml, js-console-log (line-based)\n"
+                "docker: docker-latest, docker-unpinned, docker-add\n"
                 "--rules <dir>: generic rule engine - one rule per file, file name =\n"
                 "  check id, line 1 severity, line 2 POSIX ERE matched per line.\n"
                 "  Special id hygiene-no-eol flags files without trailing newline.\n");
@@ -255,6 +266,8 @@ int main(int argc, char **argv)
     }
     if (lang && strcmp(lang, "c") != 0 && strcmp(lang, "cpp") != 0 &&
         strcmp(lang, "sh") != 0 && strcmp(lang, "py") != 0 &&
+        strcmp(lang, "go") != 0 && strcmp(lang, "rust") != 0 &&
+        strcmp(lang, "js") != 0 && strcmp(lang, "docker") != 0 &&
         strcmp(lang, "rules") != 0 && strcmp(lang, "auto") != 0) {
         fprintf(stderr, "exoqms-code: unknown language %s\n", lang);
         return 2;
@@ -303,6 +316,8 @@ int main(int argc, char **argv)
         findvec_t out = {0};
         const char *flang = rules_mode ? "rules" : lang_of(path, lang);
         if (flang && (strcmp(flang, "sh") == 0 || strcmp(flang, "py") == 0 ||
+                      strcmp(flang, "go") == 0 || strcmp(flang, "rust") == 0 ||
+                      strcmp(flang, "js") == 0 || strcmp(flang, "docker") == 0 ||
                       strcmp(flang, "rules") == 0)) {
             FILE *f = fopen(path, "rb");
             if (f) {

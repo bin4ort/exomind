@@ -464,7 +464,8 @@ static void handle_spec(int fd)
 {
     http_out(fd, 200, "text/plain; charset=utf-8",
              "exocrawl v0.1.0 - AI-native web research daemon\n"
-             "plain text, lowercase ok/error replies, token-efficient\n\n"
+             "plain text, lowercase ok/error replies, token-efficient\n"
+             "GET / - this specification\n\n"
              "GET /search?q=<query>[&n=10][&engines=ddg,mojeek,marginalia,bing,wikipedia|all][&json=1]\n"
              "  independent private metasearch (own adapters, no third-party\n"
              "  aggregator; ads filtered, rotated, no accounts/cookies)\n"
