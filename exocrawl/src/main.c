@@ -33,8 +33,9 @@ typedef struct {
     int concurrency;
     int pace_ms;
     int use_cache;
+    int robots; /* optional robots.txt politeness mode */
     const char *exomind;
-    char *instances; /* optional searxng instance list file */
+    char *instances; /* optional search instance list file */
     char *uas_file;
 } cfg_t;
 
@@ -221,11 +222,91 @@ typedef struct {
     char err[256];
 } fetch_job_t;
 
+/* robots.txt policy cache: host -> "allow" | "deny" | "unknown" */
+typedef struct rob_s {
+    char host[256];
+    char policy[16];
+    struct rob_s *next;
+} rob_t;
+static rob_t *g_robs;
+
+static void robots_policy(const char *host, const char *url, char *out,
+                          size_t cap)
+{
+    snprintf(out, cap, "unknown");
+    if (!g_cfg.robots)
+        return;
+    rob_t *r = g_robs;
+    while (r && strcmp(r->host, host) != 0)
+        r = r->next;
+    if (r) {
+        snprintf(out, cap, "%s", r->policy);
+        return;
+    }
+    r = calloc(1, sizeof *r);
+    if (!r)
+        return;
+    snprintf(r->host, sizeof r->host, "%s", host);
+    snprintf(r->policy, sizeof r->policy, "%s", "allow");
+    g_robs = r;
+    /* fetch robots.txt once per host */
+    char rurl[2048];
+    snprintf(rurl, sizeof rurl, "https://%s/robots.txt", host);
+    resp_t rr;
+    char err[256];
+    if (net_fetch(&g_net, rurl, &rr, err, sizeof err) == 0 && rr.status == 200 &&
+        rr.body) {
+        /* UA-agnostic: honor the broadest restriction - any "Disallow: /"
+           (or a disallow of the url path) denies */
+        if (strstr(rr.body, "Disallow: /") != NULL)
+            snprintf(r->policy, sizeof r->policy, "%s", "deny");
+        else {
+            /* path-specific: does any Disallow cover our path? */
+            char pth[1024];
+            url_path(url, pth, sizeof pth);
+            const char *p = rr.body;
+            while ((p = strstr(p, "Disallow:")) != NULL) {
+                p += 9;
+                while (*p == ' ')
+                    p++;
+                const char *e = p;
+                while (*e && *e != '\n')
+                    e++;
+                char rule[512];
+                size_t rl = (size_t)(e - p);
+                if (rl >= sizeof rule)
+                    rl = sizeof rule - 1;
+                memcpy(rule, p, rl);
+                rule[rl] = 0;
+                if (rl == 1 && rule[0] == '/') {
+                    snprintf(r->policy, sizeof r->policy, "%s", "deny");
+                    break;
+                }
+                if (rl > 1 && rule[0] == '/' &&
+                    strncmp(pth, rule, rl) == 0) {
+                    snprintf(r->policy, sizeof r->policy, "%s", "deny");
+                    break;
+                }
+                p = e;
+            }
+        }
+        resp_free(&rr);
+    }
+    snprintf(out, cap, "%s", r->policy);
+}
+
 static void fetch_worker(fetch_job_t *j)
 {
     char host[256];
     url_host(j->url, host, sizeof host);
     pace_wait(host, g_cfg.pace_ms);
+    char pol[16];
+    robots_policy(host, j->url, pol, sizeof pol);
+    if (strcmp(pol, "deny") == 0) {
+        snprintf(j->err, sizeof j->err, "robots.txt disallows");
+        j->status = -1;
+        return;
+    }
 
     char *cached = cache_get(j->url);
     if (cached) {
@@ -577,7 +658,7 @@ static void usage(const char *prog)
 {
     fprintf(stderr,
             "usage: %s [--port 7658] [--token secret] [--concurrency 16]\n"
-            "       [--pace-ms 200] [--cache exomind] [--proxy http://...]\n",
+            "       [--pace-ms 200] [--cache exomind] [--robots] [--proxy http://...]\n",
             prog);
 }
 
@@ -598,6 +679,8 @@ int main(int argc, char **argv)
             g_cfg.pace_ms = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--cache") && i + 1 < argc)
             g_cfg.use_cache = 1, g_cfg.exomind = argv[++i];
+        else if (!strcmp(argv[i], "--robots"))
+            g_cfg.robots = 1;
         else if (!strcmp(argv[i], "--proxy") && i + 1 < argc)
             g_net.proxy = argv[++i];
         else if (!strcmp(argv[i], "--engine-base") && i + 1 < argc)

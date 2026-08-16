@@ -849,6 +849,65 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
         if (exo_note(e, note.p, err, sizeof err) != 0)
             fprintf(stderr, "exoqms: audit note failed: %s\n", err);
         buf_free(&note);
+
+        /* rework metric: checks failing in this audit that also failed in
+         * the previous one (ISO 9001 10.2: did the last fix stick?) */
+        {
+            buf_t cur = {0};
+            for (int i = 0; i < nfinds; i++)
+                if (finds[i].res == R_FAIL) {
+                    if (cur.len)
+                        buf_put(&cur, " ", 1);
+                    buf_puts(&cur, finds[i].id);
+                }
+            char *prev = NULL;
+            int rework = 0;
+            if (exo_get(e, "exoqms:last_fails", &prev, err, sizeof err) == 0 &&
+                prev) {
+                char *copy = xstrdup(prev);
+                char *save = NULL;
+                for (char *w = strtok_r(copy, " ", &save); w;
+                     w = strtok_r(NULL, " ", &save)) {
+                    buf_t probe = {0};
+                    buf_puts(&probe, " ");
+                    buf_puts(&probe, w);
+                    buf_put(&probe, " ", 1);
+                    buf_t curp = {0};
+                    buf_put(&curp, " ", 1);
+                    buf_puts(&curp, cur.p ? cur.p : "");
+                    buf_put(&curp, " ", 1);
+                    if (strstr(curp.p, probe.p))
+                        rework++;
+                    buf_free(&probe);
+                    buf_free(&curp);
+                }
+                free(copy);
+            }
+            free(prev);
+            char hist[1024];
+            snprintf(hist, sizeof hist, "%d", rework);
+            if (exo_persist(e, "exoqms:last_fails", cur.p ? cur.p : "",
+                            err, sizeof err) != 0)
+                fprintf(stderr, "exoqms: last_fails store failed: %s\n",
+                        err);
+            if (exo_persist(e, "metric:exoqms:rework:last", hist, err,
+                            sizeof err) != 0)
+                fprintf(stderr, "exoqms: rework store failed: %s\n", err);
+            char tail[2048];
+            snprintf(tail, sizeof tail, "%s %s\t%d\n", name, id, rework);
+            char *resp2 = NULL;
+            size_t rlen2 = 0;
+            int st2 = 0;
+            if (exo_request(e, "POST",
+                            "/append?key=metric:exoqms:rework:history",
+                            tail, strlen(tail), 0, &resp2, &rlen2, &st2, err,
+                            sizeof err) != 0 || st2 != 200) {
+                fprintf(stderr,
+                        "exoqms: rework history append failed: %s\n", err);
+            }
+            free(resp2);
+            buf_free(&cur);
+        }
         return;
     }
 

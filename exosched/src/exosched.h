@@ -18,6 +18,7 @@ typedef struct timer {
     int64_t repeat;      /* recurring interval in seconds; 0 = one-shot */
     int64_t until;       /* wall epoch of the last fire; 0 = forever */
     int64_t retry_mono;  /* mono ns deadline for a pending exomind retry; 0 = none */
+    int receipt;         /* write a receipt:<id> delivery receipt on fire */
     char *msg;
     struct timer *next;
 } timer_rec_t;
@@ -70,13 +71,13 @@ int exo_batch_get(exo_t *e, char **keys, size_t n, char ***vals,
 /* ---- schedule.c ---- */
 int parse_schedule(const char *body, size_t len, int64_t *fire_epoch,
                    int64_t *repeat_s, int64_t *until_epoch,
-                   char **msg, char *err, size_t errsz);
+                   int *receipt, char **msg, char *err, size_t errsz);
 
 /* ---- timers.c : single timer thread + registry ---- */
 void timers_init(void);
 void timers_shutdown(void);
 int timer_add(const char *id, int64_t wall_fire, int64_t repeat,
-              int64_t until, const char *msg);
+              int64_t until, int receipt, const char *msg);
 int timer_cancel(const char *id);
 timer_rec_t *timer_find(const char *id);
 size_t timer_count(void);

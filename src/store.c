@@ -68,6 +68,12 @@ struct store {
     uint64_t n_reads, n_writes, n_deletes, n_misses;
     vec_ent_t **vecs;
     size_t nvecs, vecs_cap;
+    struct kix {
+        char *key;
+        size_t klen;
+    } *kix;              /* sorted key candidate set: (klen, memcmp) */
+    size_t nkix, ckix;
+    int kix_dirty;       /* rebuild from buckets before next prefix query */
 };
 
 /* ---------------- primitives ---------------- */
@@ -294,6 +300,7 @@ static void vec_index_del(store_t *s, const char *key, size_t klen)
 static void store_load(store_t *s)
 {
     vec_index_reset(s);
+    s->kix_dirty = 1;
     struct stat st;
     if (fstat(s->fd, &st) != 0)
         return;
@@ -477,6 +484,108 @@ void store_close(store_t *s)
     free(s);
 }
 
+/* ---------------- prefix index (sorted key candidates) ----------------
+ * The kix array is a sorted candidate set of every key ever inserted.
+ * Entries may outlive the hash record (del/expiry): queries always verify
+ * liveness against the hash index, so the kix can safely be stale. This
+ * turns `/list?prefix=` from an O(all keys) scan into an O(log n + k)
+ * range walk.
+ */
+static int kix_cmp(const void *a, const void *b)
+{
+    const struct kix *x = a, *y = b;
+    size_t n = x->klen < y->klen ? x->klen : y->klen;
+    int c = memcmp(x->key, y->key, n);
+    if (c != 0)
+        return c < 0 ? -1 : 1;
+    if (x->klen != y->klen)
+        return x->klen < y->klen ? -1 : 1;
+    return 0;
+}
+
+/* kix entries compare as keys: full key, or a prefix range endpoint */
+static int kix_key_cmp(const struct kix *e, const char *key, size_t klen)
+{
+    size_t n = e->klen < klen ? e->klen : klen;
+    int c = memcmp(e->key, key, n);
+    if (c != 0)
+        return c < 0 ? -1 : 1;
+    if (e->klen != klen)
+        return e->klen < klen ? -1 : 1;
+    return 0;
+}
+
+static void kix_insert(store_t *s, const char *key, size_t klen)
+{
+    size_t lo = 0, hi = s->nkix;
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (kix_key_cmp(&s->kix[mid], key, klen) < 0)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if (lo < s->nkix && kix_key_cmp(&s->kix[lo], key, klen) == 0)
+        return; /* already a candidate */
+    if (s->nkix == s->ckix) {
+        s->ckix = s->ckix ? s->ckix * 2 : 128;
+        s->kix = xrealloc(s->kix, s->ckix * sizeof(*s->kix));
+    }
+    memmove(&s->kix[lo + 1], &s->kix[lo],
+            (s->nkix - lo) * sizeof(*s->kix));
+    s->kix[lo].key = xstrndup(key, klen);
+    s->kix[lo].klen = klen;
+    s->nkix++;
+}
+
+static void kix_remove(store_t *s, const char *key, size_t klen)
+{
+    size_t lo = 0, hi = s->nkix;
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (kix_key_cmp(&s->kix[mid], key, klen) < 0)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if (lo >= s->nkix || kix_key_cmp(&s->kix[lo], key, klen) != 0)
+        return;
+    free(s->kix[lo].key);
+    memmove(&s->kix[lo], &s->kix[lo + 1],
+            (s->nkix - lo - 1) * sizeof(*s->kix));
+    s->nkix--;
+}
+
+/* rebuild the candidate set from the live buckets (expired entries are
+ * still collected as candidates; queries re-verify liveness) */
+static void kix_rebuild(store_t *s)
+{
+    size_t cnt = 0;
+    for (size_t b = 0; b < s->nbuckets; b++)
+        for (entry_t *e = s->buckets[b]; e; e = e->next)
+            cnt++;
+    if (cnt > s->ckix) {
+        s->ckix = cnt + 128;
+        s->kix = xrealloc(s->kix, s->ckix * sizeof(*s->kix));
+    }
+    size_t i = 0;
+    for (size_t b = 0; b < s->nbuckets; b++)
+        for (entry_t *e = s->buckets[b]; e; e = e->next) {
+            s->kix[i].key = xstrndup(e->key, e->klen);
+            s->kix[i].klen = e->klen;
+            i++;
+        }
+    s->nkix = i;
+    qsort(s->kix, s->nkix, sizeof(*s->kix), kix_cmp);
+    s->kix_dirty = 0;
+}
+
+static void kix_ensure(store_t *s)
+{
+    if (s->kix_dirty)
+        kix_rebuild(s);
+}
+
 int store_set(store_t *s, const char *key, size_t klen, const char *val,
               size_t vlen, int64_t ttl_sec, int append)
 {
@@ -522,6 +631,7 @@ int store_set(store_t *s, const char *key, size_t klen, const char *val,
                    ttl_sec * 1000);
         vec_index_add(s, key, klen, wv, wlen,
                       ttl_sec ? ts + ttl_sec * 1000 : 0);
+        kix_insert(s, key, klen);
         s->n_writes++;
         rc = 0;
         maybe_compact(s);
@@ -579,6 +689,7 @@ int store_del(store_t *s, const char *key, size_t klen)
     }
     int64_t ts = now_ms();
     vec_index_del(s, key, klen);
+    kix_remove(s, key, klen);
     int rc = write_rec_at(s, s->fd, &s->size, key, (uint32_t)klen, "", 0, ts, 0,
                           FLAG_TOMB);
     s->n_deletes++;
@@ -668,6 +779,42 @@ int store_query(store_t *s, int mode, const char *prefix, const char *substr,
     int truncated = 0;
     size_t plen = prefix ? strlen(prefix) : 0;
     size_t slen = substr ? strlen(substr) : 0;
+
+    if (mode == Q_LIST && prefix) {
+        kix_ensure(s);
+
+        size_t lo = 0, hi = s->nkix;
+        while (lo < hi) { /* first candidate >= prefix */
+            size_t mid = (lo + hi) / 2;
+            struct kix *m = &s->kix[mid];
+            size_t n = m->klen < plen ? m->klen : plen;
+            if (memcmp(m->key, prefix, n) < 0 ||
+                (memcmp(m->key, prefix, n) == 0 && m->klen < plen))
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        for (; lo < s->nkix && !truncated; lo++) {
+            struct kix *c = &s->kix[lo];
+            if (c->klen < plen || memcmp(c->key, prefix, plen) != 0)
+                break; /* prefix range ended */
+            if (cnt >= MAX_QUERY) {
+                truncated = 1;
+                break;
+            }
+            entry_t **slot = find_slot(s, c->key, (uint32_t)c->klen,
+                                       fnv1a(c->key, c->klen));
+            if (!*slot || expired(*slot))
+                continue; /* stale candidate */
+            push_kv(&arr, &cnt, &cap, c->key, c->klen, NULL, 0, 0,
+                    (*slot)->ts, 0);
+        }
+        pthread_mutex_unlock(&s->mu);
+        qsort(arr, cnt, sizeof(*arr), desc ? cmp_list_desc : cmp_list_asc);
+        *out = arr;
+        *n_out = cnt;
+        return truncated;
+    }
 
     for (size_t b = 0; b < s->nbuckets && !truncated; b++) {
         for (entry_t *e = s->buckets[b]; e && !truncated; e = e->next) {
@@ -924,6 +1071,7 @@ int store_restore(store_t *s, const kv_t *kvs, size_t n)
     s->size = 0;
     store_load(s);
     s->n_writes += n;
+    s->kix_dirty = 1;
     pthread_mutex_unlock(&s->mu);
     return (int)n;
 }

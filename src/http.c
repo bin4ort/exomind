@@ -799,6 +799,7 @@ fail:
 static void route(req_t *r, store_t *s, buf_t *out, int *status,
                   const char **ctype)
 {
+
     const char *path = r->path;
     char key[MAX_KEY + 1];
     char tmp[4096];

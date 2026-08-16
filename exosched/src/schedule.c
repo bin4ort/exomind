@@ -142,14 +142,31 @@ static int parse_until(const char **pp, const char *end, int64_t *until,
     return 0;
 }
 
+/* consumes a trailing `receipt=1` token if present; returns 0 and sets
+ * *out when the rest of the body is empty or only that token */
+static int trailing_receipt(const char *p, const char *end, int *out)
+{
+    skip_ws(&p, end);
+    if (p >= end) {
+        *out = 0;
+        return 1;
+    }
+    if (end - p == 9 && strncmp(p, "receipt=1", 9) == 0) {
+        *out = 1;
+        return 1;
+    }
+    return 0;
+}
+
 int parse_schedule(const char *body, size_t len, int64_t *fire_epoch,
                    int64_t *repeat_s, int64_t *until_epoch,
-                   char **msg, char *err, size_t errsz)
+                   int *receipt, char **msg, char *err, size_t errsz)
 {
     const char *p = body;
     const char *end = body + len;
     *repeat_s = 0;
     *until_epoch = 0;
+    *receipt = 0;
     skip_ws(&p, end);
 
     if (end - p >= 5 && strncmp(p, "every", 5) == 0 &&
@@ -223,14 +240,15 @@ int parse_schedule(const char *body, size_t len, int64_t *fire_epoch,
                     *msg = NULL;
                     return -1;
                 }
-                skip_ws(&p, end);
-                if (p < end) {
+                if (!trailing_receipt(p, end, receipt)) {
                     free(*msg);
                     *msg = NULL;
                     snprintf(err, errsz,
                              "bad schedule: trailing garbage after 'until'");
                     return -1;
                 }
+            } else if (trailing_receipt(p, end, receipt)) {
+                /* trailing receipt=1 token accepted */
             } else {
                 free(*msg);
                 *msg = NULL;
@@ -253,6 +271,11 @@ int parse_schedule(const char *body, size_t len, int64_t *fire_epoch,
             snprintf(err, errsz, "bad schedule: message too long");
             return -1;
         }
+        const char *tp = p;
+        while (tp < end && isspace((unsigned char)*tp))
+            tp++;
+        if (end - tp == 9 && strncmp(tp, "receipt=1", 9) == 0)
+            *receipt = 1;
         char *m = xstrndup(p, rest);
         trim_tail(m);
         if (!m[0]) {

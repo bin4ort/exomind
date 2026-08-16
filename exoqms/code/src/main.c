@@ -168,7 +168,7 @@ static void walk_dir(const char *dir, strvec_t *files, const char *lang,
     struct dirent *e;
     while ((e = readdir(d)) != NULL) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..") ||
-            !strcmp(e->d_name, ".git"))
+            !strcmp(e->d_name, ".git") || !strcmp(e->d_name, "fixtures"))
             continue;
         char path[4096];
         snprintf(path, sizeof path, "%s/%s", dir, e->d_name);

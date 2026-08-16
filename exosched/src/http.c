@@ -292,6 +292,9 @@ static const char *spec_text(void)
         "    at 1786740704 \"fire at this unix epoch\"\n"
         "    every 10m \"check the pipeline\"\n"
         "    every 30s \"nudge\" until 1786740704\n"
+        "Add `receipt=1` to the body to get a delivery receipt: when the\n"
+        "timer fires, exomind gets `receipt:<id>` = `fired:<epoch>:<msg>`\n"
+        "(24h TTL), so agents can prove a reminder was actually fired.\n"
         "\n"
         "Units: s, m, h, d. `every <n><unit> \"msg\"` schedules a RECURRING\n"
         "timer that fires every <n><unit>; the optional `until <epoch>` suffix\n"
@@ -425,10 +428,11 @@ static void route(req_t *r, exo_t *e, buf_t *out, int *status,
             return;
         }
         int64_t fire = 0, repeat = 0, until = 0;
+        int receipt = 0;
         char *msg = NULL;
         char err[256];
-        if (parse_schedule(r->body, r->body_len, &fire, &repeat, &until, &msg,
-                           err, sizeof err) != 0) {
+        if (parse_schedule(r->body, r->body_len, &fire, &repeat, &until,
+                           &receipt, &msg, err, sizeof err) != 0) {
             *status = 400;
             buf_printf(out, "error: %s", err);
             return;
@@ -460,7 +464,7 @@ static void route(req_t *r, exo_t *e, buf_t *out, int *status,
             return;
         }
         free(value);
-        if (timer_add(id, fire, repeat, until, msg) != 0) {
+        if (timer_add(id, fire, repeat, until, receipt, msg) != 0) {
             *status = 500;
             buf_puts(out, "error: timer already exists");
             int existed = 0;

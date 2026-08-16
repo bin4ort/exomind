@@ -1147,6 +1147,11 @@ static void check_agent_health(check_ctx_t *ctx, finding_t *f)
     }
     if (resp) {
         char *line = strdup(resp);
+        if (!line) {
+            free(resp);
+            resp = NULL;
+            goto out_notes;
+        }
         char *lsave = NULL;
         for (char *l = strtok_r(line, "\n", &lsave); l;
              l = strtok_r(NULL, "\n", &lsave)) {
@@ -1182,6 +1187,7 @@ static void check_agent_health(check_ctx_t *ctx, finding_t *f)
                 nfired++;
             }
         }
+out_notes:
         free(line);
     }
     free(resp);
@@ -1205,6 +1211,11 @@ static void check_agent_health(check_ctx_t *ctx, finding_t *f)
         if (exo_request(ctx->exo, "GET", q, NULL, 0, 0, &resp, &rlen,
                         &status, err, sizeof err) == 0 && resp) {
             char *line = strdup(resp);
+            if (!line) {
+                free(resp);
+                resp = NULL;
+                break;
+            }
             char *lsave = NULL;
             for (char *l = strtok_r(line, "\n", &lsave); l;
                  l = strtok_r(NULL, "\n", &lsave)) {

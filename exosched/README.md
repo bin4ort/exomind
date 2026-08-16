@@ -95,6 +95,17 @@ dead clients are purged on the next broadcast, pings get pongs.
 - One thread per HTTP/WS connection, like exomind.
 - No state on disk: exomind is the only source of truth.
 
+## receipt
+
+Add `receipt=1` to any reminder body to request a delivery receipt:
+
+    in 10m "weekly backup" receipt=1
+
+When the timer fires, exomind receives `receipt:<id>` = `fired:<epoch>:<msg>`
+(24 h TTL) in addition to the note. Agents can therefore prove a reminder
+was actually fired (checking the key exists) instead of trusting a note
+that might have been dropped during an exomind outage.
+
 ## limitations
 
 - exosched is a *timer* daemon, not a durable message broker: fired timers

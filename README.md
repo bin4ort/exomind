@@ -104,6 +104,9 @@ curl 'localhost:7654/search?q=parser'
 - **Crash safety** — every acknowledged interactive write is fsynced. A
   torn tail record from a crash is detected on load and the log
   truncated back to the last good offset.
+- **Prefix index** — a sorted key vector turns `/list?prefix=` into an
+  O(log n + k) range walk (queries verify liveness against the hash, so
+  the index can safely be stale); `/search` stays linear.
 - **Compaction** — when the log exceeds 64 MB with >33% dead bytes, live
   records are rewritten atomically via rename.
 - **Snapshot/restore** — `GET /snapshot` emits a length-prefixed plain
@@ -126,7 +129,8 @@ The QMS gate runs `./build/exomind --version` (in-budget smoke).
 ## Limitations
 
 - No clustering or replication built in (single-writer log).
-- Substring search is linear in the number of keys (10k keys ≈ 30 ms).
+- Substring search (`/search`) is linear in the number of keys
+  (10k keys ≈ 30 ms); only prefix listing is indexed.
 - The GUI-free, machine-first design assumes an agent or CLI operator.
 
 ## The development loop

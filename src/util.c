@@ -356,8 +356,11 @@ char *json_field(const char *json, size_t len, const char *field)
             free(k);
             if (*p == '"') {
                 char *v = NULL;
-                p = json_parse_string(p, end, &v);
-                return v; /* NULL on malformed */
+                const char *q = json_parse_string(p, end, &v);
+                if (!q)
+                    return NULL; /* malformed string: not found */
+                p = q;
+                return v;
             }
             /* raw scalar: copy the token */
             const char *s = p;

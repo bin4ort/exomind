@@ -424,6 +424,16 @@ check "non-upgrade GET /ws -> 400" "$([ "$g7" = "400" ] && echo 0 || echo 1)" "g
 r=$(curl -s -m 3 "$XS_URL/ping")
 check "daemon alive after fuzz" "$([ "$r" = "pong" ] && echo 0 || echo 1)"
 
+# --- delivery receipts ----------------------------------------------------------
+rid=$(curl -s -m 3 -X POST "$XS_URL/remind" -d 'in 1s "rcpt-test" receipt=1')
+rid=$(printf '%s' "$rid" | grep -oP '^ok \K\S+')
+sleep 2.5
+r=$(curl -s -m 3 "$XM_URL/get?key=receipt:$rid")
+check "delivery receipt key exists after fire" \
+    "$(printf '%s' "$r" | grep -q '^fired:' && echo 0 || echo 1)" "key=receipt:$rid val=$r"
+r=$(curl -s -m 3 "$XM_URL/get?key=receipt:no-such-timer")
+check "no receipt for never-created timer" "$([ "$r" = "missing" ] && echo 0 || echo 1)" "$r"
+
 # --- auth -----------------------------------------------------------------------
 kill "$XS_PID" 2>/dev/null
 stop_port $XS_PORT

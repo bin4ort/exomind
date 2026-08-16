@@ -121,7 +121,7 @@ static void insert_locked(timer_rec_t *t)
 
 /* inserts a timer; mono_fire computed from the wall-clock delta */
 int timer_add(const char *id, int64_t wall_fire, int64_t repeat,
-              int64_t until, const char *msg)
+              int64_t until, int receipt, const char *msg)
 {
     timer_rec_t *t = xmalloc(sizeof *t);
     snprintf(t->id, sizeof t->id, "%s", id);
@@ -129,6 +129,7 @@ int timer_add(const char *id, int64_t wall_fire, int64_t repeat,
     t->repeat = repeat;
     t->until = until;
     t->retry_mono = 0;
+    t->receipt = receipt;
     t->msg = xstrdup(msg);
     int64_t delta_ns = (wall_fire - now_epoch()) * 1000000000L;
     t->mono_fire = mono_ns() + delta_ns;
@@ -229,6 +230,22 @@ static int fire_timer(exo_t *e, timer_rec_t *t)
         return 2;
     }
     buf_free(&note);
+
+    if (t->receipt) {
+        /* delivery receipt: an agent can confirm the reminder actually
+         * fired by checking the receipt:<id> key exists in exomind */
+        char rkey[576];
+        char rval[1024];
+        snprintf(rkey, sizeof rkey, "receipt:%s", t->id);
+        snprintf(rval, sizeof rval, "fired:%lld:%s",
+                 (long long)t->wall_fire, t->msg);
+        if (exo_persist(e, rkey, rval, 3600 * 24, err, sizeof err) != 0) {
+            fprintf(stderr,
+                    "exosched: receipt failed for %s: %s (retrying)\n",
+                    t->id, err);
+            return 2;
+        }
+    }
 
     char key[512];
     snprintf(key, sizeof key, EXO_KEY_PREFIX "%s", t->id);

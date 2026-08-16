@@ -35,8 +35,11 @@ assert_not_contains() { # desc needle haystack
 }
 
 start_server() {
+    {
+        echo "===== SERVER START: $*"
+    } >> "$DATA/server.log"
     "$BIN" --host 127.0.0.1 --port "$PORT" --data "$DATA/exomind.dat" \
-        "$@" 2>"$DATA/server.log" &
+        "$@" 2>>"$DATA/server.log" &
     SRV=$!
     for _ in $(seq 1 100); do
         if curl -s -o /dev/null "$BASE/ping" 2>/dev/null; then
@@ -555,6 +558,10 @@ done
 assert_eq "crash no corrupt vectors" "0" "$BROKEN"
 stop_server
 
+if [ "$FAILS" -ne 0 ]; then
+    cp "$DATA/server.log" /tmp/opencode/fail-server.log 2>/dev/null
+    echo "DATA=$DATA"
+fi
 rm -rf "$DATA"
 
 if [ "$FAILS" -eq 0 ]; then
