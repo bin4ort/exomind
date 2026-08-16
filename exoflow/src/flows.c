@@ -149,8 +149,8 @@ char *flow_serialize(const flow_t *f)
                 buf_puts(&b, ",");
             buf_puts(&b, s->deps[j]);
         }
-        buf_printf(&b, "\t%s\t%s\t%lld\n", s->state, s->owner,
-                   (long long)s->deadline);
+        buf_printf(&b, "\t%s\t%s\t%lld\t%lld\n", s->state, s->owner,
+                   (long long)s->deadline, (long long)s->timeout_s);
     }
     if (f->loop_active)
         buf_printf(&b, "loop\t%lld\t%lld\t%lld\t%lld\t%lld\t%lld\t%s\t%d\n",
@@ -220,9 +220,10 @@ static int flow_parse(const char *doc, flow_t **out, char *err, size_t errsz)
                 *t = 0;
                 c = t + 1;
             }
-            /* stored form: id desc deps state owner deadline (6 columns);
-             * tolerate a bare 3/4-column line (untouched state -> pending) */
-            if (nc != 6 && nc != 3 && nc != 4) {
+            /* stored form: id desc deps state owner deadline timeout
+             * (7 columns); tolerate bare 3/4/6-column lines for v1/v2
+             * documents written before the timeout column existed */
+            if (nc != 7 && nc != 6 && nc != 3 && nc != 4) {
                 snprintf(err, errsz, "bad step line");
                 goto bad;
             }
@@ -258,7 +259,7 @@ static int flow_parse(const char *doc, flow_t **out, char *err, size_t errsz)
                     goto bad;
                 }
                 s->deadline = dl;
-            } else if (nc == 6) {
+            } else if (nc == 6 || nc == 7) {
                 if (strcmp(cols[3], "pending") != 0 &&
                     strcmp(cols[3], "claimed") != 0 &&
                     strcmp(cols[3], "done") != 0 &&
@@ -280,6 +281,14 @@ static int flow_parse(const char *doc, flow_t **out, char *err, size_t errsz)
                     goto bad;
                 }
                 s->deadline = dl;
+                if (nc == 7) {
+                    long long ts = atoll(cols[6]);
+                    if (ts < 0) {
+                        snprintf(err, errsz, "bad timeout");
+                        goto bad;
+                    }
+                    s->timeout_s = ts;
+                }
             }
         } else if (strncmp(ln, "loop\t", 5) == 0) {
             if (i != nlines - 1) {
@@ -659,7 +668,7 @@ int flow_create(cli_t *e, cli_t *x, const char *body, size_t blen,
             *t = 0;
             c = t + 1;
         }
-        if (nc < 3 || nc > 4) {
+        if (nc < 3 || nc > 5) {
             snprintf(err, errsz, "bad step line");
             goto bad;
         }
@@ -695,6 +704,19 @@ int flow_create(cli_t *e, cli_t *x, const char *body, size_t blen,
                 goto bad;
             }
             s->deadline = dl;
+        } else if (nc == 5) {
+            long long dl = atoll(cols[3]);
+            if (dl < 0) {
+                snprintf(err, errsz, "bad deadline");
+                goto bad;
+            }
+            s->deadline = dl;
+            long long ts = atoll(cols[4]);
+            if (ts < 0) {
+                snprintf(err, errsz, "bad timeout");
+                goto bad;
+            }
+            s->timeout_s = ts;
         }
     }
     /* dep references are resolved after the whole graph is parsed, so a
@@ -1163,6 +1185,7 @@ int step_do(cli_t *e, flow_t *f, const char *sid, const char *action,
             return -1;
         }
         to = "pending";
+        s->deadline = 0; /* the timeout restarts on the next claim */
     } else {
         snprintf(err, errsz, "bad action");
         return -1;
@@ -1221,6 +1244,9 @@ int flow_next(cli_t *e, flow_t *f, const char *worker, char *sid,
         }
         if (!ready)
             continue;
+        /* a timeout step starts its clock at claim time */
+        if (s->timeout_s > 0 && s->deadline == 0)
+            s->deadline = now_epoch() + s->timeout_s;
         set_state(s, "claimed", worker);
         if (persist_flow(e, f, err, errsz) != 0) {
             char uerr[256];

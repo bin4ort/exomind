@@ -114,3 +114,7 @@ never crash on them. Needs `curl` and `python3` (the fake daemons).
 
 - Iteration 5: the Quality Management component consumes `--json` output
   and turns doc-debt history into trend reports.
+
+## License
+
+GPL-3.0-only — see [LICENSE](../LICENSE).

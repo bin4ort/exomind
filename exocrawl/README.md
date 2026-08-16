@@ -80,3 +80,7 @@ five engines plus a test page; asserts extraction (boilerplate removal,
 headings, links, images, entities, pre verbatim), every engine's parser,
 ad filtering, redirect decoding, /fetch caps, /scrape concurrency, 403
 retry, stats counters, auth. ASAN-clean.
+
+## License
+
+GPL-3.0-only — see [LICENSE](../LICENSE).

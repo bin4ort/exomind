@@ -664,6 +664,18 @@ check "background reload picked up existing flows" \
 kill "$XM_PID" 2>/dev/null
 XM_PID=""
 stop_port $DEAD_PORT
+# the down-test daemon still points at the dead backend: retire it and
+# bring the shared daemon back on the real exomind for later sections
+kill "$XF_PID" 2>/dev/null
+XF_PID=""
+stop_port $XF_PORT
+setsid nohup "$XF_BIN" --port $XF_PORT --exomind "$XM_URL" \
+    --exosched "$XS_URL" >>"$XF_LOG" 2>&1 < /dev/null &
+XF_PID=$!
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    [ "$(curl -s -m 2 "$XF_URL/ping")" = "pong" ] && break
+    sleep 0.5
+done
 
 # bring exomind back on its own port so the auth instance can reload
 setsid nohup "$XM_BIN" --port $XM_PORT --data "$XM_DATA" \
@@ -705,6 +717,33 @@ check "/flows?limit=1 caps results" \
     "$([ "$(printf '%s' "$r" | grep -c '^flow')" = "1" ] && echo 0 || echo 1)" "$r"
 
 # --- done with note audit detail already covered; final summary --------------
+# --- claim timeout steps -----------------------------------------------------
+r=$(curl -s -m 3 -X POST "$XF_URL/flow" --data-binary $'timeout flow\nquick\tfinish fast\t\t\t2')
+check "create timeout flow" \
+    "$(printf '%s' "$r" | grep -q '^ok ' && echo 0 || echo 1)" "$r"
+TF=$(printf '%s' "$r" | awk '{print $2}')
+r=$(curl -s -m 3 "$XF_URL/next?flow=$TF&worker=w1")
+check "claim timeout step" \
+    "$(printf '%s' "$r" | grep -q '^ok quick$' && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 "$XF_URL/flow?id=$TF")
+check "claim set deadline from timeout" \
+    "$(printf '%s' "$r" | grep '^step' | awk -F '\t' '$2=="quick" && $3=="claimed" && $5>0 {ok=1} END {exit ok?0:1}' && echo 0 || echo 1)" "$r"
+check "/flow shows timeout column" \
+    "$(printf '%s' "$r" | grep '^step' | awk -F '\t' '$2=="quick" && $6=="2" {ok=1} END {exit ok?0:1}' && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 -X POST "$XF_URL/step?flow=$TF&id=quick" -d 'unclaim')
+check "unclaim timeout step" \
+    "$(printf '%s' "$r" | grep -q '^ok$' && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 "$XF_URL/flow?id=$TF")
+check "unclaim reset the deadline clock" \
+    "$(printf '%s' "$r" | grep '^step' | awk -F '\t' '$2=="quick" && $3=="pending" && $5=="0" {ok=1} END {exit ok?0:1}' && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 "$XF_URL/next?flow=$TF&worker=w1")
+check "reclaim after unclaim" \
+    "$(printf '%s' "$r" | grep -q '^ok quick$' && echo 0 || echo 1)" "$r"
+sleep 3
+r=$(curl -s -m 3 "$XF_URL/flow?id=$TF")
+check "expired claim timeout -> overdue" \
+    "$(printf '%s' "$r" | grep '^step' | awk -F '\t' '$2=="quick" && $3=="overdue" {ok=1} END {exit ok?0:1}' && echo 0 || echo 1)" "$r"
+
 say ""
 say "=== results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" = "0" ]

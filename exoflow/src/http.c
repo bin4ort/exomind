@@ -276,7 +276,7 @@ static const char *spec_text(void)
         "\n"
         "POST /flow: line 1 is the flow name; each following line is a step:\n"
         "\n"
-        "    id<TAB>description<TAB>deps<TAB>deadline_epoch(optional)\n"
+        "    id<TAB>description<TAB>deps<TAB>deadline_epoch(optional)<TAB>timeout_s(optional)\n"
         "\n"
         "deps are comma-separated step ids (may be empty). Description and\n"
         "name may use \\n \\t \\\\ escapes. Replies `ok <flow-id> <nsteps>`.\n"
@@ -287,7 +287,7 @@ static const char *spec_text(void)
         "## reading\n"
         "\n"
         "GET /flow?id=<f> returns the flow header line `flow<TAB><id><TAB><name><TAB><status>`\n"
-        "then one line per step: `step<TAB><id><TAB><state><TAB><owner><TAB><deadline><TAB><desc>`\n"
+        "then one line per step: `step<TAB><id><TAB><state><TAB><owner><TAB><deadline><TAB><timeout_s><TAB><desc>`\n"
         "(deadline is an epoch or `-`). Flow status is derived: `done` when\n"
         "all steps are done, `cancelled` when any step was cancelled,\n"
         "`failed` when every step is terminal with at least one failure,\n"
@@ -310,6 +310,18 @@ static const char *spec_text(void)
         "failed is allowed from pending/claimed/overdue; unclaim releases a\n"
         "claimed step back to pending. The optional note text is appended to\n"
         "the audit note.\n"
+        "\n"
+        "## timeouts\n"
+        "\n"
+        "A step may carry a claim timeout (5th column, seconds): when the\n"
+        "step is CLAIMED via /next, its deadline is set to now + timeout.\n"
+        "The lazy sweep then marks it `overdue` if the worker does not\n"
+        "finish in time (unclaim resets the clock). With both deadline and\n"
+        "timeout the absolute deadline wins. Timeout steps are how a swarm\n"
+        "guarantees that a stuck worker releases the step:\n"
+        "`/next` hands it out again after `failed` or `unclaim`... actually\n"
+        "overdue steps stay claimed until failed/unclaim - the freeze\n"
+        "detector (agent-health in exoqms) catches silent workers on top.\n"
         "\n"
         "## deadlines\n"
         "\n"
@@ -379,9 +391,10 @@ static void flow_tsv(const flow_t *f, buf_t *out)
     for (size_t i = 0; i < f->nsteps; i++) {
         const step_t *s = &f->steps[i];
         char *ed = esc_line(s->desc, strlen(s->desc));
-        buf_printf(out, "step\t%s\t%s\t%s\t%lld\t%s\n", s->id, s->state,
-                   s->owner, (long long)(s->deadline > 0 ? s->deadline : 0),
-                   ed);
+        buf_printf(out, "step\t%s\t%s\t%s\t%lld\t%lld\t%s\n", s->id,
+                   s->state, s->owner,
+                   (long long)(s->deadline > 0 ? s->deadline : 0),
+                   (long long)s->timeout_s, ed);
         free(ed);
     }
     if (f->loop_active)

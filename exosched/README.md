@@ -122,3 +122,7 @@ catch-up of overdue recurring timers, 0.1.0 one-shot wire values
 (`fire\tmsg`) loading and firing, and the reload/cancel race: a timer
 cancelled while a degraded-startup background reload is in flight is
 never resurrected by the stale snapshot.
+
+## License
+
+GPL-3.0-only — see [LICENSE](../LICENSE).

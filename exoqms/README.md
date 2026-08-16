@@ -256,3 +256,7 @@ make test-exoqms   # from the repo root: exoqms suite + module suites
   vocabulary (`major`/`minor`), not the judgment.
 - `GET /report` is a one-shot picture, not a historical chart; history
   lives in the note feed and the `exoqms:*` keys.
+
+## License
+
+GPL-3.0-only — see [LICENSE](../LICENSE).

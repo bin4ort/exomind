@@ -123,6 +123,12 @@ wait
   daemon survives restarts with no local data file: SIGKILL the exoflow
   process, start it again on the same ports/backend and the flow state is
   intact.
+- **Claim timeouts.** A step may carry a 5th column `timeout_s`: the
+  claim via `/next` sets its deadline to `now + timeout`, and the lazy
+  sweep marks the step `overdue` if the worker does not finish in time;
+  `unclaim` resets the clock. A stuck worker therefore releases the step
+  deterministically, and the freeze detector (`agent-health` in exoqms)
+  catches silent workers on top.
 - **Deadlines via exosched.** A step with a `deadline_epoch` registers a
   scheduled reminder with exosched; when it fires (or on the next read, via
   the lazy deadline sweep) exoflow marks the step `overdue` and writes an
@@ -193,7 +199,7 @@ Version-1 records load as non-looping flows (both formats are read).
 |--------|--------------------------|--------------------------|-------|
 | GET    | `/`                      | —                        | self-describing text |
 | GET    | `/ping`                  | —                        | `pong` |
-| POST   | `/flow`                  | line 1 = flow name; then `id<TAB>desc<TAB>deps` lines, deps comma-separated (empty allowed); optional 4th field `deadline_epoch`; optional LAST line `loop<TAB>every <n><s|m|h><TAB>[max <n>] [until <epoch>]` | `ok <flow-id> <nsteps>` |
+| POST   | `/flow`                  | line 1 = flow name; then `id<TAB>desc<TAB>deps` lines, deps comma-separated (empty allowed); optional 4th field `deadline_epoch`, optional 5th field `timeout_s`; optional LAST line `loop<TAB>every <n><s|m|h><TAB>[max <n>] [until <epoch>]` | `ok <flow-id> <nsteps>` |
 | GET    | `/flow?id=`              | —                        | TSV state (one line per step; `loop` line for loops) |
 | GET    | `/flows`                 | —                        | flow list |
 | GET    | `/loops`                 | —                        | loop iterations list |
@@ -254,3 +260,7 @@ Environment hooks: `EXOFLOW_BIN` (binary path) and `EXOFLOW_ARGS` (extra
 daemon flags, e.g. `--token` in production-style runs) override the
 defaults. The suite never touches shared swarm instances (7654/7655) and
 only uses its own ports.
+
+## License
+
+GPL-3.0-only — see [LICENSE](../LICENSE).

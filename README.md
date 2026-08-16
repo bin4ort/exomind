@@ -248,34 +248,58 @@ in 0.3.0. The 0.2.0 roadmap is complete.
   (`exosched:timer:*` keys, TTL'd) and fired/missed events logged as notes.
   Build with `make exosched`, test with `make test-exosched`.
 - **exoflow** — `exoflow/` in this repo. The orchestrator for agent swarms:
-  dependency-graph flows, exclusive step claiming, deadlines, audit notes.
-  Build with `make exoflow`, test with `make test-exoflow`.
+  dependency-graph flows, exclusive step claiming, deadlines, self-looping
+  flows (`loop every Ns max M`), audit notes. Build with `make exoflow`,
+  test with `make test-exoflow`.
 - **exodoc** — `exodoc/` in this repo. The documentation auditor: checks every
   component README against the ISO 9001 §7.5-flavored standard
   (`exodoc/standard.md`), against the live daemons when asked. Build with
   `make exodoc`, test with `make test-exodoc`.
+- **exoqms** — `exoqms/` in this repo. The universal Quality Management
+  System (ISO 9001/9004/19011): quality objectives, non-conformity
+  lifecycle, audit programs, trends, and field modules that audit **any
+  project in any language** (`.exoqms.json` config; c/cpp/sh/py adapters
+  and a generic rule engine for debt/hygiene/secrets). New checks:
+  `code-safety`, `debt`, `hygiene`, `secrets`, `asset-logic`, and
+  `agent-health` (scheduler-driven freeze detection). Build with
+  `make exoqms`, test with `make test-exoqms`.
+- **exocrawl** — `exocrawl/` in this repo. The AI-native research daemon:
+  independent private metasearch (own adapters for DuckDuckGo, Mojeek,
+  Marginalia, Bing, Wikipedia — no third-party aggregator, ads filtered),
+  token-efficient HTML→text extraction, concurrent scraping with per-host
+  pacing and identity rotation, optional exomind cache. Build with
+  `make exocrawl`, test with `make test-exocrawl`.
 
 ## Stack
 
 The unified human-facing reference for the whole stack — the AI-native
 philosophy (no GUI, machine-first plain-text APIs, self-describing specs,
 zero deps), per-component ports and API tables, durability stories, and the
-memory↔scheduler↔orchestrator↔auditor flows diagram — lives in
+memory↔scheduler↔orchestrator↔auditor↔research flows diagram — lives in
 [docs/STACK.md](docs/STACK.md). The stack manifest is
 [docs/stack.tsv](docs/stack.tsv).
+
+**Knowledge corpus** — freely-available international norms (RFC 2119,
+RFC 8259, PEP 8, WCAG 2.2, NN/g heuristics) are harvested by
+`exocrawl/contrib/fetch-norms.sh` into exomind `norm:*` keys; the registry
+is `norm:index`. Agents consult standards locally instead of fetching.
 
 **The quality gate** — documentation debt is CI-checked, not aspirational:
 
 ```sh
 make test-exodoc                  # exodoc suite + live audit gate
 ./exodoc/build/exodoc audit --live --stack docs/stack.tsv
-# expect: === audit: 35 pass, 0 fail (score 100%) ===
+# expect: === audit: 44 pass, 0 fail (score 100%) ===
 ```
 
 `make test-exodoc` runs exodoc's own suite, then audits the live stack
-(7654/7655/7656) and fails the build on any doc debt; if the daemons are
-down it falls back to the offline doc audit as the gate.
+and fails the build on any doc debt; if the daemons are down it falls back
+to the offline doc audit as the gate.
+
+**Issues** — the live issue log is [ISSUES.md](ISSUES.md), mirrored into
+exomind `issue:*` keys; the roadmap is [TODO.md](TODO.md), mirrored into
+`todo:*` keys.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+GPL-3.0-only — see [LICENSE](LICENSE).

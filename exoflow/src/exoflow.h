@@ -22,6 +22,7 @@ typedef struct step {
     char state[STATE_MAX]; /* pending|claimed|done|failed|overdue|cancelled */
     char owner[OWNER_MAX];
     int64_t deadline;  /* epoch seconds, 0 = none */
+    int64_t timeout_s; /* claim-to-overdue seconds, 0 = none */
 } step_t;
 
 typedef struct flow {

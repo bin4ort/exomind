@@ -12,19 +12,16 @@ exomind keys (`todo:*`) as well — the memory is the source of truth.
       (`ctx:session:<id>`), summarize decisions/state, and re-expand on
       resume. The real bottleneck for long autonomous runs is context
       budget; this turns exomind into a swap file for attention.
-- [ ] **Scheduler-driven agent freeze detection** (exoqms check
-      `agent-health`): for every agent in `--agents`, compare the
-      timestamp of its latest activity note against exosched's fired
-      reminders mentioning that agent. Reminder fired + no activity +
-      no deliverable (no new `agent:<id>:*` keys, no pushed branch)
-      → FAIL with evidence → the orchestrator redeploys the agent or
-      does the task itself. This is the "silent freeze" detector.
+- [x] **Scheduler-driven agent freeze detection** (exoqms check
+      `agent-health`, criterion c8) — DONE: fired reminder + no activity
+      + no `agent:<id>:done` marker → FAIL with timestamps; verified
+      live against a ghost agent and the real agent set.
 - [ ] **exocrawl: scheduled re-research flows** — an exoflow loop
       (`every 6h`) that re-runs `search → fetch → diff-note` for tracked
       topics (`topic:<id>` keys), so stale knowledge self-refreshes.
-- [ ] **exocrawl: norms corpus** — the international-standards extraction
-      below, stored as `norm:*` keys so agents have standards locally
-      without fetching them repeatedly.
+- [x] **exocrawl: norms corpus** — DONE (v1): RFC 2119, RFC 8259, PEP 8,
+      WCAG 2.2, NN/g 10 harvested to `norm:*` keys via
+      `exocrawl/contrib/fetch-norms.sh`; extend per Priority 4.
 
 ## Priority 2 — the universal QMS
 
@@ -35,8 +32,7 @@ exomind keys (`todo:*`) as well — the memory is the source of truth.
 - [ ] **QMS check `docs-coverage`** — require every new module to carry
       README + tests + standard.md conformance before merge (partly done
       by exodoc; wire it into the audit program as a hard gate).
-- [ ] **QMS check `agent-health`** — see Priority 1; implement with the
-      exomind client the daemon already has.
+- [x] **QMS check `agent-health`** — DONE (see Priority 1).
 - [ ] **Trends: iteration velocity** — track time-to-merge per feature
       and rework rate in `metric:*`; the QMS already computes the trend;
       add a "rework" derived metric (test-failure→fix cycles).
@@ -60,9 +56,9 @@ exomind keys (`todo:*`) as well — the memory is the source of truth.
       log format already supports it (append-only + CRC).
 - [ ] **exosched: delivery receipts** — a fired timer's note should
       record whether any WS client ACKed; expose `/delivery` stats.
-- [ ] **exoflow: timeout steps** — a step with a `timeout <s>` spec that
-      exoflow marks overdue if not completed (uses exosched deadlines,
-      already half-built).
+- [x] **exoflow: timeout steps** — DONE: 5th column `timeout_s`; claim
+      sets deadline = now + timeout; lazy sweep marks overdue; unclaim
+      resets the clock; 109/109 tests.
 
 ## Priority 4 — norms & knowledge corpus (the scraper's harvest)
 
