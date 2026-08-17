@@ -7,6 +7,8 @@ uses the stack to build the stack: every component is developed while the
 others run, audited by the quality system, and dogfooded in the process.
 
 **License: GPL-3.0-only** (see [LICENSE](LICENSE)).
+**Status: Early Alpha** — the first packaged release is `v0.4.0-alpha.1`
+(pacman + apt packages, see [Releasing](packaging/release.sh)).
 
 ## The stack
 
@@ -35,21 +37,84 @@ make exosched exoflow exodoc exoqms exocrawl exocontext exokit
 make test test-exosched test-exoflow test-exodoc test-exoqms test-exocrawl
 ```
 
-## Run
+## Install
+
+From source:
 
 ```sh
-./build/exomind --port 7654 --data exomind.dat &              # memory
-./exosched/build/exosched --port 7655 --exomind http://127.0.0.1:7654 &
-./exoflow/build/exoflow --port 7656 --exomind http://127.0.0.1:7654 --exosched http://127.0.0.1:7655 &
-./exoqms/build/exoqms --port 7657 --exomind http://127.0.0.1:7654 --exosched http://127.0.0.1:7655 \
-  --exodoc ./exodoc/build/exodoc --ui ./exoqms/ui/build/exoqms-ui \
-  --code ./exoqms/code/build/exoqms-code --svg ./exoqms/svg/build/exoqms-svg --repo "$PWD" &
-./exocrawl/build/exocrawl --port 7658 --cache exomind &
-./exocontext/build/exocontext --port 7659 --exomind http://127.0.0.1:7654 &
+make                    # all modules
+make test test-exosched test-exoflow test-exodoc test-exoqms test-exocrawl test-exocontext test-exokit
+make install PREFIX=~/.local   # default /usr/local
 ```
 
-Every daemon answers `GET /` with its complete specification; `--token
-<secret>` enables Bearer auth. `EXOMIND_TOKEN` works as `--token`.
+Packaged (Early Alpha `v0.4.0-alpha.1`, built by `packaging/release.sh`):
+
+- **pacman/Arch**: download `exomind-0.4.0alpha1-1-x86_64.pkg.tar.zst` from
+  the GitHub release and `pacman -U` it (or `makepkg -i` in `packaging/`).
+- **apt/Debian-Ubuntu**: download `exomind_0.4.0~alpha1-1_amd64.deb` and
+  `sudo apt install ./exomind_0.4.0~alpha1-1_amd64.deb` (or build with
+  `dpkg-buildpackage`).
+- or the source tarball + SHA256SUMS from the release, verified with
+  `sha256sum -c`.
+
+## Usage: console or MCP server
+
+Every module runs two ways:
+
+```sh
+# 1) from the console: $ exo<module> <options>
+exomind --port 7654 --data exomind.dat --backup ~/exomind-backups --mandate "read memory first"
+exosched --exomind http://127.0.0.1:7654
+exokit verify
+
+# 2) as an MCP server (for AI agents): $ <module>-server <options>
+exomind-server            # stdio MCP: initialize / tools/list / tools/call
+exocrawl-server --proxy http://proxy:8080
+
+# whole-stack help, titled by module name, on ANY module:
+exomind --help modules
+exomind --help exosched   # one module's guide
+
+# keys (auth) file management, console subcommands:
+exomind keys add alpha:ro:scope=logs/* --keys ~/.config/exo/keys
+exomind keys list --keys ~/.config/exo/keys
+exomind keys remove alpha --keys ~/.config/exo/keys
+```
+
+Shared options: `--host <ip>`, `--port <n>`, `--keys <file>`, `--token`,
+`--log-level error|warn|info|debug`, `--rate-limit <n>/s`, `--help
+[modules]`, `--version`. On the bound address each daemon serves its API
+at both `/` (base usage) and `/exo<module>` (e.g. `GET
+127.0.0.1:7654/exoexomind/ping`). Proxy applies where it makes sense
+(exocrawl).
+
+## Memory model (exomind)
+
+Two stores instead of one pile:
+
+- **Main memory file** (`--data`, default `exomind.dat`) — general and
+  important facts that are NOT project specific.
+- **Project memory file** — lives in the agent's project root (auto-
+  detected upward from the CWD via a `.git`/`.exo` marker, or
+  `--project-root`), at `<root>/.exo/project.dat`, even when exomind
+  runs from elsewhere. Keys with the `p:` prefix and any request with
+  `proj=1` operate on it; `/search` and `/recall` cover both stores.
+
+**Backups** (`--backup <dir>`, `POST /backup`): timestamped copies of the
+main memory file, newest 24 kept — redundancy against a failing host.
+
+**Associations** — memories are never silently deleted:
+`POST /outdate?key=k&reason=...` keeps the value, records
+`history:<k>` and marks `outdated:<k>` (view with `/outdated`, clear
+with `/revive`); `POST /link?from=a&to=b&rel=...` cross-references
+memories (`/assoc` lists both directions). When an old error recurs you
+can see the fix, why it was tried, and what superseded it.
+`GET /recall?q=` bundles search + outdated + history + associations.
+
+**Mandate** (`--mandate "..."` or `--mandate-file`, `POST /mandate`) —
+the memory module is not optional: agents must read `/mandate` and
+acknowledge with `agent:<id>:ready`. The QMS `memory-awareness` check
+fails any configured agent that has not acknowledged.
 
 ## API (exomind)
 
@@ -76,6 +141,15 @@ record per line, tab-separated. An agent learns the whole API from
 | POST | `/sim` | rank keys by embedding similarity to the body text |
 | GET | `/snapshot`, POST `/restore` | full dump / atomic restore |
 | GET | `/stats` | counters and health |
+| POST | `/backup` | write a timestamped backup copy |
+| GET | `/project` | project store location |
+| POST | `/outdate?key=k&reason=...` | mark a memory outdated (kept in history) |
+| GET | `/outdated?key=k` | outdated marker + history of a key |
+| POST | `/revive?key=k` | clear an outdated marker |
+| POST | `/link?from=a&to=b&rel=...` | associate two memories |
+| GET | `/assoc?key=k` | associations of a key (both directions) |
+| GET | `/recall?q=` | search + outdated + history + associations |
+| GET | `/mandate` | the mandatory briefing (ack: `agent:<id>:ready`) |
 
 Any listing endpoint accepts `json=1` for machine-readable JSON.
 

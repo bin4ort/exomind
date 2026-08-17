@@ -55,6 +55,8 @@ int store_query(store_t *s, int mode, const char *prefix, const char *substr,
 void kv_free(kv_t *kvs, size_t n);
 
 size_t store_count(store_t *s);
+/* the on-disk data file path of the store (for backups) */
+const char *store_path(const store_t *s);
 void store_stats(store_t *s, uint64_t *entries, uint64_t *log_bytes,
                  uint64_t *dead_bytes, uint64_t *reads, uint64_t *writes,
                  uint64_t *deletes, uint64_t *misses, int64_t *opened_at);

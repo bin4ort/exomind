@@ -328,9 +328,13 @@ const char *exo_json_find(const char *doc, const char *key, exo_json_t *out)
             return NULL;
         if ((size_t)(q - p - 1) == kl && strncmp(p + 1, key, kl) == 0) {
             const char *v = jskip(q + 1);
+            if (!v || !*v)
+                return NULL;
             if (*v != ':')
                 return NULL;
             v = jskip(v + 1);
+            if (!v)
+                return NULL;
             out->p = v;
             /* value extent: string (with escapes), nested object/array,
              * or raw token */
@@ -380,9 +384,13 @@ const char *exo_json_find(const char *doc, const char *key, exo_json_t *out)
         }
         /* skip to the next key: this value ends at the next ',' at depth 0 */
         const char *v = jskip(q + 1);
+        if (!v || !*v)
+            return NULL;
         if (*v != ':')
             return NULL;
         v = jskip(v + 1);
+        if (!v)
+            return NULL;
         int depth = 0;
         const char *e = v;
         for (; *e; e++) {

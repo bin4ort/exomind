@@ -9,7 +9,127 @@
 #include "version.h"
 #include "../common/exo.h"
 
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static int qp_str(const char *q, const char *name, char *out, size_t cap);
+static int mkdir_p_path(const char *path);
+
+
 int g_rate_limit_active = 0;
+
+/* project memory: a second store file living in the agent's project root
+ * (auto-detected, or --project-root). Keys with the `p:` prefix and any
+ * request with proj=1 operate on it. */
+static store_t *g_proj = NULL;
+static char g_proj_root[2048] = "";
+static char g_backup_dir[2048] = "";
+static char g_mandate[8192] = "";
+
+void http_set_project(store_t *proj, const char *root)
+{
+    g_proj = proj;
+    if (root)
+        snprintf(g_proj_root, sizeof g_proj_root, "%s", root);
+}
+
+void http_set_backup_dir(const char *dir)
+{
+    if (dir)
+        snprintf(g_backup_dir, sizeof g_backup_dir, "%s", dir);
+}
+
+void http_set_mandate(const char *text)
+{
+    if (text)
+        snprintf(g_mandate, sizeof g_mandate, "%s", text);
+}
+
+const char *http_project_root(void)
+{
+    return g_proj_root;
+}
+
+/* pick the store for a request: proj=1 or a `p:` key routes to the
+ * project store (falling back to the main store when none is attached) */
+static store_t *pick_store(store_t *s, const char *key, const char *query)
+{
+    char proj[8];
+    if (query && qp_str(query, "proj", proj, sizeof proj) && proj[0] == '1')
+        return g_proj ? g_proj : s;
+    if (key && key[0] == 'p' && key[1] == ':')
+        return g_proj ? g_proj : s;
+    return s;
+}
+
+/* copy the live data file into the backup dir, timestamped; keep the 24
+ * newest copies. Returns 0 on success. */
+int exo_backup_now(store_t *s, char *err, size_t errsz)
+{
+    if (!g_backup_dir[0])
+        return 0;
+    struct stat st;
+    if (stat(g_backup_dir, &st) != 0) {
+        if (mkdir_p_path(g_backup_dir) != 0) {
+            snprintf(err, errsz, "cannot create backup dir %s", g_backup_dir);
+            return -1;
+        }
+    }
+    char stamp[64];
+    snprintf(stamp, sizeof stamp, "%lld", (long long)now_epoch());
+    char dst[4096];
+    snprintf(dst, sizeof dst, "%s/exomind-%s.dat", g_backup_dir, stamp);
+    FILE *in = fopen(store_path(s), "rb");
+    if (!in) {
+        snprintf(err, errsz, "cannot open %s", store_path(s));
+        return -1;
+    }
+    FILE *out = fopen(dst, "wb");
+    if (!out) {
+        fclose(in);
+        snprintf(err, errsz, "cannot write %s", dst);
+        return -1;
+    }
+    char buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0)
+        fwrite(buf, 1, n, out);
+    fclose(in);
+    fclose(out);
+    /* prune: keep the 24 newest */
+    char cmd[8192];
+    snprintf(cmd, sizeof cmd,
+             "ls -1t %s/exomind-*.dat 2>/dev/null | tail -n +25 | "
+             "xargs -r rm -f", g_backup_dir);
+    (void)system(cmd);
+    (void)err;
+    (void)errsz;
+    return 0;
+}
+
+/* mkdir -p for a single path (used by backups) */
+int mkdir_p_path(const char *path)
+{
+    char tmp[4096];
+    if (strlen(path) >= sizeof tmp)
+        return -1;
+    snprintf(tmp, sizeof tmp, "%s", path);
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = 0;
+            if (mkdir(tmp, 0755) != 0 && errno != EEXIST)
+                return -1;
+            *p = '/';
+        }
+    }
+    if (mkdir(tmp, 0755) != 0 && errno != EEXIST)
+        return -1;
+    return 0;
+}
 
 #include <ctype.h>
 #include <errno.h>
@@ -531,9 +651,10 @@ static char *snippet(const char *v, size_t n)
  * vector (vec:<key>). Returns whether the main key existed.
  */
 static int del_key_cascade(store_t *s, const tok_t *tok, const char *key,
-                           size_t klen)
+                           size_t klen, const char *query)
 {
-    int existed = store_del(s, key, klen);
+    store_t *ts5 = pick_store(s, key, query);
+    int existed = store_del(ts5, key, klen);
     if (klen + EXO_VEC_KEY_PREFIX_LEN <= MAX_KEY) {
         char vkey[MAX_KEY + 1];
         memcpy(vkey, EXO_VEC_KEY_PREFIX, EXO_VEC_KEY_PREFIX_LEN);
@@ -600,6 +721,27 @@ const char *http_help_text(void)
         "| GET    | /notes       | notes, newest first (q=, limit=, offset=)|\n"
         "| POST   | /batch       | JSON array of ops; one result line each  |\n"
         "| GET    | /stats       | counters and health                      |\n"
+        "| POST   | /backup      | write a timestamped backup copy          |\n"
+        "| GET    | /project     | project store location                   |\n"
+        "| POST   | /outdate     | mark key outdated (kept in history)      |\n"
+        "| GET    | /outdated    | outdated marker + history of a key       |\n"
+        "| POST   | /revive      | clear an outdated marker                 |\n"
+        "| POST   | /link        | associate two memories (from=, to=, rel=)|\n"
+        "| GET    | /assoc       | associations of a key (both directions)  |\n"
+        "| GET    | /recall      | search + outdated + history + assoc      |\n"
+        "| GET    | /mandate     | mandatory briefing (ack: agent:<id>:ready)|\n"
+        "\n"
+        "## memory model\n"
+        "\n"
+        "Two stores: the main memory file holds general facts; a project\n"
+        "memory file lives in the agent's project root (auto-detected\n"
+        "upward from the CWD via a .git/.exo marker, or --project-root), at\n"
+        "<root>/.exo/project.dat. Keys with the `p:` prefix and any request\n"
+        "with `proj=1` operate on the project store; /search and /recall\n"
+        "cover both. Outdated memories are never silently deleted:\n"
+        "/outdate keeps the value, records history:<key> and marks\n"
+        "outdated:<key>, so past errors and fixes stay cross-referenceable\n"
+        "via /link and /assoc.\n"
         "| GET    | /snapshot    | lossless dump of all live records        |\n"
         "| POST   | /restore     | replace entire store from a snapshot     |\n"
         "\n"
@@ -820,6 +962,10 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
         store_stats(s, &entries, &log_bytes, &dead_bytes, &reads, &writes,
                     &deletes, &misses, &opened);
         int64_t uptime = (now_ms() - opened) / 1000;
+        uint64_t pentries = 0;
+        if (g_proj)
+            store_stats(g_proj, &pentries, &log_bytes, &dead_bytes, &reads,
+                        &writes, &deletes, &misses, &opened);
         if (qp_str(r->query, "json", tmp, sizeof tmp)) {
             *ctype = "application/json; charset=utf-8";
             buf_printf(out,
@@ -868,9 +1014,10 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             buf_puts(out, "error: denied");
             return;
         }
+        store_t *ts2 = pick_store(s, key, r->query);
         size_t vlen = 0;
         int64_t ts = 0;
-        char *v = store_get(s, key, strlen(key), &vlen, &ts);
+        char *v = store_get(ts2, key, strlen(key), &vlen, &ts);
         (void)ts;
         if (!v) {
             *status = 404;
@@ -1009,7 +1156,8 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             free(v);
             return;
         }
-        if (store_set(s, key, strlen(key), v, vlen, ttl, append) != 0) {
+        store_t *ts3 = pick_store(s, key, r->query);
+        if (store_set(ts3, key, strlen(key), v, vlen, ttl, append) != 0) {
             *status = 500;
             buf_puts(out, "error: store failure");
             free(v);
@@ -1043,12 +1191,13 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             buf_puts(out, "error: denied");
             return;
         }
-        if (store_set(s, key, strlen(key), r->body, r->body_len, 0, 1) != 0) {
+        store_t *ts4 = pick_store(s, key, r->query);
+        if (store_set(ts4, key, strlen(key), r->body, r->body_len, 0, 1) != 0) {
             *status = 500;
             buf_puts(out, "error: store failure");
             return;
         }
-        store_sync(s);
+        store_sync(ts4);
         buf_puts(out, "ok");
         return;
     }
@@ -1080,7 +1229,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             buf_puts(out, "error: denied");
             return;
         }
-        int existed = del_key_cascade(s, tok, key, strlen(key));
+        int existed = del_key_cascade(s, tok, key, strlen(key), r->query);
         store_sync(s);
         if (existed < 0) {
             *status = 500;
@@ -1232,10 +1381,11 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             off = 0;
         int desc = qp_str(r->query, "sort", tmp, sizeof tmp) &&
                    !strcmp(tmp, "desc");
+        store_t *ts6 = pick_store(s, has_prefix ? prefix : NULL, r->query);
         kv_t *kvs = NULL;
         size_t n = 0;
-        store_query(s, Q_LIST, has_prefix ? prefix : NULL, NULL, desc, &kvs,
-                    &n);
+        store_query(ts6, Q_LIST, has_prefix ? prefix : NULL, NULL, desc,
+                    &kvs, &n);
         filter_scope(kvs, &n, tok);
         size_t total = n;
         size_t start = (size_t)off, end = start + (size_t)lim;
@@ -1272,9 +1422,17 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
         long lim = qp_int(r->query, "limit", 10);
         if (lim < 0 || lim > 200)
             lim = 10;
-        kv_t *kvs = NULL;
-        size_t n = 0;
+        kv_t *kvs = NULL, *kvs2 = NULL;
+        size_t n = 0, n2 = 0;
         store_query(s, Q_SEARCH, NULL, q, 0, &kvs, &n);
+        if (g_proj)
+            store_query(g_proj, Q_SEARCH, NULL, q, 0, &kvs2, &n2);
+        if (n2 > 0) {
+            kvs = xrealloc(kvs, (n + n2) * sizeof(*kvs));
+            memcpy(kvs + n, kvs2, n2 * sizeof(*kvs2));
+            free(kvs2);
+            n += n2;
+        }
         filter_scope(kvs, &n, tok);
         size_t m = (size_t)lim < n ? (size_t)lim : n;
         if (qp_str(r->query, "json", tmp, sizeof tmp)) {
@@ -1425,7 +1583,9 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
                         if (!tok_can_write(tok, k, strlen(k))) {
                             buf_printf(out, "del %s denied\n", k);
                         } else {
-                            int existed = del_key_cascade(s, tok, k, strlen(k));
+                            int existed = del_key_cascade(s, tok, k,
+                                                          strlen(k),
+                                                          r->query);
                             buf_printf(out, "del %s %s\n", k,
                                        existed > 0 ? "ok" : "missing");
                         }
@@ -1508,7 +1668,8 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
                         buf_printf(out, "del %s denied\n", op_del);
                     } else {
                         int existed = del_key_cascade(s, tok, op_del,
-                                                      strlen(op_del));
+                                                      strlen(op_del),
+                                                      r->query);
                         buf_printf(out, "del %s %s\n", op_del,
                                    existed > 0 ? "ok" : "missing");
                     }
@@ -1572,6 +1733,260 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             return;
         }
         buf_printf(out, "ok %d", rc);
+        return;
+    }
+
+    /* ---- project memory ---- */
+    if (!strcmp(path, "/project")) {
+        if (g_proj)
+            buf_printf(out, "root\t%s\nfile\t%s\n", g_proj_root,
+                       store_path(g_proj));
+        else
+            buf_puts(out, "no project store attached (no project root "
+                          "detected; use --project-root)\n");
+        return;
+    }
+
+    /* ---- backups ---- */
+    if (!strcmp(path, "/backup")) {
+        if (!g_backup_dir[0]) {
+            *status = 400;
+            buf_puts(out, "error: no backup dir (start with --backup <dir>)");
+            return;
+        }
+        char berr[256];
+        if (exo_backup_now(s, berr, sizeof berr) != 0) {
+            *status = 500;
+            buf_printf(out, "error: %s", berr);
+            return;
+        }
+        buf_puts(out, "ok");
+        return;
+    }
+
+    /* ---- memory associations: outdate / revive / link / assoc ---- */
+    if (!strcmp(path, "/outdate")) {
+        int kr = qp_key(r->query, key, sizeof key);
+        if (kr != 1) {
+            *status = 400;
+            buf_puts(out, "error: missing key");
+            return;
+        }
+        char reason[512] = "";
+        qp_str(r->query, "reason", reason, sizeof reason);
+        char hk[MAX_KEY + 1];
+        snprintf(hk, sizeof hk, "history:%s", key);
+        char entry[1024];
+        snprintf(entry, sizeof entry, "outdated %lld %s",
+                 (long long)now_epoch(), reason[0] ? reason : "(no reason)");
+        store_t *ts = pick_store(s, key, r->query);
+        if (store_set(ts, hk, strlen(hk), entry, strlen(entry), 0, 1) != 0) {
+            *status = 500;
+            buf_puts(out, "error: store failure");
+            return;
+        }
+        char mk[MAX_KEY + 1];
+        snprintf(mk, sizeof mk, "outdated:%s", key);
+        char mv[1024];
+        snprintf(mv, sizeof mv, "%lld %s", (long long)now_epoch(),
+                 reason[0] ? reason : "(no reason)");
+        store_set(ts, mk, strlen(mk), mv, strlen(mv), 0, 0);
+        store_sync(ts);
+        buf_puts(out, "ok");
+        return;
+    }
+    if (!strcmp(path, "/revive")) {
+        int kr = qp_key(r->query, key, sizeof key);
+        if (kr != 1) {
+            *status = 400;
+            buf_puts(out, "error: missing key");
+            return;
+        }
+        char mk[MAX_KEY + 1];
+        snprintf(mk, sizeof mk, "outdated:%s", key);
+        store_t *ts = pick_store(s, key, r->query);
+        int existed = store_del(ts, mk, strlen(mk));
+        store_sync(ts);
+        buf_printf(out, "%s", existed > 0 ? "ok" : "not outdated");
+        return;
+    }
+    if (!strcmp(path, "/outdated")) {
+        int kr = qp_key(r->query, key, sizeof key);
+        if (kr != 1) {
+            *status = 400;
+            buf_puts(out, "error: missing key");
+            return;
+        }
+        char mk[MAX_KEY + 1];
+        snprintf(mk, sizeof mk, "outdated:%s", key);
+        store_t *ts = pick_store(s, key, r->query);
+        size_t vlen = 0;
+        char *m = store_get(ts, mk, strlen(mk), &vlen, NULL);
+        if (!m) {
+            *status = 404;
+            buf_puts(out, "not outdated");
+            return;
+        }
+        buf_printf(out, "key\t%s\nmarker\t%s\n", key, m);
+        /* the history of this key */
+        char hk[MAX_KEY + 1];
+        snprintf(hk, sizeof hk, "history:%s", key);
+        char *h = store_get(ts, hk, strlen(hk), &vlen, NULL);
+        if (h) {
+            buf_puts(out, "history:\n");
+            buf_put(out, h, vlen);
+            free(h);
+        }
+        free(m);
+        return;
+    }
+    if (!strcmp(path, "/link")) {
+        char from[MAX_KEY], to[MAX_KEY];
+        if (!qp_str(r->query, "from", from, sizeof from) ||
+            !qp_str(r->query, "to", to, sizeof to) ||
+            !from[0] || !to[0]) {
+            *status = 400;
+            buf_puts(out, "error: need from=<key> and to=<key>");
+            return;
+        }
+        char rel[256] = "related";
+        qp_str(r->query, "rel", rel, sizeof rel);
+        char ak[MAX_KEY + 1];
+        snprintf(ak, sizeof ak, "assoc:%s", from);
+        char line[2048];
+        snprintf(line, sizeof line, "%s\t%s", to, rel);
+        store_t *ts = pick_store(s, from, r->query);
+        if (store_set(ts, ak, strlen(ak), line, strlen(line), 0, 1) != 0) {
+            *status = 500;
+            buf_puts(out, "error: store failure");
+            return;
+        }
+        store_sync(ts);
+        buf_puts(out, "ok");
+        return;
+    }
+    if (!strcmp(path, "/assoc")) {
+        int kr = qp_key(r->query, key, sizeof key);
+        if (kr != 1) {
+            *status = 400;
+            buf_puts(out, "error: missing key");
+            return;
+        }
+        char ak[MAX_KEY + 1];
+        snprintf(ak, sizeof ak, "assoc:%s", key);
+        store_t *ts = pick_store(s, key, r->query);
+        size_t vlen = 0;
+        char *a = store_get(ts, ak, strlen(ak), &vlen, NULL);
+        if (a) {
+            buf_printf(out, "out\t%s\n", key);
+            buf_put(out, a, vlen);
+            free(a);
+        }
+        /* incoming links: scan assoc:* in both stores (bounded) */
+        kv_t *kvs = NULL;
+        size_t n = 0;
+        store_query(ts, Q_LIST, "assoc:", NULL, 0, &kvs, &n);
+        for (size_t i = 0; i < n; i++) {
+            char *val = store_get(ts, kvs[i].key, kvs[i].klen, &vlen, NULL);
+            if (!val)
+                continue;
+            char *hit = strstr(val, key);
+            if (hit && (hit == val || hit[-1] == '\t' ||
+                        hit[-1] == '\n')) {
+                buf_printf(out, "in\t%s\t%.200s\n", kvs[i].key + 6, val);
+            }
+            free(val);
+        }
+        kv_free(kvs, n);
+        return;
+    }
+
+    /* ---- recall: search + markers + history + associations ---- */
+    if (!strcmp(path, "/recall")) {
+        char q[4096];
+        if (!qp_str(r->query, "q", q, sizeof q) || !q[0]) {
+            *status = 400;
+            buf_puts(out, "error: missing q");
+            return;
+        }
+        long lim = qp_int(r->query, "limit", 10);
+        if (lim < 0 || lim > 200)
+            lim = 10;
+        kv_t *kvs = NULL, *kvs2 = NULL;
+        size_t n = 0, n2 = 0;
+        store_query(s, Q_SEARCH, NULL, q, 0, &kvs, &n);
+        if (g_proj)
+            store_query(g_proj, Q_SEARCH, NULL, q, 0, &kvs2, &n2);
+        if (n2 > 0) {
+            kvs = xrealloc(kvs, (n + n2) * sizeof(*kvs));
+            memcpy(kvs + n, kvs2, n2 * sizeof(*kvs2));
+            free(kvs2);
+            n += n2;
+        }
+        size_t m = (size_t)lim < n ? (size_t)lim : n;
+        for (size_t i = 0; i < m; i++) {
+            store_t *ts = pick_store(s, kvs[i].key, NULL);
+            char *sn = snippet(kvs[i].val, kvs[i].vlen);
+            buf_printf(out, "%s\t%s\n", kvs[i].key, sn);
+            free(sn);
+            char mk[MAX_KEY + 1];
+            snprintf(mk, sizeof mk, "outdated:%s", kvs[i].key);
+            size_t vlen = 0;
+            char *mark = store_get(ts, mk, strlen(mk), &vlen, NULL);
+            if (mark) {
+                buf_printf(out, "  outdated: %s\n", mark);
+                free(mark);
+            }
+            char hk[MAX_KEY + 1];
+            snprintf(hk, sizeof hk, "history:%s", kvs[i].key);
+            char *h = store_get(ts, hk, strlen(hk), &vlen, NULL);
+            if (h) {
+                char *h2 = xstrndup(h, vlen > 400 ? 400 : vlen);
+                buf_printf(out, "  history: %s\n", h2);
+                free(h2);
+                free(h);
+            }
+            char ak[MAX_KEY + 1];
+            snprintf(ak, sizeof ak, "assoc:%s", kvs[i].key);
+            char *a = store_get(ts, ak, strlen(ak), &vlen, NULL);
+            if (a) {
+                char *a2 = xstrndup(a, vlen > 300 ? 300 : vlen);
+                buf_printf(out, "  assoc: %s\n", a2);
+                free(a2);
+                free(a);
+            }
+        }
+        kv_free(kvs, n);
+        return;
+    }
+
+    /* ---- the mandate: what every agent must know ---- */
+    if (!strcmp(path, "/mandate")) {
+        if (!strcmp(r->method, "POST")) {
+            if (!tok_can_write(tok, "mandate", 7)) {
+                *status = 403;
+                buf_puts(out, "error: denied");
+                return;
+            }
+            http_set_mandate(r->body);
+            store_set(s, "mandate", 7, r->body, r->body_len, 0, 0);
+            store_sync(s);
+            buf_puts(out, "ok");
+            return;
+        }
+        char *m = NULL;
+        size_t vlen = 0;
+        if (g_mandate[0]) {
+            buf_puts(out, g_mandate);
+        } else {
+            m = store_get(s, "mandate", 7, &vlen, NULL);
+            if (m) {
+                buf_put(out, m, vlen);
+                free(m);
+            }
+        }
+        buf_puts(out, "\n---\nacknowledge by writing: "
+                      "set key agent:<your-id>:ready value 1\n");
         return;
     }
 

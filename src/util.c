@@ -95,6 +95,11 @@ uint32_t crc32_bytes(const void *data, size_t len)
 
 /* ---------------- time ---------------- */
 
+int64_t now_epoch(void)
+{
+    return (int64_t)time(NULL);
+}
+
 int64_t now_ms(void)
 {
     struct timespec ts;

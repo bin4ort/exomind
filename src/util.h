@@ -60,4 +60,6 @@ int vec_encode(uint8_t nnz, const uint8_t *idx, const uint8_t *val,
 int vec_parse(const char *v, size_t vlen, uint8_t *idx, uint8_t *val,
               uint8_t *nnz_out);
 
+int64_t now_epoch(void);
+
 #endif

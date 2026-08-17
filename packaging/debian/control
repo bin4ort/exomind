@@ -1,0 +1,18 @@
+Source: exomind
+Section: utils
+Priority: optional
+Maintainer: exomind stack <maintainers@exomind.dev>
+Build-Depends: debhelper (>= 11), gcc, make
+Standards-Version: 4.5.0
+Homepage: https://github.com/bin4ort/exomind
+
+Package: exomind
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, curl
+Description: AINSS - AI-Native Software Stack (Early Alpha)
+ Memory (exomind), scheduler (exosched), orchestrator (exoflow),
+ documentation auditor (exodoc), quality system (exoqms), research
+ daemon (exocrawl), context continuity (exocontext) and the behavioral
+ development kit (exokit) for AI agents. Plain-text, zero-dependency
+ daemons: run any module from the console or as an MCP server
+ (<module>-server), every module also served at /exo<module> on its port.

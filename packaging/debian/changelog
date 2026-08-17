@@ -1,0 +1,7 @@
+exomind (0.4.0~alpha1-1) unstable; urgency=medium
+
+  * Early Alpha release: console + MCP server surface, project memory,
+    backups, memory associations (outdate/link/history/recall), mandate,
+    keys management, rate limiting, packaging for pacman and apt.
+
+ -- exomind stack <maintainers@exomind.dev>  Sun, 17 Aug 2026 00:00:00 +0000

@@ -1,0 +1,24 @@
+# Maintainer: exomind stack <maintainers@exomind.dev>
+# Early Alpha release channel: v0.4.0-alpha.1
+pkgname=exomind
+pkgver=0.4.0alpha1
+pkgrel=1
+pkgdesc="AINSS - AI-Native Software Stack: memory, scheduling, orchestration, QMS, research, context and development kit daemons for AI agents"
+arch=('x86_64')
+url="https://github.com/bin4ort/exomind"
+license=('GPL-3.0-only')
+depends=('glibc' 'curl')
+makedepends=('make' 'gcc' 'coreutils')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+options=('!strip')
+
+build() {
+    cd "$srcdir/$pkgname-$pkgver"
+    make
+}
+
+package() {
+    cd "$srcdir/$pkgname-$pkgver"
+    make install DESTDIR="$pkgdir" PREFIX=/usr
+}

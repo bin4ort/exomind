@@ -23,5 +23,10 @@ int http_dispatch(const char *method, const char *path, const char *query,
                   int *status, const char **ctype, store_t *s);
 extern int g_rate_limit_active;
 void http_buf_free(buf_t *b);
+void http_set_project(store_t *proj, const char *root);
+void http_set_backup_dir(const char *dir);
+void http_set_mandate(const char *text);
+const char *http_project_root(void);
+int exo_backup_now(store_t *s, char *err, size_t errsz);
 
 #endif

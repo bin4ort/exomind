@@ -454,6 +454,11 @@ store_t *store_open(const char *path)
     return s;
 }
 
+const char *store_path(const store_t *s)
+{
+    return s->path;
+}
+
 void store_close(store_t *s)
 {
     if (!s)

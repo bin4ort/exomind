@@ -46,6 +46,31 @@ static void on_signal(int sig)
     g_stop = 1;
 }
 
+static char *read_whole_file(const char *path, size_t *len)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return NULL;
+    char *p = NULL;
+    size_t n = 0, cap = 0;
+    char chunk[8192];
+    size_t got;
+    while ((got = fread(chunk, 1, sizeof chunk, f)) > 0) {
+        if (n + got + 1 > cap) {
+            cap = (n + got + 1) * 2;
+            p = xrealloc(p, cap);
+        }
+        memcpy(p + n, chunk, got);
+        n += got;
+    }
+    fclose(f);
+    if (p)
+        p[n] = 0;
+    if (len)
+        *len = n;
+    return p;
+}
+
 static int mkdir_p(const char *path)
 {
     char tmp[4096];
@@ -232,6 +257,9 @@ int main(int argc, char **argv)
     const char *tokens_file = NULL;
     int mcp_mode = 0;
     long rate_limit = 0;
+    const char *backup_dir = NULL;
+    const char *project_root = NULL;
+    const char *mandate_text = NULL;
 
     EXO_SELF[0].spec = http_help_text();
     exo_help_add_siblings();
@@ -290,7 +318,25 @@ int main(int argc, char **argv)
             tokens_file = argv[++i];
         else if (!strcmp(a, "--keys") && i + 1 < argc)
             tokens_file = argv[++i];
-        else if (!strcmp(a, "--rate-limit") && i + 1 < argc)
+        else if (!strcmp(a, "--backup") && i + 1 < argc)
+            backup_dir = argv[++i];
+        else if (!strcmp(a, "--project-root") && i + 1 < argc)
+            project_root = argv[++i];
+        else if (!strcmp(a, "--mandate") && i + 1 < argc)
+            mandate_text = argv[++i];
+        else if (!strcmp(a, "--mandate-file") && i + 1 < argc) {
+            size_t mn = 0;
+            char *mt = read_whole_file(argv[++i], &mn);
+            if (!mt) {
+                fprintf(stderr, "exomind: cannot read mandate file %s\n",
+                        argv[i]);
+                return 1;
+            }
+            static char mbuf[8192];
+            snprintf(mbuf, sizeof mbuf, "%s", mt);
+            free(mt);
+            mandate_text = mbuf;
+        } else if (!strcmp(a, "--rate-limit") && i + 1 < argc)
             rate_limit = atol(argv[++i]);
         else if (!strcmp(a, "--log-level") && i + 1 < argc) {
             int lv = exo_parse_log_level(argv[++i]);
@@ -350,6 +396,79 @@ int main(int argc, char **argv)
         g_rate_limit_active = 1;
     }
     store_t *s = g_store;
+
+    /* project memory: auto-detect the project root upward from the CWD
+     * (marker: a .git dir, a .exo dir, or a docs/stack.tsv manifest),
+     * overridable with --project-root. The project store lives in
+     * <root>/.exo/project.dat — even when exomind runs from elsewhere. */
+    if (project_root) {
+        char pr[4096];
+        snprintf(pr, sizeof pr, "%s", project_root);
+        char prf[4096];
+        snprintf(prf, sizeof prf, "%s/.exo/project.dat", pr);
+        char prd[4096];
+        snprintf(prd, sizeof prd, "%s/.exo", pr);
+        if (mkdir_p(prd) != 0)
+            fprintf(stderr, "exomind: cannot create project memory dir %s\n",
+                    prd);
+        store_t *proj = store_open(prf);
+        http_set_project(proj, pr);
+        fprintf(stderr, "exomind: project memory %s (root %s)\n", prf, pr);
+    } else {
+        char cwd[4096];
+        char *found = NULL;
+        if (getcwd(cwd, sizeof cwd)) {
+            char probe[4096];
+            for (char *d = cwd;;) {
+                snprintf(probe, sizeof probe, "%s/.git", d);
+                struct stat st;
+                if (stat(probe, &st) == 0) {
+                    found = d;
+                    break;
+                }
+                snprintf(probe, sizeof probe, "%s/.exo", d);
+                if (stat(probe, &st) == 0) {
+                    found = d;
+                    break;
+                }
+                char *slash = strrchr(d, '/');
+                if (!slash)
+                    break;
+                if (slash == d)
+                    break;
+                *slash = 0;
+            }
+        }
+        if (found) {
+            char prf[4096];
+            snprintf(prf, sizeof prf, "%s/.exo/project.dat", found);
+            char prd[4096];
+            snprintf(prd, sizeof prd, "%s/.exo", found);
+            if (mkdir_p(prd) != 0)
+                fprintf(stderr, "exomind: cannot create project memory dir %s\n",
+                        prd);
+            store_t *proj = store_open(prf);
+            http_set_project(proj, found);
+            fprintf(stderr, "exomind: project memory %s (root %s)\n", prf,
+                    found);
+        }
+    }
+    if (backup_dir) {
+        http_set_backup_dir(backup_dir);
+        char berr[256];
+        if (exo_backup_now(s, berr, sizeof berr) != 0)
+            fprintf(stderr, "exomind: initial backup failed: %s\n", berr);
+        else
+            fprintf(stderr, "exomind: initial backup written to %s\n",
+                    backup_dir);
+    }
+    if (mandate_text) {
+        http_set_mandate(mandate_text);
+        store_set(s, "mandate", 7, mandate_text, strlen(mandate_text), 0, 0);
+        store_sync(s);
+        fprintf(stderr, "exomind: mandate stored (%zu bytes)\n",
+                strlen(mandate_text));
+    }
     if (token)
         http_set_token(token);
     if (tokens_file) {

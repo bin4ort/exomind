@@ -39,6 +39,7 @@ start_server() {
         echo "===== SERVER START: $*"
     } >> "$DATA/server.log"
     "$BIN" --host 127.0.0.1 --port "$PORT" --data "$DATA/exomind.dat" \
+        --project-root "$DATA" \
         "$@" 2>>"$DATA/server.log" &
     SRV=$!
     for _ in $(seq 1 100); do
@@ -613,6 +614,53 @@ wait $PIDS
 R429=$(for i in 1 2 3 4 5 6; do curl -s -m 3 -o /dev/null -w '%{http_code}\n' "$BASE/ping" & done | grep -c 429)
 assert_eq "rate limit yields 429s on burst" "6" "$R429"
 stop_server
+
+# ---- memory model: project store, backups, associations, mandate ----------
+PROJ="$DATA/proj"
+mkdir -p "$PROJ/.exo"
+"$BIN" --project-root "$PROJ" --backup "$DATA/backups" \
+    --mandate "MANDATE: always read agent:<id> keys first." \
+    --port $PORT --data "$DATA/exomind.dat" >"$DATA/mem.log" 2>&1 &
+MEM_PID=$!
+sleep 0.8
+r=$(curl -s -m 3 "$BASE/ping")
+assert_eq "memory daemon up" "pong" "$r"
+r=$(curl -s -m 3 "$BASE/project")
+assert_contains "project store located" "$PROJ/.exo/project.dat" "$r"
+r=$(curl -s -m 3 -X POST "$BASE/set?key=p:design:dec" -d 'contract first')
+assert_eq "project key set" "ok" "$r"
+r=$(curl -s -m 3 "$BASE/get?key=p:design:dec")
+assert_eq "project key get" "contract first" "$r"
+r=$(curl -s -m 3 -X POST "$BASE/set?key=general:fact" -d 'general memory ok')
+r=$(curl -s -m 3 "$BASE/get?key=general:fact")
+assert_eq "main memory unaffected" "general memory ok" "$r"
+assert_contains "project file exists on disk" "project.dat" \
+    "$(ls "$PROJ/.exo/")"
+assert_contains "backup written at startup" "exomind-" \
+    "$(ls "$DATA/backups/")"
+r=$(curl -s -m 3 -X POST "$BASE/backup")
+assert_eq "manual backup" "ok" "$r"
+BCOUNT=$(ls "$DATA/backups" | grep -c '^exomind-')
+assert_eq "two backups after manual" "2" "$BCOUNT"
+
+# associations
+r=$(curl -s -m 3 -X POST "$BASE/outdate?key=p:design:dec&reason=superseded")
+assert_eq "outdate ok" "ok" "$r"
+r=$(curl -s -m 3 "$BASE/outdated?key=p:design:dec")
+assert_contains "outdated shows marker" "superseded" "$r"
+assert_contains "outdated keeps value" "contract first" \
+    "$(curl -s -m 3 "$BASE/get?key=p:design:dec")"
+r=$(curl -s -m 3 -X POST "$BASE/link?from=p:design:dec&to=p:new:plan&rel=leads-to")
+assert_eq "link ok" "ok" "$r"
+r=$(curl -s -m 3 -X POST "$BASE/set?key=p:new:plan" -d 'exokit port')
+r=$(curl -s -m 3 "$BASE/assoc?key=p:design:dec")
+assert_contains "assoc outgoing" "p:new:plan" "$r"
+r=$(curl -s -m 3 "$BASE/recall?q=contract")
+assert_contains "recall shows the key" "p:design:dec" "$r"
+assert_contains "recall shows history" "superseded" "$r"
+r=$(curl -s -m 3 "$BASE/mandate")
+assert_contains "mandate served" "MANDATE" "$r"
+assert_contains "mandate ack instruction" "agent:<your-id>:ready" "$r"
 
 if [ "$FAILS" -ne 0 ]; then
     cp "$DATA/server.log" /tmp/opencode/fail-server.log 2>/dev/null

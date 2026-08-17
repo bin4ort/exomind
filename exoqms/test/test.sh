@@ -419,6 +419,21 @@ t_contains "code-safety failure names check" "unchecked-fopen" \
     "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$CS3ID")"
 rm -f "$TDIR/code-major"
 
+# ---- memory-awareness (mandate enforcement) --------------------------------
+curl -s -m 3 -X POST "$EM/set?key=mandate" -d 'MANDATE: read memory first' > /dev/null
+MA1=$(timeout 20 curl -s -d $'mem unready\tmemory-awareness' $BASE:$QMS_A/audit)
+MA1ID=$(printf '%s' "$MA1" | awk '{print $2}')
+t "memory-awareness fails without ready markers" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$MA1ID" | awk -F'\t' '$1=="memory-awareness" && $2=="fail" {n++} END {print n+0}')"
+curl -s -m 3 -X POST "$EM/set?key=agent:b1:ready" -d 1 > /dev/null
+curl -s -m 3 -X POST "$EM/set?key=agent:b2:ready" -d 1 > /dev/null
+MA2=$(timeout 20 curl -s -d $'mem ready\tmemory-awareness' $BASE:$QMS_A/audit)
+MA2ID=$(printf '%s' "$MA2" | awk '{print $2}')
+t "memory-awareness passes after ack" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$MA2ID" | awk -F'\t' '$1=="memory-awareness" && $2=="pass" {n++} END {print n+0}')"
+
+
+
 # ---- kit-fidelity (exokit) --------------------------------------------------
 KF1=$(timeout 20 curl -s -d $'kit clean\tkit-fidelity' $BASE:$QMS_A/audit)
 KF1ID=$(printf '%s' "$KF1" | awk '{print $2}')

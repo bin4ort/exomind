@@ -1261,6 +1261,67 @@ out_notes:
 
 /* ---------- check: docs-coverage (every manifest component must carry
  * a README and a test command - the merge gate) ---------- */
+static void check_memory_awareness(check_ctx_t *ctx, finding_t *f)
+{
+    /* the memory mandate: when exomind carries a `mandate` key, every
+     * configured agent must have acknowledged it by writing
+     * `agent:<id>:ready` — otherwise it is working without memory. */
+    const char *agents = ctx->agents && ctx->agents[0] ? ctx->agents
+                                                        : ctx->cfg->agents;
+    if (!agents || !agents[0]) {
+        set_finding(f, "memory-awareness", R_SKIP, "no agents configured");
+        return;
+    }
+    char err[256];
+    char *m = NULL;
+    if (exo_get(ctx->exo, "mandate", &m, err, sizeof err) != 0) {
+        set_finding(f, "memory-awareness", R_SKIP, "exomind unreachable");
+        return;
+    }
+    if (!m) {
+        set_finding(f, "memory-awareness", R_SKIP,
+                    "no mandate set (exomind --mandate ...)");
+        return;
+    }
+    free(m);
+    char *copy = xstrdup(agents);
+    char *save = NULL;
+    buf_t ev = {0};
+    int ready = 0, total = 0;
+    for (char *a = strtok_r(copy, ",", &save); a;
+         a = strtok_r(NULL, ",", &save)) {
+        while (*a == ' ')
+            a++;
+        if (!a[0])
+            continue;
+        total++;
+        char dk[512];
+        snprintf(dk, sizeof dk, "agent:%s:ready", a);
+        char *dv = NULL;
+        if (exo_get(ctx->exo, dk, &dv, err, sizeof err) == 0 && dv) {
+            ready++;
+            buf_printf(&ev, "agent:%s:ready ok\n", a);
+            free(dv);
+        } else {
+            buf_printf(&ev, "agent:%s MISSING agent:%s:ready "
+                            "(has not acknowledged the mandate)\n", a, a);
+        }
+    }
+    free(copy);
+    if (total > 0 && ready == total) {
+        set_finding(f, "memory-awareness", R_PASS,
+                    "%d/%d agents acknowledged the mandate", ready, total);
+    } else {
+        set_finding(f, "memory-awareness", R_FAIL,
+                    "%d/%d agents acknowledged the mandate", ready, total);
+        char *e2 = ev.p ? ev.p : "";
+        char *esc = esc_line(e2, strlen(e2));
+        strncat(f->evidence, esc, EVID_MAX - strlen(f->evidence) - 1);
+        free(esc);
+    }
+    buf_free(&ev);
+}
+
 static void check_kit_fidelity(check_ctx_t *ctx, finding_t *f)
 {
     /* the behavioral development kit (exokit): if the repo carries a
@@ -1401,6 +1462,8 @@ int check_run(const char *id, check_ctx_t *ctx, finding_t *f)
         check_docs_coverage(ctx, f);
     else if (!strcmp(id, "kit-fidelity"))
         check_kit_fidelity(ctx, f);
+    else if (!strcmp(id, "memory-awareness"))
+        check_memory_awareness(ctx, f);
     else
         set_finding(f, id, R_SKIP, "unknown check id");
     if (!f->id[0])
