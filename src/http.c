@@ -11,6 +11,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -80,7 +81,10 @@ int exo_backup_now(store_t *s, char *err, size_t errsz)
         }
     }
     char stamp[64];
-    snprintf(stamp, sizeof stamp, "%lld", (long long)now_epoch());
+    struct timespec mono;
+    clock_gettime(CLOCK_MONOTONIC, &mono); /* unique even within one second */
+    snprintf(stamp, sizeof stamp, "%lld-%06ld", (long long)now_epoch(),
+             (long)mono.tv_nsec / 1000);
     char dst[4096];
     snprintf(dst, sizeof dst, "%s/exomind-%s.dat", g_backup_dir, stamp);
     FILE *in = fopen(store_path(s), "rb");
@@ -135,6 +139,7 @@ int mkdir_p_path(const char *path)
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
