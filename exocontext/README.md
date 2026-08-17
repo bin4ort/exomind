@@ -1,4 +1,4 @@
-# exocontext v0.1.0 — context continuity for AI agents
+# exocontext v0.4.0-alpha.1 — context continuity for AI agents
 
 A tiny daemon that compresses an agent's durable state into a bounded,
 recency-ranked digest: everything under `agent:<id>:*` plus the notes
@@ -8,6 +8,9 @@ state from a single `GET /context?agent=<id>` — no more re-reading a
 hundred keys by hand.
 
 **License: GPL-3.0-only** (see the repository root).
+
+Part of the [exomind stack](../README.md) — the main README is the full
+stack reference (this file has the complete exocontext documentation).
 
 ## Build
 

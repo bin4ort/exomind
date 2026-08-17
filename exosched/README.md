@@ -1,4 +1,4 @@
-# exosched — the alarm clock for AI agents
+# exosched v0.4.0-alpha.1 — the alarm clock for AI agents
 
 A scheduled-reminders + WebSocket-push daemon (C11, zero dependencies:
 libc + pthread only). Its durable state lives entirely inside
@@ -6,6 +6,9 @@ libc + pthread only). Its durable state lives entirely inside
 stack — under keys `exosched:timer:<id>` with a TTL slightly past fire
 time. Timers survive restarts, fired timers expire on their own, and
 every fire grows exomind's searchable note feed.
+
+Part of the [exomind stack](../README.md) — the main README is the full
+stack reference (this file has the complete exosched documentation).
 
 ```
 make exosched        # builds exosched/build/exosched (from the repo root)

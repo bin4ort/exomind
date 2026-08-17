@@ -503,3 +503,75 @@ audit_t *audit_find(qms_t *q, const char *id)
             return &q->audits[i];
     return NULL;
 }
+
+/* detection registry: upsert `issue:<check>` in exomind.
+ * Value (TSV): status<TAB>fails<TAB>consecutive<TAB>first_seen
+ * <TAB>last_seen<TAB>reopens<TAB>evidence
+ * A failing detection opens/increments; a passing one closes (history
+ * kept: fails and reopens counters persist). Returns 0 on success. */
+int issue_register(exo_t *e, const char *check, int is_fail,
+                   const char *evidence, char *err, size_t errsz)
+{
+    char key[512];
+    snprintf(key, sizeof key, "issue:%s", check);
+    char *old = NULL;
+    char status[32] = "open";
+    long fails = 0, consec = 0, reopens = 0;
+    int64_t first = now_epoch(), last = now_epoch();
+    char ev[240] = "";
+    if (exo_get(e, key, &old, err, errsz) == 0 && old) {
+        char *copy = xstrdup(old);
+        char *save = NULL;
+        char *f = strtok_r(copy, "\t", &save);
+        if (f)
+            snprintf(status, sizeof status, "%s", f);
+        f = strtok_r(NULL, "\t", &save);
+        if (f)
+            fails = atol(f);
+        f = strtok_r(NULL, "\t", &save);
+        if (f)
+            consec = atol(f);
+        f = strtok_r(NULL, "\t", &save);
+        if (f)
+            first = atoll(f);
+        f = strtok_r(NULL, "\t", &save);
+        if (f)
+            last = atoll(f);
+        f = strtok_r(NULL, "\t", &save);
+        if (f)
+            reopens = atol(f);
+        f = strtok_r(NULL, "\t", &save);
+        if (f)
+            snprintf(ev, sizeof ev, "%s", f);
+        free(copy);
+        free(old);
+    }
+    last = now_epoch();
+    /* a passing check with no history does not create a record */
+    if (!is_fail && !old)
+        return 0;
+    if (is_fail) {
+        fails++;
+        if (strcmp(status, "closed") == 0) {
+            reopens++;
+            consec = 1;
+        } else {
+            consec++;
+        }
+        snprintf(status, sizeof status, "open");
+    } else {
+        if (strcmp(status, "open") == 0)
+            snprintf(status, sizeof status, "closed");
+        consec = 0;
+    }
+    char *es = esc_line(evidence, strlen(evidence));
+    snprintf(ev, sizeof ev, "%s", es[0] ? es : "(no evidence)");
+    free(es);
+    char val[2048];
+    snprintf(val, sizeof val, "%s\t%ld\t%ld\t%lld\t%lld\t%ld\t%s",
+             status, fails, consec, (long long)first, (long long)last,
+             reopens, ev);
+    if (exo_persist(e, key, val, err, errsz) != 0)
+        return -1;
+    return 0;
+}

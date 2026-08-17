@@ -7,6 +7,9 @@ a browser — see Limitations). It reads an HTML file (or a directory of
 UI defects that humans and AI keep producing, so the Quality Management
 System can enforce visual quality without a human looking at a screen.
 
+Part of the [exomind stack](../../README.md) — the main README is the
+full stack reference.
+
 ```
 make exoqms-ui     # builds build/exoqms-ui (C11, -Wall -Wextra, 0 warnings)
 make test          # runs test/test.sh (28 checks, < 60s)

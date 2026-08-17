@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <pthread.h>
 
-#define EXOQMS_VERSION "0.2.0"
+#define EXOQMS_VERSION "0.4.0-alpha.1"
 #define OBJ_KEY_PREFIX "exoqms:obj:"
 #define NC_KEY_PREFIX "exoqms:nc:"
 #define AUDIT_KEY_PREFIX "exoqms:audit:"
@@ -128,6 +128,9 @@ int audit_save(qms_t *q, exo_t *e, const char *id, const char *name,
                char *err, size_t errsz);
 obj_t *obj_find(qms_t *q, const char *id);
 nc_t *nc_find(qms_t *q, const char *id);
+/* detection registry: upsert issue:<check> on each audit finding */
+int issue_register(exo_t *e, const char *check, int is_fail,
+                   const char *evidence, char *err, size_t errsz);
 audit_t *audit_find(qms_t *q, const char *id);
 
 /* ---- checks.c : the ISO 19011 audit program checklist ---- */

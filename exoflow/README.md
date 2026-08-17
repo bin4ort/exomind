@@ -1,6 +1,6 @@
 # exoflow — the orchestrator for agent swarms
 
-`exoflow` v0.2.0 is a dependency-graph task orchestrator for AI-agent swarms. A flow
+`exoflow` v0.4.0-alpha.1 is a dependency-graph task orchestrator for AI-agent swarms. A flow
 is a DAG of steps; an arbitrary number of agents pull work from it with
 `GET /next`, execute, and report back with `POST /step`. exoflow guarantees
 that every step is claimed by exactly one worker and only becomes runnable
@@ -12,6 +12,9 @@ exomind note. Since 0.2.0 a flow can be a **loop**: when its last
 iteration reaches a terminal state, exoflow lazily spawns the next one
 (`iter <n+1>`), repeating with a fixed interval up to `max` / `until`
 limits.
+
+Part of the [exomind stack](../README.md) — the main README is the full
+stack reference (this file has the complete exoflow documentation).
 
 ```
 exomind (state)   <-+-  exoflow   <-+-- GET /next?flow=F&worker=W   (workers)

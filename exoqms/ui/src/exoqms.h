@@ -14,7 +14,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define EXOQMS_VERSION "0.1.0"
+#define EXOQMS_VERSION "0.4.0-alpha.1"
 
 #define VIEW_W 1024.0          /* assumed viewport width, px */
 #define VIEW_H 768.0           /* assumed viewport height, px */

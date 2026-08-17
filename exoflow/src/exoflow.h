@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define EXOFLOW_VERSION "0.2.0"
+#define EXOFLOW_VERSION "0.4.0-alpha.1"
 #define EXO_KEY_PREFIX "exoflow:flow:"
 #define FLOW_ID_MAX 40
 #define STEP_ID_MAX 64

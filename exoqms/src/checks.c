@@ -1261,6 +1261,66 @@ out_notes:
 
 /* ---------- check: docs-coverage (every manifest component must carry
  * a README and a test command - the merge gate) ---------- */
+static void check_issue_tracking(check_ctx_t *ctx, finding_t *f)
+{
+    /* the detection registry (`issue:<check>` in exomind): every failed
+     * audit finding is a registered issue. This check DETECTS recurrence:
+     * an issue failing two or more audits in a row is recurring and must
+     * be escalated, not silently absorbed by the rework metric. */
+    char err[256];
+    char **keys = NULL;
+    size_t nk = 0;
+    if (exo_list(ctx->exo, "issue:", &keys, &nk, err, sizeof err) != 0) {
+        set_finding(f, "issue-tracking", R_FAIL,
+                    "exomind unreachable: %s", err);
+        return;
+    }
+    buf_t ev = {0};
+    int open_issues = 0, recurring = 0;
+    for (size_t i = 0; i < nk; i++) {
+        char *v = NULL;
+        if (exo_get(ctx->exo, keys[i], &v, err, sizeof err) != 0 || !v)
+            continue;
+        const char *check = keys[i] + 6;
+        char *copy = xstrdup(v);
+        char *save = NULL;
+        char *st = strtok_r(copy, "\t", &save);
+        char *consec = strtok_r(NULL, "\t", &save);
+        char *fails = strtok_r(NULL, "\t", &save);
+        long c = consec ? atol(consec) : 0;
+        long fn = fails ? atol(fails) : 0;
+        if (st && !strcmp(st, "open")) {
+            open_issues++;
+            if (c >= 2) {
+                recurring++;
+                buf_printf(&ev, "RECURRING %s (failed %ld audits in a row, "
+                                "%ld total)\n", check, c, fn);
+            } else {
+                buf_printf(&ev, "open %s (failed %ld total)\n", check, fn);
+            }
+        }
+        free(copy);
+        free(v);
+    }
+    free(keys);
+    if (recurring > 0) {
+        char *e2 = esc_line(ev.p ? ev.p : "", ev.len);
+        set_finding(f, "issue-tracking", R_FAIL,
+                    "%d recurring issue(s), %d open: %s", recurring,
+                    open_issues, e2);
+        free(e2);
+    } else {
+        set_finding(f, "issue-tracking", R_PASS,
+                    "%d open issue(s), 0 recurring", open_issues);
+        if (open_issues > 0) {
+            char *e2 = esc_line(ev.p ? ev.p : "", ev.len);
+            strncat(f->evidence, e2, EVID_MAX - strlen(f->evidence) - 1);
+            free(e2);
+        }
+    }
+    buf_free(&ev);
+}
+
 static void check_memory_awareness(check_ctx_t *ctx, finding_t *f)
 {
     /* the memory mandate: when exomind carries a `mandate` key, every
@@ -1464,6 +1524,8 @@ int check_run(const char *id, check_ctx_t *ctx, finding_t *f)
         check_kit_fidelity(ctx, f);
     else if (!strcmp(id, "memory-awareness"))
         check_memory_awareness(ctx, f);
+    else if (!strcmp(id, "issue-tracking"))
+        check_issue_tracking(ctx, f);
     else
         set_finding(f, id, R_SKIP, "unknown check id");
     if (!f->id[0])

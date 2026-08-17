@@ -10,6 +10,9 @@ Generated graphics look plausible but are structurally wrong; this
 module catches that. v0.1.0 ships the **tree** rule-set; shape kinds
 are pluggable rule-sets behind the same `audit_run` entry point.
 
+Part of the [exomind stack](../../README.md) — the main README is the
+full stack reference.
+
 ```
 make exoqms-svg   # builds build/exoqms-svg (C11, -Wall -Wextra, 0 warnings)
 make test         # runs test/test.sh (54 checks, < 60s)

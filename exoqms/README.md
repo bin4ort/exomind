@@ -1,6 +1,6 @@
 # exoqms — the Quality Management System for the AI-native stack
 
-`exoqms` v0.2.0 is a QMS daemon (C11, zero dependencies: libc + pthread
+`exoqms` v0.4.0-alpha.1 is a QMS daemon (C11, zero dependencies: libc + pthread
 only) that turns the ISO 9000 family into running code for the exomind
 stack. It holds quality objectives, runs ISO 19011 audit programs
 against the live stack, records non-conformities (NCs) with a
@@ -15,6 +15,9 @@ The audit program runs the seven checks defined in
 quality auditor), [`exoqms-code`](code/README.md) (the code-safety
 analyzer) and [`exoqms-svg`](svg/README.md) (the asset-logic analyzer)
 as child processes under a hard 5-second timeout each.
+
+Part of the [exomind stack](../README.md) — the main README is the full
+stack reference (this file has the complete exoqms documentation).
 
 ## ISO mapping
 

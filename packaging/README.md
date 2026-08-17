@@ -4,6 +4,9 @@ The stack ships as one package containing all modules: console binaries
 (`exomind`, `exosched`, ...), MCP server symlinks (`exomind-server`, ...),
 batch tools (`exodoc`, `exokit`).
 
+Part of the [exomind stack](../README.md) — the main README is the full
+stack reference.
+
 Run `bash packaging/release.sh` to produce everything (it needs `git`,
 `make`, and, when present, `makepkg` and `dpkg-deb`):
 

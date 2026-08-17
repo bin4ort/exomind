@@ -12,6 +12,9 @@ with the running daemon's self-describing `GET /` spec. It never crashes on
 malformed input: documents and manifests are capped, control bytes are
 stripped, and unreachable daemons are reported as `SKIP` (never fatal).
 
+Part of the [exomind stack](../README.md) — the main README is the full
+stack reference (this file has the complete exodoc documentation).
+
 ## build
 
 ```

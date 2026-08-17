@@ -1,4 +1,4 @@
-# exocrawl v0.1.0
+# exocrawl v0.4.0-alpha.1
 
 **AI-native web research daemon — token-efficient, private, concurrent.**
 
@@ -8,6 +8,9 @@ web to what an AI needs — clean plain text, links, and images — with a
 SearXNG-style private metasearch layer (no accounts, no cookies, no
 tracking) and high-concurrency fetching with per-host pacing and identity
 rotation.
+
+Part of the [exomind stack](../README.md) — the main README is the full
+stack reference (this file has the complete exocrawl documentation).
 
 ## Why it exists
 
@@ -30,7 +33,7 @@ rotation.
 ## Build & run
 
 ```sh
-make exocrawl          # exocrawl v0.1.0/build/exocrawl (zero compile deps)
+make exocrawl          # exocrawl v0.4.0-alpha.1/build/exocrawl (zero compile deps)
 make test-exocrawl     # hermetic suite (local mock web, 26 checks)
 ./exocrawl/build/exocrawl --port 7658 --cache exomind
 ```

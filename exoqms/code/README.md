@@ -12,6 +12,9 @@ hours to find. With proper "if not / else" error branches, the error points
 at the exact function, and debugging covers only what leads up to it. This
 analyzer finds the places where that structure is missing.
 
+Part of the [exomind stack](../../README.md) — the main README is the
+full stack reference.
+
 ## Usage
 
 ```

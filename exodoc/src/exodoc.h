@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define EXODOC_VERSION "0.1.0"
+#define EXODOC_VERSION "0.4.0-alpha.1"
 #define DOC_MAX (16u * 1024u * 1024u)   /* doc/manifest/spec truncation cap */
 #define MANIFEST_MAX (4u * 1024u * 1024u)
 #define HTTP_MAX (4u * 1024u * 1024u)

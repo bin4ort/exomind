@@ -14,7 +14,7 @@
 #include <pthread.h>
 #include <stdint.h>
 
-#define EXO_VERSION "0.1.0"
+#define EXO_VERSION "0.4.0-alpha.1"
 #define MAX_URL 4096
 #define MAX_BODY (32u * 1024u * 1024u)
 #define MAX_EXTRACT (1u << 20) /* 1 MB extraction cap per page */

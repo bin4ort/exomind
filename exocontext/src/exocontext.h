@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define EXOCONTEXT_VERSION "0.1.0"
+#define EXOCONTEXT_VERSION "0.4.0-alpha.1"
 #define MAX_CONTEXT_BUDGET (256u * 1024u)
 
 /* ---- util.c ---- */

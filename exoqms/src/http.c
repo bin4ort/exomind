@@ -270,6 +270,7 @@ const char *http_spec_text(void)
         "| POST   | /audit                  | run an audit program (body)     |\n"
         "| GET    | /audit?id=<id>          | audit report with findings      |\n"
         "| GET    | /audits                 | audit program list              |\n"
+        "| GET    | /issues                 | detection registry (issue:<check>)|\n"
         "| GET    | /report                 | consolidated quality picture    |\n"
         "| GET    | /trends                 | metric trend + verdict          |\n"
         "\n"
@@ -363,7 +364,7 @@ static const char *known_check(const char *id)
                                   "code-safety", "asset-logic", "debt",
                                   "hygiene", "secrets", "agent-health",
                                   "docs-coverage", "kit-fidelity",
-                                  "memory-awareness"};
+                                  "memory-awareness", "issue-tracking"};
     for (size_t i = 0; i < sizeof known / sizeof known[0]; i++)
         if (!strcmp(known[i], id))
             return known[i];
@@ -624,6 +625,71 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
     }
 
     /* ---- audits ---- */
+    if (!strcmp(path, "/issues")) {
+        /* the detection registry: every audit finding that failed is an
+         * issue record; recurrences are counted, not forgotten */
+        char **keys = NULL;
+        size_t nk = 0;
+        if (exo_list(e, "issue:", &keys, &nk, err, sizeof err) != 0) {
+            *status = 500;
+            buf_puts(out, "error: exomind unavailable");
+            return;
+        }
+        int j = qp_str(r->query, "json", tmp, sizeof tmp);
+        if (j) {
+            *ctype = "application/json; charset=utf-8";
+            buf_puts(out, "{\"issues\":[");
+        }
+        int shown = 0;
+        for (size_t i = 0; i < nk; i++) {
+            char *v = NULL;
+            if (exo_get(e, keys[i], &v, err, sizeof err) != 0 || !v)
+                continue;
+            /* issue:<check> -> check */
+            const char *check = keys[i] + 6;
+            char *copy = xstrdup(v);
+            char *save = NULL;
+            char *st = strtok_r(copy, "\t", &save);
+            char *fails = strtok_r(NULL, "\t", &save);
+            char *consec = strtok_r(NULL, "\t", &save);
+            char *first = strtok_r(NULL, "\t", &save);
+            char *last = strtok_r(NULL, "\t", &save);
+            char *reopens = strtok_r(NULL, "\t", &save);
+            char *ev = strtok_r(NULL, "\t", &save);
+            if (j) {
+                if (shown)
+                    buf_puts(out, ",");
+                char *jc = json_escape(check, strlen(check));
+                char *je = json_escape(ev ? ev : "", ev ? strlen(ev) : 0);
+                buf_printf(out,
+                           "{\"check\":%s,\"status\":\"%s\","
+                           "\"fails\":%s,\"consecutive\":%s,"
+                           "\"first_seen\":%s,\"last_seen\":%s,"
+                           "\"reopens\":%s,\"evidence\":%s}",
+                           jc, st ? st : "", fails ? fails : "0",
+                           consec ? consec : "0", first ? first : "0",
+                           last ? last : "0", reopens ? reopens : "0",
+                           je);
+                free(jc);
+                free(je);
+            } else {
+                buf_printf(out, "%s\t%s\tfails=%s\tconsec=%s\tfirst=%s"
+                           "\tlast=%s\treopens=%s\t%s\n",
+                           check, st ? st : "", fails ? fails : "0",
+                           consec ? consec : "0", first ? first : "0",
+                           last ? last : "0", reopens ? reopens : "0",
+                           ev ? ev : "");
+            }
+            shown++;
+            free(copy);
+            free(v);
+        }
+        if (j)
+            buf_puts(out, "]}");
+        free(keys);
+        return;
+    }
+
     if (!strcmp(path, "/audits")) {
         if (strcmp(r->method, "GET") && strcmp(r->method, "HEAD")) {
             *status = 405;
@@ -819,7 +885,8 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
                 ids[i] != (char *)"hygiene" &&
                 ids[i] != (char *)"secrets" &&
                 ids[i] != (char *)"kit-fidelity" &&
-                ids[i] != (char *)"memory-awareness")
+                ids[i] != (char *)"memory-awareness" &&
+                ids[i] != (char *)"issue-tracking")
                 free(ids[i]);
         }
         ctx_cleanup(&ctx);
@@ -837,6 +904,11 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
             char *ev = esc_line(finds[i].evidence, strlen(finds[i].evidence));
             buf_printf(&blob, "%s\t%s\t%s\n", finds[i].id, res, ev);
             free(ev);
+            /* detection registry: every detection is tracked as an issue
+             * record in memory (`issue:<check>`), so the QMS not only
+             * detects failures but registers them persistently */
+            issue_register(e, finds[i].id, finds[i].res == R_FAIL,
+                           finds[i].evidence, err, sizeof err);
         }
         int score = (pass + fail) > 0
                         ? (100 * pass) / (pass + fail)

@@ -699,13 +699,17 @@ int main(int argc, char **argv)
                 return 1;
             }
             exo_set_log_level(lv);
+        } else if (!strcmp(argv[i], "--version")) {
+            printf("exocrawl v%s\n", EXO_VERSION);
+            return 0;
         } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             static exo_help_t self[1];
             self[0].name = "exocrawl";
-            self[0].spec = "exocrawl v0.1.0 - AI-native web research daemon\n"
+            self[0].spec = "exocrawl v%s - AI-native web research daemon\n"
                 "usage: exocrawl [--port 7658] [--token t | --keys file]\n"
                 "       [--proxy url] [--robots] [--rate-limit n]\n"
-                "GET /search /fetch /scrape /stats; GET / = usage\n";
+                "GET /search /fetch /scrape /stats; GET / = usage\n",
+                EXO_VERSION;
             exo_help_add(self, 1);
             exo_help_add_siblings();
             if (i + 1 < argc && !strcmp(argv[i + 1], "modules")) {

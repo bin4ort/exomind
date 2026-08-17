@@ -1,4 +1,4 @@
-# exokit v0.1.0 — the behavioral development kit
+# exokit v0.4.0-alpha.1 — the behavioral development kit
 
 Every software carries its own development kit: a `kit/` directory that
 is the software's SDK-for-itself. Not a library, not a framework — a
@@ -12,6 +12,9 @@ can compile cleanly and still be a different program. exokit attacks
 that at the root: the **contract is the truth, not the code**.
 
 **License: GPL-3.0-only** (see the repository root).
+
+Part of the [exomind stack](../README.md) — the main README is the full
+stack reference (this file has the complete exokit documentation).
 
 ## Build
 

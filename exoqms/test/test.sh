@@ -434,6 +434,32 @@ t "memory-awareness passes after ack" 1 \
 
 
 
+# ---- detection registry + issue-tracking (recurrence) ----------------------
+if [ ! -f "$TDIR/code-major" ]; then touch "$TDIR/code-major"; fi
+DR1=$(timeout 20 curl -s -d $'detect 1\tcode-safety' $BASE:$QMS_A/audit)
+DR1ID=$(printf '%s' "$DR1" | awk '{print $2}')
+t "detection registered (open)" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/issues" | awk -F'\t' '$1=="code-safety" && $2=="open" && $4=="consec=1" {n++} END {print n+0}')"
+DR2=$(timeout 20 curl -s -d $'detect 2\tcode-safety' $BASE:$QMS_A/audit)
+DR2ID=$(printf '%s' "$DR2" | awk '{print $2}')
+t "recurrence counted (consec=2)" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/issues" | awk -F'\t' '$1=="code-safety" && $2=="open" && $4=="consec=2" {n++} END {print n+0}')"
+t_contains "issues endpoint lists evidence" "unchecked-fopen" \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/issues")"
+DR3=$(timeout 20 curl -s -d $'recur\tissue-tracking' $BASE:$QMS_A/audit)
+DR3ID=$(printf '%s' "$DR3" | awk '{print $2}')
+t "issue-tracking fails on recurrence" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$DR3ID" | awk -F'\t' '$1=="issue-tracking" && $2=="fail" {n++} END {print n+0}')"
+t_contains "issue-tracking names the recurring check" "RECURRING code-safety" \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$DR3ID")"
+rm -f "$TDIR/code-major"
+DR4=$(timeout 20 curl -s -d $'fix\tcode-safety' $BASE:$QMS_A/audit)
+DR4ID=$(printf '%s' "$DR4" | awk '{print $2}')
+t "detection closes after fix" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/issues" | awk -F'\t' '$1=="code-safety" && $2=="closed" {n++} END {print n+0}')"
+t_contains "history kept after close" "fails=2" \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/issues")"
+
 # ---- kit-fidelity (exokit) --------------------------------------------------
 KF1=$(timeout 20 curl -s -d $'kit clean\tkit-fidelity' $BASE:$QMS_A/audit)
 KF1ID=$(printf '%s' "$KF1" | awk '{print $2}')

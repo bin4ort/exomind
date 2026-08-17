@@ -232,7 +232,7 @@ int main(int argc, char **argv)
             }
         }
         else if (!strcmp(argv[i], "--version")) {
-            printf("exoqms-code v0.2.0\n");
+            printf("exoqms-code v0.4.0-alpha.1\n");
             return 0;
         } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             printf(
