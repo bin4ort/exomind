@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # release.sh — build the Early Alpha release artifacts:
-#   1. source tarball (make dist) + sha256
-#   2. Arch package (PKGBUILD, needs makepkg)
+#   1. source tarball (git archive HEAD) + sha256
+#   2. Arch package (PKGBUILD, needs makepkg) — injects the real sha into a
+#      local PKGBUILD copy and writes the .SRCINFO; the committed PKGBUILD and
+#      packaging/exomind.SRCINFO keep sha256sums=SKIP because the source
+#      tarball is not in git (generated here, both ignored via .gitignore)
 #   3. Debian/Ubuntu package (needs dpkg-deb)
 # Upload the tarball + packages + sha256 to a GitHub release tagged
-# v<VERSION> labeled "Early Alpha".
+# v<VERSION> labeled "Early Alpha". Exits non-zero on any failed step.
 set -u
 cd "$(dirname "$0")/.."
 
@@ -42,8 +45,18 @@ if command -v makepkg >/dev/null 2>&1; then
     cp "$WORK/exomind-$PKGVER_PACMAN.tar.gz" dist/
     # also next to the PKGBUILD, so `cd packaging && makepkg` works directly
     cp "$WORK/exomind-$PKGVER_PACMAN.tar.gz" packaging/
-    ( cd "$WORK" && makepkg -f 2>&1 | tail -3 )
+    if ! ( cd "$WORK" && makepkg -f >"$WORK/makepkg.log" 2>&1 ); then
+        echo "==> ERROR: makepkg failed, log tail:"
+        tail -20 "$WORK/makepkg.log"
+        rm -rf "$WORK"
+        exit 1
+    fi
     cp "$WORK"/*.pkg.tar.zst dist/ 2>/dev/null
+    if ! ls dist/*.pkg.tar.zst >/dev/null 2>&1; then
+        echo "==> ERROR: no .pkg.tar.zst produced"
+        rm -rf "$WORK"
+        exit 1
+    fi
     # .SRCINFO: machine-readable metadata so pacman/AUR tools can load it
     ( cd "$WORK" && makepkg --printsrcinfo > .SRCINFO 2>/dev/null )
     if [ -s "$WORK/.SRCINFO" ]; then
@@ -80,6 +93,11 @@ Description: AINSS - AI-Native Software Stack (Early Alpha)
 EOF
     dpkg-deb --build "$WORK/exomind_$PKGVER_DEB-1" dist/ 2>&1 | tail -1
     echo "==> deb: $(ls dist/*.deb 2>/dev/null)"
+    if ! ls dist/*.deb >/dev/null 2>&1; then
+        echo "==> ERROR: no .deb produced"
+        rm -rf "$WORK"
+        exit 1
+    fi
     rm -rf "$WORK"
 else
     echo "==> dpkg-deb not found, skipping Debian package"

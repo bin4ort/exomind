@@ -18,6 +18,6 @@ pkgbase = exomind
 	options = !strip
 	options = !debug
 	source = exomind-0.4.0alpha1.tar.gz
-	sha256sums = 477dce6750dac6a45a5d16a1b582a86d903d516a5afe9070df167391346b6df6
+	sha256sums = SKIP
 
 pkgname = exomind
