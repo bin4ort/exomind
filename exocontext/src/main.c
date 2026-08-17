@@ -10,6 +10,7 @@
  * Backend: exomind (durable memory). Zero compile dependencies, C11.
  */
 #include "exocontext.h"
+#include "../../common/exo.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -119,6 +120,7 @@ static const char *g_token = NULL;
 
 /* global exomind handle, wired in main() */
 exo_t *g_exo_ctx = NULL;
+int g_rate_limit_active = 0;
 
 void http_set_token(const char *tok)
 {
@@ -244,6 +246,18 @@ static void *conn_thread(void *arg)
 
     exo_t *e = g_exo_ctx;
 
+    if (g_rate_limit_active && !exo_rate_take()) {
+        http_out(fd, 429, "text/plain", "error: rate limit exceeded\n");
+        close(fd);
+        return NULL;
+    }
+    if (!strncmp(path, "/exoexocontext", 14) &&
+        (path[14] == 0 || path[14] == '/')) {
+        memmove(path, path + 14, strlen(path + 14) + 1);
+        if (!path[0])
+            snprintf(path, sizeof path, "/");
+    }
+
     if (!strcmp(path, "/ping")) {
         if (strcmp(method, "GET") && strcmp(method, "HEAD")) {
             http_out(fd, 405, "text/plain", "error: use GET\n");
@@ -328,6 +342,38 @@ int main(int argc, char **argv)
             port = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--token") && i + 1 < argc)
             token = argv[++i];
+        else if (!strcmp(argv[i], "--keys") && i + 1 < argc)
+            token = argv[++i];
+        else if (!strcmp(argv[i], "--rate-limit") && i + 1 < argc) {
+            exo_rate_init(atol(argv[++i]));
+            g_rate_limit_active = 1;
+        } else if (!strcmp(argv[i], "--log-level") && i + 1 < argc) {
+            int lv = exo_parse_log_level(argv[++i]);
+            if (lv < 0) {
+                fprintf(stderr,
+                        "exocontext: bad log level (error|warn|info|debug)\n");
+                return 1;
+            }
+            exo_set_log_level(lv);
+        } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
+            static exo_help_t self[1];
+            self[0].name = "exocontext";
+            self[0].spec = "exocontext v0.1.0 - context continuity\n"
+                "usage: exocontext --exomind <url> [options]\n"
+                "GET /context?agent=<id>[&budget=n] = bounded digest\n";
+            exo_help_add(self, 1);
+            exo_help_add_siblings();
+            if (i + 1 < argc && !strcmp(argv[i + 1], "modules")) {
+                exo_help_print_all();
+                return 0;
+            }
+            if (i + 1 < argc) {
+                exo_help_print_one(argv[i + 1]);
+                return 0;
+            }
+            usage(argv[0]);
+            return 0;
+        }
         else if (!strcmp(argv[i], "--exomind") && i + 1 < argc)
             exomind_url = argv[++i];
         else if (!strcmp(argv[i], "--version")) {
@@ -354,6 +400,7 @@ int main(int argc, char **argv)
     }
     g_exo_ctx = &e;
     http_set_token(token);
+    g_rate_limit_active = 0;
 
     signal(SIGPIPE, SIG_IGN);
     int srv = socket(AF_INET, SOCK_STREAM, 0);

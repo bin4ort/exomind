@@ -1,5 +1,6 @@
 /* exodoc main: CLI, audit orchestration, exomind dogfooding. */
 #include "exodoc.h"
+#include "../../common/exo.h"
 
 #include <errno.h>
 #include <stdio.h>

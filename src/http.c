@@ -7,6 +7,9 @@
 #include "store.h"
 #include "util.h"
 #include "version.h"
+#include "../common/exo.h"
+
+int g_rate_limit_active = 0;
 
 #include <ctype.h>
 #include <errno.h>
@@ -157,11 +160,6 @@ typedef struct {
     int has_ct_json;
     int tok_idx; /* matched token in g_toks, -1 if auth is off */
 } req_t;
-
-typedef struct {
-    char *p;
-    size_t len, cap;
-} buf_t;
 
 static void buf_put(buf_t *b, const void *d, size_t n)
 {
@@ -573,7 +571,7 @@ static int http_embed(store_t *s, const tok_t *tok, const char *k, size_t klen,
     return rc == 0 ? 1 : -1;
 }
 
-static const char *help_text(void)
+const char *http_help_text(void)
 {
     return
         "# exomind v" EXOMIND_VERSION "\n"
@@ -808,7 +806,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
     if (!strcmp(path, "/") || !strcmp(path, "/help") ||
         !strcmp(path, "/spec")) {
         *ctype = "text/markdown; charset=utf-8";
-        buf_puts(out, help_text());
+        buf_puts(out, http_help_text());
         return;
     }
     if (!strcmp(path, "/ping")) {
@@ -1581,6 +1579,37 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
     buf_puts(out, "error: unknown path");
 }
 
+void http_buf_free(buf_t *b)
+{
+    free(b->p);
+    b->p = NULL;
+    b->len = b->cap = 0;
+}
+
+/* internal dispatch for the MCP bridge (no HTTP auth: the stdio channel
+ * is local); path may carry the /exoexomind prefix which is stripped */
+int http_dispatch(const char *method, const char *path, const char *query,
+                  const char *body, size_t body_len, buf_t *out,
+                  int *status, const char **ctype, store_t *s)
+{
+    req_t r;
+    memset(&r, 0, sizeof r);
+    snprintf(r.method, sizeof r.method, "%s", method);
+    snprintf(r.path, sizeof r.path, "%s", path);
+    if (query)
+        snprintf(r.query, sizeof r.query, "%s", query);
+    r.tok_idx = -1;
+    if (body && body_len > 0) {
+        r.body = xmalloc(body_len + 1);
+        memcpy(r.body, body, body_len);
+        r.body[body_len] = 0;
+        r.body_len = body_len;
+    }
+    route(&r, s, out, status, ctype);
+    free(r.body);
+    return 0;
+}
+
 void http_handle_conn(int fd, store_t *s)
 {
     struct timeval tv = {.tv_sec = 10, .tv_usec = 0};
@@ -1617,6 +1646,19 @@ void http_handle_conn(int fd, store_t *s)
                       "error: unauthorized\n", 19, 0);
         free(r.body);
         return;
+    }
+    if (g_rate_limit_active && !exo_rate_take()) {
+        send_response(fd, 429, "text/plain; charset=utf-8",
+                      "error: rate limit exceeded\n", 26, 0);
+        free(r.body);
+        return;
+    }
+    /* modules are reachable at /exo<name> as well as at / */
+    if (!strncmp(r.path, "/exoexomind", 11) &&
+        (r.path[11] == 0 || r.path[11] == '/')) {
+        memmove(r.path, r.path + 11, strlen(r.path + 11) + 1);
+        if (!r.path[0])
+            snprintf(r.path, sizeof r.path, "/");
     }
 
     int status = 200;

@@ -3,7 +3,7 @@ CFLAGS  ?= -O2 -g
 CFLAGS  += -std=c11 -Wall -Wextra -pthread -D_POSIX_C_SOURCE=200809L
 LDFLAGS ?= -pthread
 
-SRC := src/main.c src/util.c src/exomind.c
+SRC := src/main.c src/util.c src/exomind.c ../common/exo.c
 OBJ := $(SRC:src/%.c=build/%.o)
 BIN := build/exocontext
 

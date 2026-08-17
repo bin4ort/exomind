@@ -120,5 +120,7 @@ const char *flow_status(const flow_t *f);
 /* ---- http.c : exoflow's own HTTP layer ---- */
 void http_set_token(const char *tok);
 int http_handle_conn(int fd, cli_t *xm, cli_t *xs);
+const char *http_spec_text(void);
+extern int g_rate_limit_active;
 
 #endif

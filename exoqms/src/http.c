@@ -2,6 +2,9 @@
  * the rest of the stack (one result per line, lowercase ok / error:).
  * Pattern: exosched/src/http.c. */
 #include "exoqms.h"
+#include "../../common/exo.h"
+
+int g_rate_limit_active = 0;
 
 #include <ctype.h>
 #include <stdio.h>
@@ -232,7 +235,7 @@ static int auth_ok(const req_t *r)
     return diff == 0;
 }
 
-static const char *spec_text(void)
+const char *http_spec_text(void)
 {
     return
         "# exoqms v" EXOQMS_VERSION "\n"
@@ -376,7 +379,7 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
     if (!strcmp(path, "/") || !strcmp(path, "/help") ||
         !strcmp(path, "/spec")) {
         *ctype = "text/markdown; charset=utf-8";
-        buf_puts(out, spec_text());
+        buf_puts(out, http_spec_text());
         return;
     }
     if (!strcmp(path, "/ping")) {
@@ -1132,6 +1135,19 @@ int http_handle_conn(int fd, exo_t *e, cfg_t *cfg, qms_t *q)
         free(r.body);
         free(r.hdrs);
         return 0;
+    }
+    if (g_rate_limit_active && !exo_rate_take()) {
+        send_response(fd, 429, "text/plain; charset=utf-8",
+                      "error: rate limit exceeded\n", 26, 0);
+        free(r.body);
+        free(r.hdrs);
+        return 0;
+    }
+    if (!strncmp(r.path, "/exoexoqms", 10) &&
+        (r.path[10] == 0 || r.path[10] == '/')) {
+        memmove(r.path, r.path + 10, strlen(r.path + 10) + 1);
+        if (!r.path[0])
+            snprintf(r.path, sizeof r.path, "/");
     }
 
     int status = 200;

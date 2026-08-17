@@ -2,6 +2,7 @@
  * Durable state lives in exomind; the audit program runs exodoc and
  * exoqms-ui as child processes. */
 #include "exoqms.h"
+#include "../../common/exo.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -126,7 +127,34 @@ int main(int argc, char **argv)
             snprintf(cfg.svg_path, sizeof cfg.svg_path, "%s", argv[++i]);
         else if (!strcmp(a, "--rules") && i + 1 < argc)
             snprintf(cfg.rules_path, sizeof cfg.rules_path, "%s", argv[++i]);
-        else if (!strcmp(a, "--repo") && i + 1 < argc)
+        else if (!strcmp(a, "--rate-limit") && i + 1 < argc) {
+            exo_rate_init(atol(argv[++i]));
+            g_rate_limit_active = 1;
+        } else if (!strcmp(a, "--log-level") && i + 1 < argc) {
+            int lv = exo_parse_log_level(argv[++i]);
+            if (lv < 0) {
+                fprintf(stderr,
+                        "exoqms: bad log level (error|warn|info|debug)\n");
+                return 1;
+            }
+            exo_set_log_level(lv);
+        } else if (!strcmp(a, "--help") || !strcmp(a, "-h")) {
+            static exo_help_t self[1];
+            self[0].name = "exoqms";
+            self[0].spec = http_spec_text();
+            exo_help_add(self, 1);
+            exo_help_add_siblings();
+            if (i + 1 < argc && !strcmp(argv[i + 1], "modules")) {
+                exo_help_print_all();
+                return 0;
+            }
+            if (i + 1 < argc) {
+                exo_help_print_one(argv[i + 1]);
+                return 0;
+            }
+            usage(argv[0]);
+            return 0;
+        } else if (!strcmp(a, "--repo") && i + 1 < argc)
             snprintf(cfg.repo, sizeof cfg.repo, "%s", argv[++i]);
         else if (!strcmp(a, "--agents") && i + 1 < argc) {
             snprintf(cfg.agents, sizeof cfg.agents, "%s", argv[++i]);

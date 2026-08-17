@@ -1,6 +1,9 @@
 /* exoflow HTTP layer: plain-text API for machines and LLMs, shaped like
  * exomind's and exosched's (one result per line, lowercase ok / error). */
 #include "exoflow.h"
+#include "../../common/exo.h"
+
+int g_rate_limit_active = 0;
 
 #include <ctype.h>
 #include <stdio.h>
@@ -238,7 +241,7 @@ static int auth_ok(const req_t *r)
     return diff == 0;
 }
 
-static const char *spec_text(void)
+const char *http_spec_text(void)
 {
     return
         "# exoflow v" EXOFLOW_VERSION "\n"
@@ -453,7 +456,7 @@ static void route(req_t *r, cli_t *xm, cli_t *xs, buf_t *out, int *status,
     if (!strcmp(path, "/") || !strcmp(path, "/help") ||
         !strcmp(path, "/spec")) {
         *ctype = "text/markdown; charset=utf-8";
-        buf_puts(out, spec_text());
+        buf_puts(out, http_spec_text());
         return;
     }
     if (!strcmp(path, "/ping")) {
@@ -843,6 +846,19 @@ int http_handle_conn(int fd, cli_t *xm, cli_t *xs)
         free(r.body);
         free(r.hdrs);
         return 0;
+    }
+    if (g_rate_limit_active && !exo_rate_take()) {
+        send_response(fd, 429, "text/plain; charset=utf-8",
+                      "error: rate limit exceeded\n", 26, 0);
+        free(r.body);
+        free(r.hdrs);
+        return 0;
+    }
+    if (!strncmp(r.path, "/exoexoflow", 11) &&
+        (r.path[11] == 0 || r.path[11] == '/')) {
+        memmove(r.path, r.path + 11, strlen(r.path + 11) + 1);
+        if (!r.path[0])
+            snprintf(r.path, sizeof r.path, "/");
     }
 
     int status = 200;

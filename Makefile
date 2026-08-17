@@ -3,7 +3,7 @@ CFLAGS  ?= -O2 -g
 CFLAGS  += -std=c11 -Wall -Wextra -pthread -D_POSIX_C_SOURCE=200809L
 LDFLAGS ?= -pthread
 
-SRC := src/main.c src/http.c src/store.c src/util.c
+SRC := src/main.c src/http.c src/store.c src/util.c common/exo.c
 OBJ := $(SRC:src/%.c=build/%.o)
 BIN := build/exomind
 
@@ -186,3 +186,25 @@ test-exodoc: all
 	fi
 
 .PHONY: all test clean exosched test-exosched exoflow test-exoflow exodoc test-exodoc exoqms qms-modules test-exoqms audit-stack qms-universal-test exocrawl test-exocrawl exocontext test-exocontext exokit test-exokit
+
+# install all modules as `exo<name>` console binaries + `<name>-server`
+# symlinks (MCP mode) + batch tools. Usage:
+#   make install PREFIX=~/.local     (default /usr/local)
+install: all exosched exoflow exodoc exoqms exocrawl exocontext exokit
+	install -d $(DESTDIR)$(PREFIX)/bin
+	for b in exomind exosched exoflow exodoc exoqms exocrawl exocontext exokit; do \
+		case "$$b" in \
+			exomind) src=build/exomind ;; \
+			exosched) src=exosched/build/exosched ;; \
+			exoflow) src=exoflow/build/exoflow ;; \
+			exodoc) src=exodoc/build/exodoc ;; \
+			exoqms) src=exoqms/build/exoqms ;; \
+			exocrawl) src=exocrawl/build/exocrawl ;; \
+			exocontext) src=exocontext/build/exocontext ;; \
+			exokit) src=exokit/build/exokit ;; \
+		esac; \
+		install -m 0755 "$$src" "$(DESTDIR)$(PREFIX)/bin/$$b"; \
+		ln -sf "$$b" "$(DESTDIR)$(PREFIX)/bin/$$b-server"; \
+	done
+	@echo "installed to $(DESTDIR)$(PREFIX)/bin (console: exo<name>, MCP: <name>-server)"
+

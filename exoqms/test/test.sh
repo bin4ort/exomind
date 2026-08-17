@@ -43,7 +43,7 @@ if ! command -v "$EXODOC_BIN" >/dev/null 2>&1 && [ "$EXODOC_BIN" = exodoc ]; the
 fi
 cc -O2 -std=c11 -Wall -Wextra -pthread -D_POSIX_C_SOURCE=200809L \
     ../src/main.c ../src/http.c ../src/store.c ../src/util.c \
-    -o "$TDIR/exomind" 2>/dev/null \
+    ../common/exo.c -o "$TDIR/exomind" 2>/dev/null \
  || cc -O2 -std=c11 -Wall -Wextra -pthread -D_POSIX_C_SOURCE=200809L \
     src/main.c src/http.c src/store.c src/util.c \
     -o "$TDIR/exomind"

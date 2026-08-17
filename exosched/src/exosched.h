@@ -100,5 +100,10 @@ int ws_make_accept(const char *key, char *accept, size_t cap);
  * the ws layer, caller must not touch it), 0 otherwise (caller closes). */
 int http_handle_conn(int fd, exo_t *e);
 void http_set_token(const char *tok);
+const char *http_spec_text(void);
+int http_dispatch(const char *method, const char *path, const char *query,
+                  const char *body, size_t body_len, buf_t *out,
+                  int *status, const char **ctype, exo_t *e);
+extern int g_rate_limit_active;
 
 #endif

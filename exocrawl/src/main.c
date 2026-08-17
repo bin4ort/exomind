@@ -6,6 +6,7 @@
  * exomind. TLS via the curl binary. No cookies, no JS, no tracking.
  */
 #include "exocrawl.h"
+#include "../../common/exo.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -544,6 +545,8 @@ static void handle_stats(int fd)
     http_out(fd, 200, "text/plain", out);
 }
 
+int g_rate_limit_active = 0;
+
 static void handle_spec(int fd)
 {
     http_out(fd, 200, "text/plain; charset=utf-8",
@@ -571,6 +574,13 @@ static void route(int fd, const char *method, const char *path,
         http_out(fd, 401, "text/plain", "error: unauthorized\n");
         return;
     }
+    if (g_rate_limit_active && !exo_rate_take()) {
+        http_out(fd, 429, "text/plain", "error: rate limit exceeded\n");
+        return;
+    }
+    if (!strncmp(path, "/exoexocrawl", 12) &&
+        (path[12] == 0 || path[12] == '/'))
+        path += 12;
     if (strcmp(path, "/") == 0)
         handle_spec(fd);
     else if (strcmp(path, "/ping") == 0)
@@ -676,6 +686,39 @@ int main(int argc, char **argv)
             g_cfg.port = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--token") && i + 1 < argc)
             g_cfg.token = argv[++i];
+        else if (!strcmp(argv[i], "--keys") && i + 1 < argc)
+            g_cfg.token = argv[++i];
+        else if (!strcmp(argv[i], "--rate-limit") && i + 1 < argc) {
+            exo_rate_init(atol(argv[++i]));
+            g_rate_limit_active = 1;
+        } else if (!strcmp(argv[i], "--log-level") && i + 1 < argc) {
+            int lv = exo_parse_log_level(argv[++i]);
+            if (lv < 0) {
+                fprintf(stderr,
+                        "exocrawl: bad log level (error|warn|info|debug)\n");
+                return 1;
+            }
+            exo_set_log_level(lv);
+        } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
+            static exo_help_t self[1];
+            self[0].name = "exocrawl";
+            self[0].spec = "exocrawl v0.1.0 - AI-native web research daemon\n"
+                "usage: exocrawl [--port 7658] [--token t | --keys file]\n"
+                "       [--proxy url] [--robots] [--rate-limit n]\n"
+                "GET /search /fetch /scrape /stats; GET / = usage\n";
+            exo_help_add(self, 1);
+            exo_help_add_siblings();
+            if (i + 1 < argc && !strcmp(argv[i + 1], "modules")) {
+                exo_help_print_all();
+                return 0;
+            }
+            if (i + 1 < argc) {
+                exo_help_print_one(argv[i + 1]);
+                return 0;
+            }
+            usage(argv[0]);
+            return 0;
+        }
         else if (!strcmp(argv[i], "--concurrency") && i + 1 < argc)
             g_cfg.concurrency = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--pace-ms") && i + 1 < argc)

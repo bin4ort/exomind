@@ -558,6 +558,62 @@ done
 assert_eq "crash no corrupt vectors" "0" "$BROKEN"
 stop_server
 
+# ---- console surface: keys subcommands --------------------------------------
+KEYS="$DATA/keys.txt"
+r=$("$BIN" keys add one:ro --keys "$KEYS")
+assert_eq "keys add" "ok key added" "$r"
+r=$("$BIN" keys add two:scope=logs/* --keys "$KEYS")
+assert_eq "keys add second" "ok key added" "$r"
+r=$("$BIN" keys add one:ro --keys "$KEYS" 2>&1)
+assert_contains "keys add duplicate rejected" "already present" "$r"
+r=$("$BIN" keys list --keys "$KEYS")
+assert_contains "keys list shows entries" "two:scope=logs/*" "$r"
+r=$("$BIN" keys remove one --keys "$KEYS")
+assert_eq "keys remove" "ok key removed" "$r"
+r=$("$BIN" keys remove one --keys "$KEYS")
+assert_eq "keys remove missing" "missing key" "$r"
+r=$("$BIN" keys list --keys "$KEYS")
+assert_not_contains "keys list after remove" "one:ro" "$r"
+
+# ---- console surface: --help modules ----------------------------------------
+r=$("$BIN" --help modules)
+assert_contains "help modules lists exomind" "## exomind" "$r"
+assert_contains "help modules lists exokit" "## exokit" "$r"
+r=$("$BIN" --help exosched)
+assert_contains "help for one module" "# exosched" "$r"
+
+# ---- console surface: MCP stdio mode ----------------------------------------
+MCPOUT=$(printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"set","arguments":{"key":"mcp:a","value":"mcpv"}}}' \
+  '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get","arguments":{"key":"mcp:a"}}}' \
+  | "$BIN" --mcp --data "$DATA/mcp.dat")
+assert_contains "mcp initialize" '"serverInfo":{"name":"exomind"' "$MCPOUT"
+assert_contains "mcp tools/list" '"name":"search"' "$MCPOUT"
+assert_contains "mcp set ok" '"text":"ok"' "$MCPOUT"
+assert_contains "mcp get value" '"text":"mcpv"' "$MCPOUT"
+
+# ---- server surface: /exo<module> prefix + rate limit -----------------------
+start_server
+r=$(curl -s -m 3 "$BASE/exoexomind/ping")
+assert_eq "module prefix ping" "pong" "$r"
+r=$(curl -s -m 3 "$BASE/exoexomind/")
+assert_contains "module prefix root = usage" "# exomind" "$r"
+stop_server
+
+start_server --rate-limit 2
+PIDS=""
+for i in 1 2 3 4 5 6; do
+    curl -s -m 3 -o /dev/null -w '%{http_code} ' "$BASE/ping" &
+    PIDS="$PIDS $!"
+done
+wait $PIDS
+# sequential requests let the bucket refill: only a burst trips the limit
+R429=$(for i in 1 2 3 4 5 6; do curl -s -m 3 -o /dev/null -w '%{http_code}\n' "$BASE/ping" & done | grep -c 429)
+assert_eq "rate limit yields 429s on burst" "6" "$R429"
+stop_server
+
 if [ "$FAILS" -ne 0 ]; then
     cp "$DATA/server.log" /tmp/opencode/fail-server.log 2>/dev/null
     echo "DATA=$DATA"

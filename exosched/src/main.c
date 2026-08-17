@@ -1,5 +1,6 @@
 /* exosched: the alarm clock for AI agents. Durable state lives in exomind. */
 #include "exosched.h"
+#include "../../common/exo.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -88,7 +89,30 @@ int main(int argc, char **argv)
             exomind_url = argv[++i];
         else if (!strcmp(a, "--token") && i + 1 < argc)
             token = argv[++i];
-        else if (!strcmp(a, "--help") || !strcmp(a, "-h")) {
+        else if (!strcmp(a, "--keys") && i + 1 < argc)
+            token = argv[++i];
+        else if (!strcmp(a, "--rate-limit") && i + 1 < argc) {
+            exo_rate_init(atol(argv[++i]));
+            g_rate_limit_active = 1;
+        } else if (!strcmp(a, "--log-level") && i + 1 < argc) {
+            int lv = exo_parse_log_level(argv[++i]);
+            if (lv < 0) {
+                fprintf(stderr,
+                        "exosched: bad log level (error|warn|info|debug)\n");
+                return 1;
+            }
+            exo_set_log_level(lv);
+        } else if (!strcmp(a, "--help") || !strcmp(a, "-h")) {
+            if (i + 1 < argc && !strcmp(argv[i + 1], "modules")) {
+                exo_help_add_siblings();
+                exo_help_print_all();
+                return 0;
+            }
+            if (i + 1 < argc) {
+                exo_help_add_siblings();
+                exo_help_print_one(argv[i + 1]);
+                return 0;
+            }
             usage(argv[0]);
             return 0;
         } else if (!strcmp(a, "--version") || !strcmp(a, "-v")) {
@@ -99,6 +123,14 @@ int main(int argc, char **argv)
             usage(argv[0]);
             return 1;
         }
+    }
+
+    {
+        static exo_help_t self[1];
+        self[0].name = "exosched";
+        self[0].spec = http_spec_text();
+        exo_help_add(self, 1);
+        exo_help_add_siblings();
     }
 
     exo_t exo;

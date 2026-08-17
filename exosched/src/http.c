@@ -1,6 +1,9 @@
 /* exosched HTTP layer: plain-text API for machines and LLMs, shaped like
  * exomind's (one result per line, lowercase ok / error: <reason>). */
 #include "exosched.h"
+#include "../../common/exo.h"
+
+int g_rate_limit_active = 0;
 
 #include <ctype.h>
 #include <stdio.h>
@@ -255,7 +258,7 @@ static int auth_ok(const req_t *r)
     return diff == 0;
 }
 
-static const char *spec_text(void)
+const char *http_spec_text(void)
 {
     return
         "# exosched v" EXOSCHED_VERSION "\n"
@@ -408,7 +411,7 @@ static void route(req_t *r, exo_t *e, buf_t *out, int *status,
     if (!strcmp(path, "/") || !strcmp(path, "/help") ||
         !strcmp(path, "/spec")) {
         *ctype = "text/markdown; charset=utf-8";
-        buf_puts(out, spec_text());
+        buf_puts(out, http_spec_text());
         return;
     }
     if (!strcmp(path, "/ping")) {
@@ -552,6 +555,27 @@ static void route(req_t *r, exo_t *e, buf_t *out, int *status,
     buf_puts(out, "error: unknown path");
 }
 
+int http_dispatch(const char *method, const char *path, const char *query,
+                  const char *body, size_t body_len, buf_t *out,
+                  int *status, const char **ctype, exo_t *e)
+{
+    req_t r;
+    memset(&r, 0, sizeof r);
+    snprintf(r.method, sizeof r.method, "%s", method);
+    snprintf(r.path, sizeof r.path, "%s", path);
+    if (query)
+        snprintf(r.query, sizeof r.query, "%s", query);
+    if (body && body_len > 0) {
+        r.body = xmalloc(body_len + 1);
+        memcpy(r.body, body, body_len);
+        r.body[body_len] = 0;
+        r.body_len = body_len;
+    }
+    route(&r, e, out, status, ctype);
+    free(r.body);
+    return 0;
+}
+
 int http_handle_conn(int fd, exo_t *e)
 {
     struct timeval tv = {.tv_sec = 10, .tv_usec = 0};
@@ -590,6 +614,19 @@ int http_handle_conn(int fd, exo_t *e)
         free(r.body);
         free(r.hdrs);
         return 0;
+    }
+    if (g_rate_limit_active && !exo_rate_take()) {
+        send_response(fd, 429, "text/plain; charset=utf-8",
+                      "error: rate limit exceeded\n", 26, 0);
+        free(r.body);
+        free(r.hdrs);
+        return 0;
+    }
+    if (!strncmp(r.path, "/exoexosched", 12) &&
+        (r.path[12] == 0 || r.path[12] == '/')) {
+        memmove(r.path, r.path + 12, strlen(r.path + 12) + 1);
+        if (!r.path[0])
+            snprintf(r.path, sizeof r.path, "/");
     }
 
     if (!strcmp(r.path, "/ws")) {

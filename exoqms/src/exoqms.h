@@ -200,5 +200,7 @@ int pcfg_load(pcfg_t *p, const char *repo);
 /* ---- http.c : the API ---- */
 void http_set_token(const char *tok);
 int http_handle_conn(int fd, exo_t *e, cfg_t *cfg, qms_t *q);
+const char *http_spec_text(void);
+extern int g_rate_limit_active;
 
 #endif
