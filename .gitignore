@@ -2,3 +2,6 @@ build/
 *.dat
 *.log
 *.tmp
+
+# release artifacts (built by packaging/release.sh, shipped via GitHub releases)
+dist/
