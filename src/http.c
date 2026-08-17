@@ -730,6 +730,8 @@ const char *http_help_text(void)
         "| GET    | /assoc       | associations of a key (both directions)  |\n"
         "| GET    | /recall      | search + outdated + history + assoc      |\n"
         "| GET    | /mandate     | mandatory briefing (ack: agent:<id>:ready)|\n"
+        "note: query values (reasons, values with spaces) must be URL-\n"
+        "encoded (use %20 for spaces) or the request is rejected\n"
         "\n"
         "## memory model\n"
         "\n"

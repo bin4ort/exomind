@@ -18,6 +18,7 @@ echo "==> building source tarball"
 git archive --format=tar --prefix="exomind-$VERSION/" HEAD -o "$DIST.tar" || exit 1
 gzip -f "$DIST.tar"
 SHA=$(sha256sum "$DIST.tar.gz" | awk '{print $1}')
+SHA_PACMAN="$SHA"
 echo "==> tarball: dist/exomind-$VERSION.tar.gz ($SHA)"
 printf '%s  exomind-%s.tar.gz\n' "$SHA" "$VERSION" > dist/SHA256SUMS
 # keep the tarball also inside dist/ for the checksum file relative names
@@ -27,12 +28,23 @@ echo "==> Arch package"
 if command -v makepkg >/dev/null 2>&1; then
     WORK=$(mktemp -d /tmp/opencode/pkgbuild-XXXXXX)
     cp packaging/PKGBUILD "$WORK/"
+    # pacman has no dashes in pkgver: the Arch tarball must ALSO use the
+    # pkgver as its internal directory prefix, or makepkg cannot cd into it
     sed -i "s/^pkgver=.*/pkgver=$PKGVER_PACMAN/" "$WORK/PKGBUILD"
-    sed -i "s/^source=.*/source=(\"exomind-$PKGVER_PACMAN.tar.gz\")/" "$WORK/PKGBUILD"
-    sed -i "s/^sha256sums=.*/sha256sums=('$SHA')/" "$WORK/PKGBUILD"
-    cp "$DIST.tar.gz" "$WORK/exomind-$PKGVER_PACMAN.tar.gz"
-    ( cd "$WORK" && makepkg -f 2>&1 | tail -2 )
+    sed -i "s/^sha256sums=.*/sha256sums=('$SHA_PACMAN')/" "$WORK/PKGBUILD"
+    mkdir -p "$WORK/src"
+    tar -xzf "$DIST.tar.gz" -C "$WORK/src"
+    mv "$WORK/src/exomind-$VERSION" "$WORK/src/exomind-$PKGVER_PACMAN"
+    ( cd "$WORK/src" && tar -czf "$WORK/exomind-$PKGVER_PACMAN.tar.gz" \
+        "exomind-$PKGVER_PACMAN" )
+    cp "$WORK/exomind-$PKGVER_PACMAN.tar.gz" dist/
+    ( cd "$WORK" && makepkg -f 2>&1 | tail -3 )
     cp "$WORK"/*.pkg.tar.zst dist/ 2>/dev/null
+    # .SRCINFO: machine-readable metadata so pacman/AUR tools can load it
+    if [ -f "$WORK/.SRCINFO" ]; then
+        cp "$WORK/.SRCINFO" packaging/exomind.SRCINFO
+        echo "==> .SRCINFO written to packaging/exomind.SRCINFO"
+    fi
     echo "==> arch pkg: $(ls dist/*.pkg.tar.zst 2>/dev/null)"
     rm -rf "$WORK"
 else
@@ -52,6 +64,7 @@ Section: utils
 Priority: optional
 Architecture: amd64
 Maintainer: exomind stack <maintainers@exomind.dev>
+Homepage: https://github.com/bin4ort/exomind
 Depends: curl
 Description: AINSS - AI-Native Software Stack (Early Alpha)
  Memory, scheduling, orchestration, docs auditing, QMS, research,

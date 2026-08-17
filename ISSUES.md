@@ -15,6 +15,8 @@ Status legend: `open` (active) · `fixed` (resolution landed on main) ·
 | ISSUE-003 | `pkill -x`/`pkill -f` by process name killed shared daemons (iter1 B1, iter3 B1) and the tool's own shell | fixed | swarm rule: kill only by port/PID; `[x]name` bracket patterns never matched own shell |
 | ISSUE-004 | Test-port collisions between concurrently running builder suites | mitigated | port ranges per suite + env override; stale-daemon cleanup at suite start |
 | ISSUE-005 | Build/test commands that hang freeze the whole session | mitigated | every command runs under a hard `timeout`; hung processes are killed, never awaited |
+| ISSUE-015 | `/outdate`/`/link` reasons with spaces silently rejected (raw URLs) | fixed | URL-encoding required; spec documents it; reorg used `%20` |
+| ISSUE-016 | QMS audit records (`exoqms:audit:*`, `exodoc:audit:*`) pollute `/list` on the main store | tracked | they are the persistent record store (`/audit?id=` reads them) — reserved prefixes documented in `p:exo:memmodel`; long-term: write under `p:` or rotate |
 
 ## Software issues
 
