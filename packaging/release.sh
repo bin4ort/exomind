@@ -9,7 +9,7 @@ set -u
 cd "$(dirname "$0")/.."
 
 VERSION="${VERSION:-0.4.0-alpha.1}"
-PKGVER_PACMAN="$(printf '%s' "$VERSION" | tr -d '.~-' | tr '-' 'r')" # 040alpha1
+PKGVER_PACMAN="$(printf '%s' "$VERSION" | sed 's/-alpha\./alpha/')" # 0.4.0alpha1
 PKGVER_DEB="$(printf '%s' "$VERSION" | tr '-' '~')"                    # 0.4.0~alpha1
 DIST=dist/exomind-$VERSION
 mkdir -p dist
@@ -31,19 +31,26 @@ if command -v makepkg >/dev/null 2>&1; then
     # pacman has no dashes in pkgver: the Arch tarball must ALSO use the
     # pkgver as its internal directory prefix, or makepkg cannot cd into it
     sed -i "s/^pkgver=.*/pkgver=$PKGVER_PACMAN/" "$WORK/PKGBUILD"
-    sed -i "s/^sha256sums=.*/sha256sums=('$SHA_PACMAN')/" "$WORK/PKGBUILD"
     mkdir -p "$WORK/src"
     tar -xzf "$DIST.tar.gz" -C "$WORK/src"
     mv "$WORK/src/exomind-$VERSION" "$WORK/src/exomind-$PKGVER_PACMAN"
     ( cd "$WORK/src" && tar -czf "$WORK/exomind-$PKGVER_PACMAN.tar.gz" \
         "exomind-$PKGVER_PACMAN" )
+    SHA_PACMAN=$(sha256sum "$WORK/exomind-$PKGVER_PACMAN.tar.gz" | \
+        awk '{print $1}')
+    sed -i "s/^sha256sums=.*/sha256sums=('$SHA_PACMAN')/" "$WORK/PKGBUILD"
     cp "$WORK/exomind-$PKGVER_PACMAN.tar.gz" dist/
+    # also next to the PKGBUILD, so `cd packaging && makepkg` works directly
+    cp "$WORK/exomind-$PKGVER_PACMAN.tar.gz" packaging/
     ( cd "$WORK" && makepkg -f 2>&1 | tail -3 )
     cp "$WORK"/*.pkg.tar.zst dist/ 2>/dev/null
     # .SRCINFO: machine-readable metadata so pacman/AUR tools can load it
-    if [ -f "$WORK/.SRCINFO" ]; then
+    ( cd "$WORK" && makepkg --printsrcinfo > .SRCINFO 2>/dev/null )
+    if [ -s "$WORK/.SRCINFO" ]; then
         cp "$WORK/.SRCINFO" packaging/exomind.SRCINFO
         echo "==> .SRCINFO written to packaging/exomind.SRCINFO"
+    else
+        echo "==> WARNING: .SRCINFO could not be generated"
     fi
     echo "==> arch pkg: $(ls dist/*.pkg.tar.zst 2>/dev/null)"
     rm -rf "$WORK"

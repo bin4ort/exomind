@@ -1,9 +1,10 @@
 # Maintainer: exomind stack <maintainers@exomind.dev>
-# Early Alpha channel: v0.4.0-alpha.1 -> pkgver 040alpha1 (pacman has no
-# dashes in pkgver; the tarball used here carries the SAME prefix as its
-# internal directory, so makepkg extracts it cleanly).
+# Early Alpha channel: v0.4.0-alpha.1 -> pkgver 0.4.0alpha1 (pacman has no
+# dashes in pkgver; keep the tarball exomind-$pkgver.tar.gz next to this
+# file, or run packaging/release.sh which prepares it).
+# The build uses a glob for the extracted dir, so any tarball prefix works.
 pkgname=exomind
-pkgver=040alpha1
+pkgver=0.4.0alpha1
 pkgrel=1
 pkgdesc="AINSS - AI-Native Software Stack (Early Alpha): memory, scheduling, orchestration, documentation audit, QMS, research, context continuity and the behavioral development kit for AI agents"
 arch=('x86_64')
@@ -11,31 +12,31 @@ url="https://github.com/bin4ort/exomind"
 license=('GPL-3.0-only')
 groups=()
 depends=('glibc' 'curl')
-makedepends=('make' 'gcc' 'coreutils')
+makedepends=('make' 'gcc' 'coreutils' 'bash')
 checkdepends=()
-optdepends=('python: exokit runner shims' 'rust: exokit runner shims' 'nodejs: exokit runner shims')
+optdepends=('python: exokit runner shims'
+            'rust: exokit runner shims'
+            'nodejs: exokit runner shims')
 provides=("$pkgname")
 conflicts=()
 replaces=()
 backup=()
-install=
-changelog=
 options=('!strip' '!debug')
 source=("$pkgname-$pkgver.tar.gz")
 sha256sums=('SKIP')
 validpgpkeys=()
 
 build() {
-    cd "$srcdir/$pkgname-$pkgver"
+    cd "$srcdir"/exomind-*/
     make
 }
 
 check() {
-    cd "$srcdir/$pkgname-$pkgver"
+    cd "$srcdir"/exomind-*/
     make test >/dev/null 2>&1
 }
 
 package() {
-    cd "$srcdir/$pkgname-$pkgver"
+    cd "$srcdir"/exomind-*/
     make install DESTDIR="$pkgdir" PREFIX=/usr
 }
