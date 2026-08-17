@@ -33,7 +33,11 @@ build() {
 
 check() {
     cd "$srcdir"/exomind-*/
-    make test >/dev/null 2>&1
+    if ! make test > test.log 2>&1; then
+        echo "check() failed — last test output:"
+        tail -30 test.log
+        exit 1
+    fi
 }
 
 package() {
