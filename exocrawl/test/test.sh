@@ -28,7 +28,7 @@ python3 test/mock_web.py $PORT > /dev/null 2>&1 &
 MOCK_PID=$!
 sleep 1
 
-setsid nohup "$BIN" --port $CRL --concurrency 8 --pace-ms 0 --engine-base "http://127.0.0.1:$PORT" \
+setsid nohup "$BIN" --serve --port $CRL --concurrency 8 --pace-ms 0 --engine-base "http://127.0.0.1:$PORT" \
     > "$TDIR/crawl.log" 2>&1 < /dev/null &
 CRL_PID=$!
 sleep 1
@@ -123,6 +123,23 @@ check "search: engine filter" "$(echo "$SE2" | grep -q 'Mojeek One' && ! echo "$
 ST=$(timeout 5 curl -s $BASE/stats)
 check "stats: fetches counted" "$([ "$(echo "$ST" | grep -oP 'fetches: \K[0-9]+')" -ge 5 ] && echo 0 || echo 1)" "$ST"
 check "stats: errors counted" "$([ "$(echo "$ST" | grep -oP 'errors: \K[0-9]+')" -ge 1 ] && echo 0 || echo 1)" ""
+
+# =============== console operations (no daemon) =========================
+G=$(timeout 5 "$BIN")
+check "console: no args prints guide" "$(echo "$G" | grep -q 'exocrawl' && echo 0 || echo 1)" ""
+check "console: guide lists /search" "$(echo "$G" | grep -q '/search' && echo 0 || echo 1)" ""
+check "console: guide exit 0" "$(timeout 5 "$BIN" >/dev/null 2>&1 && echo 0 || echo 1)" ""
+C=$(timeout 5 "$BIN" /stats)
+check "console: /stats offline" "$(echo "$C" | grep -q 'fetches:' && echo 0 || echo 1)" "$C"
+check "console: /stats exit 0" "$(timeout 5 "$BIN" /stats >/dev/null 2>&1 && echo 0 || echo 1)" ""
+CF=$(timeout 30 "$BIN" "/fetch?url=$WEB/html/")
+check "console: /fetch against mock" "$(echo "$CF" | grep -q 'Main Heading Here' && echo 0 || echo 1)" "$CF"
+check "console: /fetch exit 0" "$(timeout 30 "$BIN" "/fetch?url=$WEB/html/" >/dev/null 2>&1 && echo 0 || echo 1)" ""
+check "console: /fetch missing url exit 1" "$(timeout 5 "$BIN" /fetch >/dev/null 2>&1; [ $? -eq 1 ] && echo 0 || echo 1)" ""
+"$BIN" /nope >/dev/null 2>&1
+check "console: unknown op exit 2" "$([ $? -eq 2 ] && echo 0 || echo 1)" ""
+CS=$(printf "$WEB/html/\n$WEB/deny\n" | timeout 60 "$BIN" /scrape)
+check "console: /scrape stdin body" "$(echo "$CS" | head -1 | grep -q '^ok 2$' && echo 0 || echo 1)" "$CS"
 
 # =============== auth ===================================================
 kill $CRL_PID 2>/dev/null

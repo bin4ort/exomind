@@ -32,12 +32,13 @@ make exosched     # build the alarm backend
 make exoflow      # build the orchestrator
 ```
 
-Run the trio (each daemon answers plain-text on its port):
+Run the trio as a server (each daemon binds its port only with `--serve`
+or an explicit `--port`):
 
 ```
-build/exomind --port 7654 --data /tmp/xm.dat &
-exosched/build/exosched --port 7655 --exomind http://127.0.0.1:7654 &
-exoflow/build/exoflow --port 7676 --exomind http://127.0.0.1:7654 \
+build/exomind --serve --port 7654 --data /tmp/xm.dat &
+exosched/build/exosched --serve --port 7655 --exomind http://127.0.0.1:7654 &
+exoflow/build/exoflow --serve --port 7676 --exomind http://127.0.0.1:7654 \
     --exosched http://127.0.0.1:7655 &
 ```
 
@@ -49,6 +50,31 @@ Check it is alive — `GET /` is self-describing:
 ```
 curl -s localhost:7676/
 ```
+
+## console operations (no server)
+
+Without `--serve`/`--port` the binary never opens a socket: running it
+with **no arguments prints the same guide `GET /` serves** (the text
+above), and a leading `/operation` runs ONE API operation in-process
+against the exomind backend and prints the response body:
+
+```
+exoflow /flows                                    # list flows
+exoflow /flow --body $'name\na\tdo things\t'      # create (body: stdin or --body)
+exoflow "/flow?id=<f>"                            # one flow, TSV
+exoflow "/next?flow=<f>&worker=w1"                # claim a step
+exoflow "/step?flow=<f>&id=a" --body 'done note'  # done | failed | unclaim
+exoflow "/flow?id=<f>&action=cancel"              # cancel | stop-loop
+```
+
+Method selection mirrors the HTTP API: `/step` and `/flow` with `action=`
+(or without `id=`, i.e. creation) are POST; everything else is GET.
+`--body <text>` supplies the request body; otherwise POST operations read
+it from stdin when stdin is not a terminal. Exit code: 0 on a successful
+response (<400), 1 on an HTTP error (>=400), 2 on a usage error.
+`--exomind`/`--exosched`/`--token` apply as usual; the in-memory registry
+is loaded from exomind before each operation, so one-shot runs see (and
+write) the same state as a daemon.
 
 ## a full diamond flow, by hand
 

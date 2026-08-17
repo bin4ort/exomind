@@ -868,6 +868,142 @@ int cmd_audit(int argc, char **argv)
     return 0;
 }
 
+/* ---------------- console operations (/op?k=v) ---------------- */
+
+typedef struct {
+    const char *k, *v;
+} opkv_t;
+
+static const char *op_get(const opkv_t *kvs, int n, const char *k)
+{
+    for (int i = 0; i < n; i++)
+        if (!strcmp(kvs[i].k, k))
+            return kvs[i].v;
+    return NULL;
+}
+
+static int flag_is_on(const char *v)
+{
+    return !(!strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no") ||
+             !strcmp(v, "off"));
+}
+
+static int op_unknown(const char *op, const char *k)
+{
+    fprintf(stderr, "exokit: /%s: unknown parameter %s\n", op, k);
+    return 2;
+}
+
+/* /init?dir=... | /extract?src=...&out=...&append=1 | /verify?kit=...&
+ * runner=...&fn=... | /diff?a=...&b=...&exact=1 | /audit?kit=...
+ * Same /op?k=v console grammar as the daemon modules; builds the
+ * equivalent subcommand argv and delegates, so exit codes match. */
+static int console_op(const char *spec)
+{
+    char buf[8192];
+    snprintf(buf, sizeof buf, "%s", spec);
+    char *q = strchr(buf, '?');
+    if (q)
+        *q = 0;
+    const char *op = buf + 1;
+    opkv_t kvs[32];
+    int nk = 0;
+    if (q) {
+        for (char *kv = strtok(q + 1, "&"); kv; kv = strtok(NULL, "&")) {
+            if (nk >= 32)
+                break;
+            char *eq = strchr(kv, '=');
+            if (eq)
+                *eq = 0;
+            kvs[nk].k = kv;
+            kvs[nk].v = eq ? eq + 1 : "1";
+            nk++;
+        }
+    }
+    char *av[64];
+    int n = 0;
+    av[n++] = "exokit";
+    av[n++] = (char *)op;
+    if (!strcmp(op, "init")) {
+        const char *dir = op_get(kvs, nk, "dir");
+        if (dir)
+            av[n++] = (char *)dir;
+        for (int i = 0; i < nk; i++)
+            if (strcmp(kvs[i].k, "dir"))
+                return op_unknown(op, kvs[i].k);
+        return cmd_init(n, av);
+    }
+    if (!strcmp(op, "extract")) {
+        const char *src = op_get(kvs, nk, "src");
+        const char *out = op_get(kvs, nk, "out");
+        const char *ap = op_get(kvs, nk, "append");
+        if (src)
+            av[n++] = (char *)src;
+        if (out) {
+            av[n++] = "--out";
+            av[n++] = (char *)out;
+        }
+        if (ap && flag_is_on(ap))
+            av[n++] = "--append";
+        for (int i = 0; i < nk; i++)
+            if (strcmp(kvs[i].k, "src") && strcmp(kvs[i].k, "out") &&
+                strcmp(kvs[i].k, "append"))
+                return op_unknown(op, kvs[i].k);
+        return cmd_extract(n, av);
+    }
+    if (!strcmp(op, "verify")) {
+        const char *kit = op_get(kvs, nk, "kit");
+        const char *runner = op_get(kvs, nk, "runner");
+        const char *fn = op_get(kvs, nk, "fn");
+        if (kit) {
+            av[n++] = "--kit";
+            av[n++] = (char *)kit;
+        }
+        if (runner) {
+            av[n++] = "--runner";
+            av[n++] = (char *)runner;
+        }
+        if (fn) {
+            av[n++] = "--fn";
+            av[n++] = (char *)fn;
+        }
+        for (int i = 0; i < nk; i++)
+            if (strcmp(kvs[i].k, "kit") && strcmp(kvs[i].k, "runner") &&
+                strcmp(kvs[i].k, "fn"))
+                return op_unknown(op, kvs[i].k);
+        return cmd_verify(n, av);
+    }
+    if (!strcmp(op, "diff")) {
+        const char *a = op_get(kvs, nk, "a");
+        const char *b = op_get(kvs, nk, "b");
+        const char *ex = op_get(kvs, nk, "exact");
+        if (a)
+            av[n++] = (char *)a;
+        if (b)
+            av[n++] = (char *)b;
+        if (ex && flag_is_on(ex))
+            av[n++] = "--exact";
+        for (int i = 0; i < nk; i++)
+            if (strcmp(kvs[i].k, "a") && strcmp(kvs[i].k, "b") &&
+                strcmp(kvs[i].k, "exact"))
+                return op_unknown(op, kvs[i].k);
+        return cmd_diff(n, av);
+    }
+    if (!strcmp(op, "audit")) {
+        const char *kit = op_get(kvs, nk, "kit");
+        if (kit) {
+            av[n++] = "--kit";
+            av[n++] = (char *)kit;
+        }
+        for (int i = 0; i < nk; i++)
+            if (strcmp(kvs[i].k, "kit"))
+                return op_unknown(op, kvs[i].k);
+        return cmd_audit(n, av);
+    }
+    fprintf(stderr, "exokit: unknown operation /%s\n", op);
+    return 2;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) {
@@ -880,6 +1016,10 @@ int main(int argc, char **argv)
                 "  exokit diff <a> <b> [--exact] compare inventories\n"
                 "  exokit audit [--kit dir]     QMS findings (completeness\n"
                 "                               + ledger fidelity)\n"
+                "operations (same /op?k=v console grammar as the stack):\n"
+                "  exokit /init?dir=...  /extract?src=...&out=...\n"
+                "  exokit /verify?kit=...&runner=...&fn=...\n"
+                "  exokit /diff?a=...&b=...&exact=1  /audit?kit=...\n"
                 "  exokit --version\n"
                 "rules: R1 contract-first, R2 examples incl. error cases,\n"
                 "R3 translate by regenerating from the contract, R4 slice\n"
@@ -894,6 +1034,8 @@ int main(int argc, char **argv)
     }
     if (!strcmp(argv[1], "init"))
         return cmd_init(argc, argv);
+    if (argc >= 2 && argv[1][0] == '/')
+        return console_op(argv[1]);
     if (!strcmp(argv[1], "extract"))
         return cmd_extract(argc, argv);
     if (!strcmp(argv[1], "verify"))

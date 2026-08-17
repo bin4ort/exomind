@@ -16,7 +16,7 @@ stack reference (this file has the complete exocontext documentation).
 
 ```sh
 make            # produces exocontext/build/exocontext
-make test       # 24 hermetic tests (spins its own exomind)
+make test       # 31 hermetic tests (spins its own exomind)
 ```
 
 Zero dependencies: C11, POSIX, threads. The only backend is exomind.
@@ -24,11 +24,30 @@ Zero dependencies: C11, POSIX, threads. The only backend is exomind.
 ## Run
 
 ```sh
-./exocontext/build/exocontext --port 7659 \
+./exocontext/build/exocontext --serve --port 7659 \
     --exomind http://127.0.0.1:7654 &
 ```
 
-`--token <secret>` enables Bearer auth. `GET /` prints the full spec.
+`--serve` is the only way to start the HTTP server (together with
+`--port`); without it the binary never binds a port. `--token <secret>`
+enables Bearer auth. `GET /` prints the full spec.
+
+## Console operations
+
+The digest also runs as a one-shot, in-process console operation — same
+routing, no socket, no daemon. `--body <text>` supplies the POST-style
+body (or stdin, when stdin is not a terminal).
+
+```sh
+exocontext /context?agent=b2&budget=2000 --exomind http://127.0.0.1:7654
+exocontext /context --exomind http://127.0.0.1:7654 --body 'agent=b2&budget=2000'
+echo 'agent=b2' | exocontext /context --exomind http://127.0.0.1:7654
+```
+
+Exit codes: `0` success, `1` operation failed (e.g. `error: missing
+agent`, or a missing `--exomind` backend), `2` unknown operation. No
+arguments at all prints the guide (the same text `GET /` serves) and
+exits 0.
 
 ## API
 
@@ -65,7 +84,8 @@ efficiency: the plain form is the canonical one).
   crossing line is kept, then emission stops. Values are cut at 400
   chars so a single runaway key cannot eat the whole budget.
 - **Server** — thread-per-connection, single read loop honoring
-  Content-Length, bearer auth checked before routing.
+  Content-Length, bearer auth checked before routing. Console mode
+  dispatches the same routing in-process, backend included.
 - **No state** — the digest is computed from exomind on every request;
   exocontext is stateless and can be restarted freely.
 

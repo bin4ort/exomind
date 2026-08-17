@@ -213,10 +213,29 @@ timeout 30 "$BIN" --bogus 2>/dev/null
 check "unknown option: exit 2" "$([ $? -eq 2 ] && echo 0 || echo 1)" ""
 timeout 30 "$BIN" --shape robot fixtures/tree-good.svg 2>/dev/null
 check "unknown shape: exit 2" "$([ $? -eq 2 ] && echo 0 || echo 1)" ""
-timeout 30 "$BIN" --version | grep -q "exoqms-svg 0.1.0"
+timeout 30 "$BIN" --version | grep -q "exoqms-svg 0.4.0-alpha.1"
 check "--version" "$([ $? -eq 0 ] && echo 0 || echo 1)" ""
 timeout 30 "$BIN" --help | grep -q "usage:"
 check "--help" "$([ $? -eq 0 ] && echo 0 || echo 1)" ""
+
+# =============== operation form (/check?k=v) ============================
+timeout 30 "$BIN" "/check?file=fixtures/tree-good.svg" > "$TDIR/op.out" 2>/dev/null
+check "op /check good: exit 0" "$([ "$?" -eq 0 ] && echo 0 || echo 1)" ""
+check "op /check good: 0 findings" \
+    "$([ "$(grep -c "$FIND" "$TDIR/op.out")" -eq 0 ] && echo 0 || echo 1)" \
+    "$(grep "$FIND" "$TDIR/op.out")"
+timeout 30 "$BIN" "/check?file=fixtures/house.svg&shape=tree" > "$TDIR/oph.out" 2>/dev/null
+OP_RC=$?
+check "op /check shape=tree: 3 findings (2 major, 1 minor)" \
+    "$([ "$(grep -c "$FIND" "$TDIR/oph.out")" -eq 3 ] && [ "$(grep -c '^major ' "$TDIR/oph.out")" -eq 2 ] && [ "$(grep -c '^minor ' "$TDIR/oph.out")" -eq 1 ] && echo 0 || echo 1)" \
+    "$(grep "$FIND" "$TDIR/oph.out")"
+check "op /check shape=tree: exit 1" "$([ "$OP_RC" -eq 1 ] && echo 0 || echo 1)" "rc=$OP_RC"
+timeout 30 "$BIN" "/check?file=fixtures/tree-asym.svg&json=1" > "$TDIR/opj.json" 2>/dev/null
+check "op /check json: parses" "$(python3 -m json.tool < "$TDIR/opj.json" >/dev/null 2>&1 && echo 0 || echo 1)" ""
+timeout 30 "$BIN" "/check?nope=1" > /dev/null 2>&1
+check "op /check unknown param: exit 2" "$([ "$?" -eq 2 ] && echo 0 || echo 1)" ""
+timeout 30 "$BIN" "/bogus?x=1" > /dev/null 2>&1
+check "op unknown: exit 2" "$([ "$?" -eq 2 ] && echo 0 || echo 1)" ""
 
 # =============== run 10: directory mode ==================================
 timeout 30 "$BIN" fixtures > "$TDIR/dir.out" 2>/dev/null

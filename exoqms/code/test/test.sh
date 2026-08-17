@@ -177,6 +177,20 @@ check "help lists checks" "$?" ""
 timeout 10 "$BIN" --nonsense > /dev/null 2>&1
 check "bad option: exit 2" "$([ "$?" -eq 2 ] && echo 0 || echo 1)" ""
 
+# =============== operation form (/scan?k=v) ============================
+timeout 30 "$BIN" "/scan?path=fixtures/good.c" > "$TDIR/opgood.out" 2>/dev/null
+check "op /scan good: exit 0" "$([ "$?" -eq 0 ] && echo 0 || echo 1)" ""
+check "op /scan good: 0 findings" \
+    "$([ "$(grep -c "$FIND" "$TDIR/opgood.out")" -eq 0 ] && echo 0 || echo 1)" \
+    "$(grep "$FIND" "$TDIR/opgood.out")"
+timeout 30 "$BIN" "/scan?path=fixtures/bad.c&json=1" > "$TDIR/opbad.json" 2>/dev/null
+check "op /scan bad: exit 1" "$([ "$?" -eq 1 ] && echo 0 || echo 1)" ""
+check "op /scan json: valid JSON" "$(python3 -m json.tool "$TDIR/opbad.json" > /dev/null 2>&1 && echo 0 || echo 1)" ""
+timeout 30 "$BIN" "/scan?nope=1" > /dev/null 2>&1
+check "op /scan unknown param: exit 2" "$([ "$?" -eq 2 ] && echo 0 || echo 1)" ""
+timeout 30 "$BIN" "/bogus?x=1" > /dev/null 2>&1
+check "op unknown: exit 2" "$([ "$?" -eq 2 ] && echo 0 || echo 1)" ""
+
 # =============== self-audit: analyzer on its own source =================
 timeout 30 "$BIN" src > "$TDIR/self.out" 2>/dev/null
 SELF_N=$(grep -c "$FIND" "$TDIR/self.out")

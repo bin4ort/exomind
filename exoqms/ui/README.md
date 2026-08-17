@@ -38,6 +38,25 @@ major emoji-icon html > body > header.topbar > button.cart-btn emoji 🛒 in vis
 summary line. Exit codes: `0` no findings, `1` findings, `2` usage/IO
 error.
 
+### operation form (one console grammar for the whole stack)
+
+```
+exoqms-ui /audit?file=<target>&json=1&no_emoji=1&emoji_allowlist=<chars>
+```
+
+`/audit` runs one audit with the same options as the target-file CLI
+form (`file` may be an HTML file or a directory — the `exoqms-ui
+<target>` target), using the `/op?k=v…` syntax the daemon modules serve:
+
+| op | params | maps to |
+|----|--------|---------|
+| `/audit` | `file`, `emoji_allowlist`; flags `json=1`, `no_emoji=1` | `<target> [--json] [--no-emoji] [--emoji-allowlist <chars>]` |
+
+Values are literal (no URL decoding); `&` separates parameters. Flags
+accept off values `0`/`false`/`no`/`off`. Exit codes are the CLI form's
+(`0`/`1`/`2`). A path argument that starts with `/` but is not a known
+operation (e.g. an absolute path) is treated as a file.
+
 ## the seven checks
 
 | id | severity | flags | how |

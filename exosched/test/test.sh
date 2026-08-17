@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # exosched test suite: private exomind (port 7660) + exosched (port 7661)
 # instances, temp data in /tmp. Covers schedule/fire, cancel, restart
-# persistence, WebSocket push, close handling, auth, garbage, cleanup.
+# persistence, WebSocket push, close handling, auth, garbage, console
+# one-shot ops, cleanup.
 set -u
 cd "$(dirname "$0")"
 
@@ -86,6 +87,62 @@ check "ping" "$([ "$r" = "pong" ] && echo 0 || echo 1)" "got: $r"
 r=$(curl -s -m 3 "$XS_URL/")
 check "GET / is self-describing" \
     "$(printf '%s' "$r" | grep -q exosched && printf '%s' "$r" | grep -q /remind && echo 0 || echo 1)"
+
+# --- console surface: one-shot ops (no server, no socket) -----------------
+g=$("$XS_BIN" 2>/dev/null)
+check "console no-args prints the guide and exits" \
+    "$(printf '%s' "$g" | grep -q exosched && printf '%s' "$g" | grep -q /remind && echo 0 || echo 1)" \
+    "$(printf '%s' "$g" | head -1)"
+
+r=$("$XS_BIN" /remind --body 'in 30m "console-remind"' --exomind "$XM_URL" 2>/dev/null)
+cid=$(echo "$r" | awk '{print $2}')
+check "console op /remind (POST, --body) replies 'ok <id> <epoch>'" \
+    "$(printf '%s' "$r" | grep -qE '^ok [0-9]+:[0-9a-f]+ [0-9]+$' && echo 0 || echo 1)" "$r"
+
+r=$("$XS_BIN" /timers --exomind "$XM_URL" 2>/dev/null)
+line=$(printf '%s\n' "$r" | grep "$cid")
+check "console op /timers lists the console-scheduled timer" \
+    "$(printf '%s' "$line" | awk -F '\t' -v id="$cid" 'NF==4 && $1==id && $4=="console-remind" {ok=1} END {exit ok?0:1}' && echo 0 || echo 1)" "$line"
+
+r=$(printf 'in 30m "pipe-remind"' | "$XS_BIN" /remind --exomind "$XM_URL" 2>/dev/null)
+check "console op /remind reads the body from stdin (pipe)" \
+    "$(printf '%s' "$r" | grep -qE '^ok [0-9]+:[0-9a-f]+ [0-9]+$' && echo 0 || echo 1)" "$r"
+pid=$(echo "$r" | awk '{print $2}')
+
+r=$("$XS_BIN" /timer?id=bogus123 --exomind "$XM_URL" 2>/dev/null)
+rc=$?
+check "console op /timer?id=missing exits 1" "$([ "$rc" = 1 ] && echo 0 || echo 1)" "rc=$rc body='$r'"
+
+r=$("$XS_BIN" /nonsense --exomind "$XM_URL" 2>/dev/null)
+rc=$?
+check "console op unknown path exits 1" "$([ "$rc" = 1 ] && echo 0 || echo 1)" "rc=$rc body='$r'"
+
+r=$("$XS_BIN" /timer?id=$cid --exomind "$XM_URL" 2>/dev/null)
+check "console op /timer?id= cancels (cleanup)" \
+    "$([ "$r" = "ok" ] && echo 0 || echo 1)" "$r"
+r=$("$XS_BIN" /timer?id=$pid --exomind "$XM_URL" 2>/dev/null)
+check "console op /timer?id= cancels the piped timer (cleanup)" \
+    "$([ "$r" = "ok" ] && echo 0 || echo 1)" "$r"
+
+XS2_PORT=$((20000 + $$ % 10000))
+setsid nohup "$XS_BIN" --serve --port "$XS2_PORT" --exomind "$XM_URL" \
+    >"$XS_LOG" 2>&1 < /dev/null &
+XS2_PID=$!
+r=""
+for _ in $(seq 1 40); do
+    r=$(curl -s -m 2 "http://127.0.0.1:$XS2_PORT/ping" 2>/dev/null)
+    [ "$r" = "pong" ] && break
+    r=""
+    sleep 0.1
+done
+check "--serve with --port binds and answers /ping" \
+    "$([ "$r" = "pong" ] && echo 0 || echo 1)" "r='$r'"
+kill "$XS2_PID" 2>/dev/null
+stop_port $XS2_PORT
+
+v=$("$XS_BIN" --version)
+check "console --version still works" \
+    "$(printf '%s' "$v" | grep -qE '^exosched v[0-9]' && echo 0 || echo 1)" "$v"
 
 # --- schedule + fire on time --------------------------------------------
 r=$(curl -s -m 3 -X POST "$XS_URL/remind" -d 'in 1s "fires-on-time"')

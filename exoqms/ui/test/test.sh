@@ -103,10 +103,28 @@ timeout 30 "$BIN" "$TDIR/missing.html" > /dev/null 2>&1
 check "missing target: exit 2" "$([ $? -eq 2 ] && echo 0 || echo 1)" ""
 timeout 30 "$BIN" --bogus 2>/dev/null
 check "unknown option: exit 2" "$([ $? -eq 2 ] && echo 0 || echo 1)" ""
-timeout 30 "$BIN" --version | grep -q "exoqms-ui 0.1.0"
+timeout 30 "$BIN" --version | grep -q "exoqms-ui 0.4.0-alpha.1"
 check "--version" "$([ $? -eq 0 ] && echo 0 || echo 1)" ""
 timeout 30 "$BIN" --help | grep -q "usage:"
 check "--help" "$([ $? -eq 0 ] && echo 0 || echo 1)" ""
+
+# =============== operation form (/audit?k=v) ============================
+timeout 30 "$BIN" "/audit?file=fixtures/good.html" > "$TDIR/op.out" 2>/dev/null
+check "op /audit good: exit 0" "$([ "$?" -eq 0 ] && echo 0 || echo 1)" ""
+check "op /audit good: 0 findings" \
+    "$([ "$(grep -c "$FIND" "$TDIR/op.out")" -eq 0 ] && echo 0 || echo 1)" \
+    "$(grep "$FIND" "$TDIR/op.out")"
+timeout 30 "$BIN" "/audit?file=fixtures/bad.html&json=1&no_emoji=1" \
+    > "$TDIR/opbad.json" 2>/dev/null
+OP_RC=$?
+check "op /audit bad: exit 1" "$([ "$OP_RC" -eq 1 ] && echo 0 || echo 1)" "rc=$OP_RC"
+check "op /audit json: parses" "$(python3 -m json.tool < "$TDIR/opbad.json" >/dev/null 2>&1 && echo 0 || echo 1)" ""
+check "op /audit no_emoji: no emoji-icon findings" \
+    "$(grep -q 'emoji-icon' "$TDIR/opbad.json" && echo 1 || echo 0)" ""
+timeout 30 "$BIN" "/audit?nope=1" > /dev/null 2>&1
+check "op /audit unknown param: exit 2" "$([ "$?" -eq 2 ] && echo 0 || echo 1)" ""
+timeout 30 "$BIN" "/bogus?x=1" > /dev/null 2>&1
+check "op unknown: exit 2" "$([ "$?" -eq 2 ] && echo 0 || echo 1)" ""
 
 # =============== run 7: directory mode ===================================
 timeout 30 "$BIN" fixtures > "$TDIR/dir.out" 2>/dev/null

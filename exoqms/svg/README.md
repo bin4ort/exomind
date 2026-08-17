@@ -51,6 +51,26 @@ minor symmetry crown leans 4830/12841 (left/right area about trunk axis x=156.0,
 line. Exit codes: `0` no findings, `1` findings, `2` usage/IO error.
 Skipped files never produce findings in `--json` mode.
 
+### operation form (one console grammar for the whole stack)
+
+```
+exoqms-svg /check?file=<target>&shape=tree|auto&json=1
+```
+
+`/check` runs one audit with the same options as the target-file CLI
+form (`file` may be a `.svg` file or a directory — the `exoqms-svg
+<target>` target), using the `/op?k=v…` syntax the daemon modules serve:
+
+| op | params | maps to |
+|----|--------|---------|
+| `/check` | `file`, `shape`; flag `json=1` | `<target> [--shape tree\|auto] [--json]` |
+
+Values are literal (no URL decoding); `&` separates parameters. Flags
+accept off values `0`/`false`/`no`/`off`. Exit codes are the CLI form's
+(`0`/`1`/`2`; unknown `shape` values exit 2). A path argument that
+starts with `/` but is not a known operation (e.g. an absolute path) is
+treated as a file.
+
 ## the tree rule-set (one line per check, with the math)
 
 | id | severity | flags | how |

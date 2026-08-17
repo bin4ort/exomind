@@ -23,7 +23,7 @@ check() { # name, result, detail
 }
 
 r=$("$BIN" --version)
-check "version" "$([ "$r" = "exokit v0.1.0" ] && echo 0 || echo 1)" "$r"
+check "version" "$([ "$r" = "exokit v0.4.0-alpha.1" ] && echo 0 || echo 1)" "$r"
 r=$("$BIN" bogus 2>&1 | head -1)
 check "unknown command exit 2" "$([ "$r" = "exokit: unknown command bogus" ] && echo 0 || echo 1)" "$r"
 
@@ -173,6 +173,26 @@ check "diff warns extra" "$(printf '%s' "$r" | grep -q 'extra gamma' && echo 0 |
 check "diff exit 0 on extra (non-exact)" "$(printf '%s' "$r" | grep -q 'exit=0' && echo 0 || echo 1)" "$r"
 r=$("$BIN" diff "$WORK/b.tsv" "$WORK/c.tsv" --exact; echo "exit=$?")
 check "diff --exact rejects extra" "$(printf '%s' "$r" | grep -q 'exit=1' && echo 0 || echo 1)" "$r"
+
+say ""
+say "=== console operation form (/op?k=v) ==="
+r=$("$BIN" "/init?dir=$WORK/opkit")
+check "op /init scaffolds a kit" "$([ -f "$WORK/opkit/kit/config" ] && echo 0 || echo 1)" "$r"
+r=$("$BIN" "/extract?src=$WORK/proj&out=$WORK/op.tsv")
+check "op /extract writes inventory" "$(printf '%s' "$r" | grep -q 'extracted 4 function' && echo 0 || echo 1)" "$r"
+r=$(cd "$WORK/proj" && "$BIN" "/verify?kit=kit")
+check "op /verify ledger all pass" "$(printf '%s' "$r" | grep -q '6 ok, 0 fail' && echo 0 || echo 1)" "$r"
+check "op /verify exit 0" "$(cd "$WORK/proj" && "$BIN" "/verify?kit=kit" >/dev/null 2>&1; echo $?)" ""
+r=$(cd "$WORK/proj" && "$BIN" "/audit?kit=kit")
+check "op /audit clean kit passes" "$([ "$r" = "pass" ] && echo 0 || echo 1)" "$r"
+check "op /audit exit 0" "$(cd "$WORK/proj" && "$BIN" "/audit?kit=kit" >/dev/null 2>&1; echo $?)" ""
+r=$("$BIN" "/diff?a=$WORK/a.tsv&b=$WORK/b.tsv"; echo "exit=$?")
+check "op /diff reports missing" "$(printf '%s' "$r" | grep -q 'missing beta' && echo 0 || echo 1)" "$r"
+check "op /diff exit 1 on missing" "$(printf '%s' "$r" | grep -q 'exit=1' && echo 0 || echo 1)" "$r"
+r=$("$BIN" "/diff?a=$WORK/b.tsv&b=$WORK/c.tsv&exact=1"; echo "exit=$?")
+check "op /diff exact rejects extra" "$(printf '%s' "$r" | grep -q 'exit=1' && echo 0 || echo 1)" "$r"
+check "op unknown exits 2" "$([ "$("$BIN" "/bogus?x=1" >/dev/null 2>&1; echo $?)" = 2 ] && echo 0 || echo 1)" ""
+check "op unknown param exits 2" "$([ "$("$BIN" "/verify?nope=1" >/dev/null 2>&1; echo $?)" = 2 ] && echo 0 || echo 1)" ""
 
 say ""
 say "=== results: $PASS passed, $FAIL failed ==="

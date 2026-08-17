@@ -9,6 +9,11 @@
 #include <time.h>
 #include <unistd.h>
 
+static int audit_run(const char *manifest, const char *base,
+                     const char *exomind, const char *outfile, int live,
+                     int json);
+static int console_run(const char *spec);
+
 static void usage(void)
 {
     printf("exodoc v%s — the documentation auditor for the AI-native stack\n"
@@ -20,7 +25,11 @@ static void usage(void)
            "  --exomind write exodoc:audit:* keys + note to this exomind\n"
            "  --out     also write the report to this file\n"
            "  --live    crawl daemons, verify version + API conformance\n"
-           "  --json    machine-readable JSON output\n",
+           "  --json    machine-readable JSON output\n"
+           "operation (same console grammar as the stack's daemons):\n"
+           "  exodoc /audit?live=1&stack=...&base=...&exomind=...&out=...\n"
+           "           one audit run; values literal, & separates params,\n"
+           "           flags accept off values 0/false/no/off\n",
            EXODOC_VERSION);
 }
 
@@ -127,6 +136,8 @@ int main(int argc, char **argv)
         usage();
         return 0;
     }
+    if (argc >= 2 && argv[1][0] == '/')
+        return console_run(argv[1]);
     if (strcmp(argv[1], "audit") != 0) {
         fprintf(stderr, "exodoc: unknown command '%s'\n", argv[1]);
         usage();
@@ -165,6 +176,15 @@ int main(int argc, char **argv)
         }
     }
 
+    return audit_run(manifest, base, exomind, outfile, live, json);
+}
+
+/* one audit run with resolved options; shared by the `audit` subcommand
+ * and the /audit console operation (same checks, same exit codes) */
+static int audit_run(const char *manifest, const char *base,
+                     const char *exomind, const char *outfile, int live,
+                     int json)
+{
     stack st = {0};
     snprintf(st.manifest_path, sizeof st.manifest_path, "%s", manifest);
     snprintf(st.base, sizeof st.base, "%s", base);
@@ -222,4 +242,59 @@ int main(int argc, char **argv)
             fprintf(stderr, "exodoc: warning: %s\n", err);
     }
     return 0;
+}
+
+static int flag_is_on(const char *v)
+{
+    return !(!strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no") ||
+             !strcmp(v, "off"));
+}
+
+/* console-mode operation: /audit?live=1&stack=...&base=...&exomind=...&
+ * out=...&json=1 — the /op?k=v console grammar shared by the whole stack,
+ * mapped onto the audit subcommand. Exit codes = the subcommand's. */
+static int console_run(const char *spec)
+{
+    char buf[8192];
+    snprintf(buf, sizeof buf, "%s", spec);
+    char *q = strchr(buf, '?');
+    if (q)
+        *q = 0;
+    if (strcmp(buf, "/audit") != 0) {
+        fprintf(stderr, "exodoc: unknown operation %s\n", buf);
+        usage();
+        return 2;
+    }
+    const char *manifest = "docs/stack.tsv";
+    const char *base = ".";
+    const char *exomind = NULL;
+    const char *outfile = NULL;
+    int live = 0, json = 0;
+    if (q) {
+        for (char *kv = strtok(q + 1, "&"); kv; kv = strtok(NULL, "&")) {
+            char *eq = strchr(kv, '=');
+            if (eq)
+                *eq = 0;
+            const char *k = kv;
+            const char *v = eq ? eq + 1 : "1";
+            if (!strcmp(k, "live"))
+                live = flag_is_on(v);
+            else if (!strcmp(k, "json"))
+                json = flag_is_on(v);
+            else if (!strcmp(k, "stack"))
+                manifest = v;
+            else if (!strcmp(k, "base"))
+                base = v;
+            else if (!strcmp(k, "exomind"))
+                exomind = v;
+            else if (!strcmp(k, "out"))
+                outfile = v;
+            else {
+                fprintf(stderr, "exodoc: /audit: unknown parameter %s\n", k);
+                usage();
+                return 2;
+            }
+        }
+    }
+    return audit_run(manifest, base, exomind, outfile, live, json);
 }

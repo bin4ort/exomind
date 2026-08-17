@@ -57,6 +57,33 @@ static int parse_record(const char *raw, char **f, int maxf, char **owned)
     return n;
 }
 
+/* audit records are id<TAB>name<TAB>criteria<TAB>scheduled<TAB>status
+ * <TAB>score<TAB>findings, where the findings tail itself carries
+ * embedded tabs and newlines: split off the six header fields and hand
+ * back the intact tail rather than running it through tab_split (which
+ * would truncate the tail at its first tab). Returns 1 on a valid
+ * record, 0 otherwise. The unescaped buffer is owned by the caller. */
+static int parse_audit_record(const char *raw, char **hdr, int maxhdr,
+                              char **tail, char **owned)
+{
+    char *u = unesc_line(raw);
+    char *p = u;
+    int n = 0;
+    for (; n < maxhdr; n++) {
+        hdr[n] = p;
+        char *t = strchr(p, '\t');
+        if (!t) {
+            n++;
+            break;
+        }
+        *t = 0;
+        p = t + 1;
+    }
+    *tail = p;
+    *owned = u;
+    return n;
+}
+
 static void nc_value(const nc_t *nc, buf_t *b)
 {
     buf_printf(b, "%s\t%s\t%s\t%s\t%s\t%lld\t%s\t%s\t%s\t%lld\t%s",
@@ -162,9 +189,9 @@ int qms_reload(qms_t *q, exo_t *e, char **agents, int *notes24h,
             free(v);
             continue;
         }
-        char *f[8];
+        char *f[7];
         char *owned = NULL;
-        int nf = parse_record(v, f, 8, &owned);
+        int nf = parse_audit_record(v, f, 6, &f[6], &owned);
         free(v);
         if (nf < 6) {
             free(owned);
@@ -177,7 +204,7 @@ int qms_reload(qms_t *q, exo_t *e, char **agents, int *notes24h,
         a->scheduled = strtoll(f[3], NULL, 10);
         snprintf(a->status, sizeof a->status, "%s", f[4]);
         a->score = atoi(f[5]);
-        a->findings = xstrdup(nf > 6 ? f[6] : "");
+        a->findings = xstrdup(f[6]);
         free(owned);
     }
     for (size_t i = 0; i < n; i++)

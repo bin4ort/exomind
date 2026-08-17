@@ -122,6 +122,28 @@ static const char *g_token = NULL;
 exo_t *g_exo_ctx = NULL;
 int g_rate_limit_active = 0;
 
+/* the self-describing spec: GET / in server mode, and the no-arg guide
+ * in console mode. */
+static const char *spec_text(void)
+{
+    return "exocontext v" EXOCONTEXT_VERSION " - context continuity for AI agents\n"
+           "plain text, lowercase ok/error replies, token-efficient\n\n"
+           "GET / - this specification\n"
+           "GET /ping - liveness: pong\n"
+           "GET /context?agent=<id>[&budget=<chars>] - bounded digest of an\n"
+           "   agent's state: notes mentioning `agent:<id>` (newest first)\n"
+           "   plus every `agent:<id>:*` key with its value, capped at the\n"
+           "   budget (default 4000 chars). An agent can reconstruct its\n"
+           "   working context after a restart from this single call.\n"
+           "POST /context - same, body `agent=<id>[&budget=<chars>]`\n"
+           "Add `json=1` for a JSON array.\n"
+           "console: exocontext /context?agent=<id>[&budget=<chars>]\n"
+           "  one-shot, in-process, no port bound (body on --body or stdin);\n"
+           "  no args prints this guide\n"
+           "server: only with --serve (or --port <n>)\n"
+           "Backend: exomind (durable memory). Zero compile deps, C11.\n";
+}
+
 void http_set_token(const char *tok)
 {
     g_token = tok;
@@ -166,6 +188,63 @@ static int query_param(const char *q, const char *name, char *out, size_t cap)
         p = amp ? amp + 1 : NULL;
     }
     return 0;
+}
+
+/* in-process dispatch: the same routing server mode and console mode
+ * share. method/path/query/body come from the request line, or from
+ * args/stdin in console mode. No auth here - that is server-layer. */
+static void dispatch(const char *method, char *path, const char *qs,
+                     const char *body, buf_t *out, int *status,
+                     const char **ctype)
+{
+    *status = 200;
+    *ctype = "text/plain";
+    if (!strncmp(path, "/exoexocontext", 14) &&
+        (path[14] == 0 || path[14] == '/')) {
+        memmove(path, path + 14, strlen(path + 14) + 1);
+        if (!path[0])
+            strcpy(path, "/");
+    }
+    if (!strcmp(path, "/ping")) {
+        if (strcmp(method, "GET") && strcmp(method, "HEAD"))
+            *status = 405, buf_puts(out, "error: use GET\n");
+        else
+            buf_puts(out, "pong\n");
+        return;
+    }
+    if (!strcmp(path, "/")) {
+        buf_puts(out, spec_text());
+        return;
+    }
+    if (!strcmp(path, "/context")) {
+        char agent[MAX_AGENT] = "";
+        char bbuf[16];
+        size_t budget = 4000;
+        if (qs) {
+            (void)query_param(qs, "agent", agent, sizeof agent);
+            if (query_param(qs, "budget", bbuf, sizeof bbuf))
+                budget = (size_t)atol(bbuf);
+        }
+        if (!agent[0] && body && body[0]) {
+            (void)query_param(body, "agent", agent, sizeof agent);
+            if (query_param(body, "budget", bbuf, sizeof bbuf))
+                budget = (size_t)atol(bbuf);
+        }
+        if (!agent[0]) {
+            *status = 400;
+            buf_puts(out, "error: missing agent\n");
+            return;
+        }
+        if (budget < 256)
+            budget = 256;
+        if (budget > MAX_CONTEXT_BUDGET)
+            budget = MAX_CONTEXT_BUDGET;
+        char err[256];
+        ctx_build(g_exo_ctx, agent, budget, out, err, sizeof err);
+        return;
+    }
+    *status = 400;
+    buf_puts(out, "error: unknown path\n");
 }
 
 static void *conn_thread(void *arg)
@@ -244,83 +323,21 @@ static void *conn_thread(void *arg)
         qs = qm + 1;
     }
 
-    exo_t *e = g_exo_ctx;
-
     if (g_rate_limit_active && !exo_rate_take()) {
         http_out(fd, 429, "text/plain", "error: rate limit exceeded\n");
         close(fd);
         return NULL;
     }
-    if (!strncmp(path, "/exoexocontext", 14) &&
-        (path[14] == 0 || path[14] == '/')) {
-        memmove(path, path + 14, strlen(path + 14) + 1);
-        if (!path[0])
-            snprintf(path, sizeof path, "/");
-    }
-
-    if (!strcmp(path, "/ping")) {
-        if (strcmp(method, "GET") && strcmp(method, "HEAD")) {
-            http_out(fd, 405, "text/plain", "error: use GET\n");
-        } else {
-            http_out(fd, 200, "text/plain", "pong\n");
-        }
-        close(fd);
-        return NULL;
-    }
-    if (!strcmp(path, "/")) {
-        const char *spec =
-            "exocontext v0.1.0 - context continuity for AI agents\n"
-            "plain text, lowercase ok/error replies, token-efficient\n\n"
-            "GET / - this specification\n"
-            "GET /ping - liveness: pong\n"
-            "GET /context?agent=<id>[&budget=<chars>] - bounded digest of an\n"
-            "   agent's state: notes mentioning `agent:<id>` (newest first)\n"
-            "   plus every `agent:<id>:*` key with its value, capped at the\n"
-            "   budget (default 4000 chars). An agent can reconstruct its\n"
-            "   working context after a restart from this single call.\n"
-            "POST /context - same, body `agent=<id>[&budget=<chars>]`\n"
-            "Add `json=1` for a JSON array.\n"
-            "Backend: exomind (durable memory). Zero compile deps, C11.\n";
-        http_out(fd, 200, "text/plain; charset=utf-8", spec);
-        close(fd);
-        return NULL;
-    }
-    if (!strcmp(path, "/context")) {
-        char agent[MAX_AGENT] = "";
-        char bbuf[16];
-        size_t budget = 4000;
-        if (qs) {
-            if (query_param(qs, "agent", agent, sizeof agent))
-                ;
-            if (query_param(qs, "budget", bbuf, sizeof bbuf))
-                budget = (size_t)atol(bbuf);
-        }
-        if (!agent[0] && strstr(buf, "\r\n\r\n")) {
-            /* POST body form: agent=... &budget=... */
-            const char *body = strstr(buf, "\r\n\r\n") + 4;
-            if (query_param(body, "agent", agent, sizeof agent))
-                ;
-            if (query_param(body, "budget", bbuf, sizeof bbuf))
-                budget = (size_t)atol(bbuf);
-        }
-        if (!agent[0]) {
-            http_out(fd, 400, "text/plain", "error: missing agent\n");
-            close(fd);
-            return NULL;
-        }
-        if (budget < 256)
-            budget = 256;
-        if (budget > MAX_CONTEXT_BUDGET)
-            budget = MAX_CONTEXT_BUDGET;
-        buf_t out = {0};
-        char err[256];
-        ctx_build(e, agent, budget, &out, err, sizeof err);
-        http_out(fd, 200, "text/plain; charset=utf-8", out.p ? out.p : "");
-        buf_free(&out);
-        close(fd);
-        return NULL;
-    }
-    http_out(fd, 400, "text/plain", "error: unknown path\n");
+    const char *body = "";
+    char *he2 = strstr(buf, "\r\n\r\n");
+    if (he2)
+        body = he2 + 4;
+    buf_t out = {0};
+    int status = 200;
+    const char *ctype = "text/plain";
+    dispatch(method, path, qs ? qs : "", body, &out, &status, &ctype);
+    http_out(fd, status, ctype, out.p ? out.p : "");
+    buf_free(&out);
     close(fd);
     return NULL;
 }
@@ -328,8 +345,61 @@ static void *conn_thread(void *arg)
 static void usage(const char *prog)
 {
     fprintf(stderr,
-            "usage: %s [--port 7659] [--token secret] "
-            "--exomind http://127.0.0.1:7654\n", prog);
+            "usage: %s [--serve] [--port 7659] [--token secret] "
+            "--exomind http://127.0.0.1:7654\n"
+            "       %s /context?agent=<id>[&budget=<n>]\n",
+            prog, prog);
+}
+
+/* console mode: run ONE operation in-process (`exocontext
+ * /context?agent=...`), agent/budget on the query, body on --body or
+ * stdin when the query lacks an agent, print the response body, exit
+ * 0/1/2. No socket is opened. */
+static int console_run(exo_t *e, const char *path_arg, const char *body_arg)
+{
+    char pathbuf[512];
+    char query[1536] = "";
+    snprintf(pathbuf, sizeof pathbuf, "%s", path_arg);
+    char *q = strchr(pathbuf, '?');
+    if (q) {
+        *q = 0;
+        snprintf(query, sizeof query, "%s", q + 1);
+    }
+    char body[65536] = "";
+    const char *b = "";
+    if (body_arg[0]) {
+        snprintf(body, sizeof body, "%s", body_arg);
+        b = body;
+    } else if (!query_param(query, "agent", body, sizeof body) &&
+               !isatty(0)) {
+        /* POST-style call: agent comes from the body on stdin */
+        size_t blen = 0;
+        ssize_t n;
+        while (blen < sizeof body - 1 &&
+               (n = read(0, body + blen, sizeof body - 1 - blen)) > 0)
+            blen += (size_t)n;
+        body[blen] = 0;
+        b = body;
+    }
+    g_exo_ctx = e;
+    if (strcmp(pathbuf, "/context") && strcmp(pathbuf, "/ping") &&
+        strcmp(pathbuf, "/")) {
+        fprintf(stderr, "exocontext: unknown operation %s\n", path_arg);
+        return 2;
+    }
+    buf_t out = {0};
+    int status = 200;
+    const char *ctype = "text/plain";
+    dispatch("GET", pathbuf, query, b, &out, &status, &ctype);
+    if (status >= 400) {
+        fprintf(stderr, "exocontext: %s failed (%d)\n%s", pathbuf, status,
+                out.p ? out.p : "");
+        buf_free(&out);
+        return 1;
+    }
+    fputs(out.p ? out.p : "", stdout);
+    buf_free(&out);
+    return 0;
 }
 
 int main(int argc, char **argv)
@@ -337,17 +407,27 @@ int main(int argc, char **argv)
     int port = 7659;
     const char *exomind_url = NULL;
     const char *token = NULL;
-    for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--port") && i + 1 < argc)
+    const char *console_path = (argc >= 2 && argv[1][0] == '/') ? argv[1]
+                                                                : NULL;
+    int want_server = 0; /* only --serve or --port start the server */
+    const char *body_arg = "";
+    for (int i = console_path ? 2 : 1; i < argc; i++) {
+        const char *a = argv[i];
+        if (!strcmp(a, "--port") && i + 1 < argc) {
             port = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--token") && i + 1 < argc)
+            want_server = 1;
+        } else if (!strcmp(a, "--serve"))
+            want_server = 1;
+        else if (!strcmp(a, "--body") && i + 1 < argc)
+            body_arg = argv[++i];
+        else if (!strcmp(a, "--token") && i + 1 < argc)
             token = argv[++i];
-        else if (!strcmp(argv[i], "--keys") && i + 1 < argc)
+        else if (!strcmp(a, "--keys") && i + 1 < argc)
             token = argv[++i];
-        else if (!strcmp(argv[i], "--rate-limit") && i + 1 < argc) {
+        else if (!strcmp(a, "--rate-limit") && i + 1 < argc) {
             exo_rate_init(atol(argv[++i]));
             g_rate_limit_active = 1;
-        } else if (!strcmp(argv[i], "--log-level") && i + 1 < argc) {
+        } else if (!strcmp(a, "--log-level") && i + 1 < argc) {
             int lv = exo_parse_log_level(argv[++i]);
             if (lv < 0) {
                 fprintf(stderr,
@@ -355,11 +435,12 @@ int main(int argc, char **argv)
                 return 1;
             }
             exo_set_log_level(lv);
-        } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
+        } else if (!strcmp(a, "--help") || !strcmp(a, "-h")) {
             static exo_help_t self[1];
             self[0].name = "exocontext";
-            self[0].spec = "exocontext v0.1.0 - context continuity\n"
-                "usage: exocontext --exomind <url> [options]\n"
+            self[0].spec = "exocontext v" EXOCONTEXT_VERSION " - context continuity\n"
+                "usage: exocontext [--serve] --exomind <url> [options]\n"
+                "console: exocontext /context?agent=<id>[&budget=n]\n"
                 "GET /context?agent=<id>[&budget=n] = bounded digest\n";
             exo_help_add(self, 1);
             exo_help_add_siblings();
@@ -374,20 +455,52 @@ int main(int argc, char **argv)
             usage(argv[0]);
             return 0;
         }
-        else if (!strcmp(argv[i], "--exomind") && i + 1 < argc)
+        else if (!strcmp(a, "--exomind") && i + 1 < argc)
             exomind_url = argv[++i];
-        else if (!strcmp(argv[i], "--version")) {
+        else if (!strcmp(a, "--version")) {
             printf("exocontext v%s\n", EXOCONTEXT_VERSION);
             return 0;
-        } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
-            usage(argv[0]);
-            return 0;
         } else {
-            fprintf(stderr, "exocontext: unknown argument %s\n", argv[i]);
+            fprintf(stderr, "exocontext: unknown argument %s\n", a);
             usage(argv[0]);
             return 1;
         }
     }
+
+    if (!want_server) {
+        /* no HTTP listener except in server mode: run the op in-process
+         * (backend init before dispatch), or print the guide (the same
+         * text GET / serves) */
+        if (console_path) {
+            char pc[512];
+            snprintf(pc, sizeof pc, "%s", console_path);
+            char *qm = strchr(pc, '?');
+            if (qm)
+                *qm = 0;
+            if (!strncmp(pc, "/exoexocontext", 14) &&
+                (pc[14] == 0 || pc[14] == '/'))
+                memmove(pc, pc + 14, strlen(pc + 14) + 1);
+            int op_needs_exo = !strcmp(pc, "/context");
+            if (!exomind_url && op_needs_exo) {
+                fprintf(stderr, "exocontext: --exomind URL is required\n");
+                return 1;
+            }
+            static exo_t e;
+            exo_t *ep = NULL;
+            if (op_needs_exo) {
+                char err[256];
+                if (exo_init(&e, exomind_url, err, sizeof err) != 0) {
+                    fprintf(stderr, "exocontext: %s\n", err);
+                    return 1;
+                }
+                ep = &e;
+            }
+            return console_run(ep, console_path, body_arg);
+        }
+        printf("%s", spec_text());
+        return 0;
+    }
+
     if (!exomind_url) {
         fprintf(stderr, "exocontext: --exomind URL is required\n");
         return 1;
@@ -424,7 +537,7 @@ int main(int argc, char **argv)
         return 1;
     }
     fprintf(stderr,
-            "exocontext v0.1.0 listening on http://127.0.0.1:%d "
+            "exocontext v" EXOCONTEXT_VERSION " listening on http://127.0.0.1:%d "
             "(exomind: %s)\n", port, exomind_url);
     for (;;) {
         int fd = accept(srv, NULL, NULL);

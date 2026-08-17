@@ -203,6 +203,11 @@ int pcfg_load(pcfg_t *p, const char *repo);
 /* ---- http.c : the API ---- */
 void http_set_token(const char *tok);
 int http_handle_conn(int fd, exo_t *e, cfg_t *cfg, qms_t *q);
+/* internal dispatch for the console one-shot operations (no HTTP auth) */
+int http_dispatch(const char *method, const char *path, const char *query,
+                  const char *body, size_t body_len, buf_t *out,
+                  int *status, const char **ctype, exo_t *e, cfg_t *cfg,
+                  qms_t *q);
 const char *http_spec_text(void);
 extern int g_rate_limit_active;
 

@@ -44,6 +44,25 @@ exokit diff contract.a.tsv contract.b.tsv --exact
 exokit audit
 ```
 
+### operation form (one console grammar for the whole stack)
+
+The same subcommands also run through the `/op?k=v…` syntax the daemon
+modules use, so the whole stack has one console grammar:
+
+| op | params | maps to |
+|----|--------|---------|
+| `/init` | `dir` | `init <dir>` (default `.`) |
+| `/extract` | `src`, `out`, flag `append=1` | `extract <src> [--out <f>] [--append]` |
+| `/verify` | `kit`, `runner`, `fn` | `verify [--kit <d>] [--runner <c>] [--fn <n>]` |
+| `/diff` | `a`, `b`, flag `exact=1` | `diff <a> <b> [--exact]` |
+| `/audit` | `kit` | `audit [--kit <d>]` |
+
+e.g. `exokit /verify?kit=kit` from the project root == `exokit verify`.
+Values are literal (no URL decoding); `&` separates parameters. Flags
+accept off values `0`/`false`/`no`/`off`. Exit codes are the
+subcommand's (0 = pass, 1 = findings/bad args, 2 = usage error /
+unknown operation).
+
 ## API
 
 Plain-text TSV everywhere. The files:

@@ -25,8 +25,8 @@ stack reference (this file has the complete exocrawl documentation).
   pool) with per-host pacing (default 150 ms) and rotating identities;
   403/429 gets bounded retries with a different identity.
 - **200% privacy** — stateless requests, no JS, no referrer, no persistent
-  state unless you opt into the exomind cache (`--cache exomind`, keys
-  `exocrawl:cache:*`, 24 h TTL).
+  state unless you opt into the exomind cache (`--cache http://127.0.0.1:7654`,
+  keys `exocrawl:cache:*`, 24 h TTL).
 - **TLS via curl** — the one runtime dependency: the ubiquitous `curl`
   binary provides HTTPS transport; everything else is native C.
 
@@ -34,12 +34,39 @@ stack reference (this file has the complete exocrawl documentation).
 
 ```sh
 make exocrawl          # exocrawl v0.4.0-alpha.1/build/exocrawl (zero compile deps)
-make test-exocrawl     # hermetic suite (local mock web, 26 checks)
-./exocrawl/build/exocrawl --port 7658 --cache exomind
+make test-exocrawl     # hermetic suite (local mock web, 47 checks)
+./exocrawl/build/exocrawl --serve --port 7658 --cache http://127.0.0.1:7654
 ```
 
-Flags: `--port` (7658), `--token`, `--concurrency` (16), `--pace-ms`
-(150), `--cache exomind`, `--proxy http://...`.
+Flags: `--serve` (the only way to run the HTTP server, together with
+`--port`), `--token`, `--concurrency` (16), `--pace-ms` (150),
+`--cache <url>` (`exomind` alone means `http://127.0.0.1:7654`),
+`--robots`, `--proxy http://...`.
+
+Without `--serve` (and without `--port`) the binary never binds a port:
+with `--port` is explicit, with a leading `/` operation it runs that one
+operation in-process.
+
+## Console operations
+
+Each API endpoint also runs as a one-shot, in-process console operation —
+same routing, same output, no socket, no daemon. `--body <text>` supplies
+the request body (or stdin for POST ops, when stdin is not a terminal).
+
+```sh
+exocrawl /fetch?url=https://example.com&links=1
+exocrawl /stats
+printf 'https://a.example/\nhttps://b.example/\t4000\n' | exocrawl /scrape
+exocrawl /search?q=llm+evals&n=5 --body ignored       # GET ops take no body
+```
+
+Exit codes: `0` success, `1` operation failed (e.g. `error: missing url`),
+`2` unknown operation. `--extract <file.html>` is a legacy offline
+extraction op (no exomind, no network) kept for the extraction regression
+corpus; it prints the extracted text of a local HTML file.
+
+No arguments at all prints the guide (the same text `GET /` serves) and
+exits 0.
 
 ## API
 
@@ -73,7 +100,8 @@ enforces Bearer auth.
   native C: request building, UA rotation, bounded retries, per-host
   pacing (a worker pool fans out `/scrape`), HTML→text extraction, and
   the per-engine parsers.
-- **Cache** — with `--cache exomind`, extracted text is stored under
+- **Cache** — with `--cache http://host:port` (or the shorthand
+  `--cache exomind` = `127.0.0.1:7654`), extracted text is stored under
   `exocrawl:cache:*` keys (24 h TTL) and served on repeat fetches.
 - **Identity** — stateless requests with rotating user agents; no
   cookies, no referrer, no JS.

@@ -35,7 +35,8 @@ typedef struct {
     int pace_ms;
     int use_cache;
     int robots; /* optional robots.txt politeness mode */
-    const char *exomind;
+    char cache_host[256]; /* parsed from --cache <url> */
+    int cache_port;
     char *instances; /* optional search instance list file */
     char *uas_file;
 } cfg_t;
@@ -122,6 +123,28 @@ static char *query_param(const char *query, const char *name, char *out,
 
 /* ---------------- exomind cache ---------------- */
 
+/* --cache <arg>: accept a bare host, host:port, or full URL; the legacy
+ * shorthand `--cache exomind` means the default 127.0.0.1:7654. */
+static void cache_parse(const char *arg)
+{
+    const char *p = arg;
+    if (!strncmp(p, "http://", 7))
+        p += 7;
+    else if (!strncmp(p, "https://", 8))
+        p += 8;
+    if (!*p || !strcmp(p, "exomind"))
+        p = "127.0.0.1";
+    snprintf(g_cfg.cache_host, sizeof g_cfg.cache_host, "%s", p);
+    g_cfg.cache_port = 7654;
+    char *colon = strchr(g_cfg.cache_host, ':');
+    if (colon) {
+        *colon = 0;
+        if (colon[1])
+            g_cfg.cache_port = atoi(colon + 1);
+    }
+    g_cfg.use_cache = 1;
+}
+
 static int exomind_req(const char *method, const char *path, const char *body,
                        char **out, size_t *outlen)
 {
@@ -131,8 +154,12 @@ static int exomind_req(const char *method, const char *path, const char *body,
     struct sockaddr_in sa;
     memset(&sa, 0, sizeof sa);
     sa.sin_family = AF_INET;
-    sa.sin_port = htons(7654);
-    sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    sa.sin_port = htons((uint16_t)g_cfg.cache_port);
+    if (inet_pton(AF_INET, g_cfg.cache_host, &sa.sin_addr) != 1) {
+        fprintf(stderr, "exocrawl: bad cache host %s\n", g_cfg.cache_host);
+        close(fd);
+        return -1;
+    }
     if (connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) {
         close(fd);
         return -1;
@@ -365,17 +392,39 @@ static void fetch_worker(fetch_job_t *j)
 
 /* ---------------- request handling ---------------- */
 
-static void handle_fetch(int fd, const char *query, const char *body)
+/* one response: body buffer + status + content type. Handlers fill one
+ * of these; the HTTP layer serializes it, console mode prints it. */
+typedef struct {
+    buf_t body;
+    int status;
+    const char *ctype;
+} dout_t;
+
+static void dout_init(dout_t *d, size_t cap)
 {
-    (void)body;
+    memset(d, 0, sizeof *d);
+    d->status = 200;
+    d->ctype = "text/plain";
+    buf_init(&d->body, cap);
+}
+
+static void dout_free(dout_t *d)
+{
+    buf_free(&d->body);
+}
+
+static void handle_fetch(dout_t *d, const char *query)
+{
     char url[MAX_URL];
     char mx[32];
     if (!query_param(query, "url", url, sizeof url)) {
-        http_out(fd, 400, "text/plain", "error: missing url\n");
+        d->status = 400;
+        buf_puts(&d->body, "error: missing url\n");
         return;
     }
     if (!url_is_http(url)) {
-        http_out(fd, 400, "text/plain", "error: url must be http(s)\n");
+        d->status = 400;
+        buf_puts(&d->body, "error: url must be http(s)\n");
         return;
     }
     size_t max = 8000;
@@ -402,18 +451,21 @@ static void handle_fetch(int fd, const char *query, const char *body)
     if (j.status != 0) {
         char out[512];
         snprintf(out, sizeof out, "error: %s\n", j.err);
-        http_out(fd, 502, "text/plain", out);
+        d->status = 502;
+        buf_puts(&d->body, out);
         return;
     }
-    http_out(fd, 200, "text/plain; charset=utf-8", j.result ? j.result : "");
+    d->ctype = "text/plain; charset=utf-8";
+    buf_puts(&d->body, j.result ? j.result : "");
     free(j.result);
 }
 
-static void handle_search(int fd, const char *query)
+static void handle_search(dout_t *d, const char *query)
 {
     char q[MAX_QUERY];
     if (!query_param(query, "q", q, sizeof q) || !q[0]) {
-        http_out(fd, 400, "text/plain", "error: missing q\n");
+        d->status = 400;
+        buf_puts(&d->body, "error: missing q\n");
         return;
     }
     char nbuf[16], ebuf[64], jbuf[8];
@@ -432,32 +484,29 @@ static void handle_search(int fd, const char *query)
         0) {
         char out[512];
         snprintf(out, sizeof out, "error: %s\n", err);
-        http_out(fd, 502, "text/plain", out);
+        d->status = 502;
+        buf_puts(&d->body, out);
         return;
     }
     int use_json = query_param(query, "json", jbuf, sizeof jbuf) && jbuf[0] == '1';
-    buf_t out;
-    buf_init(&out, 8192);
     if (use_json) {
-        buf_puts(&out, "[");
+        buf_puts(&d->body, "[");
         for (size_t i = 0; i < nres; i++) {
-            buf_printf(&out, "%s{\"title\":\"%s\",\"url\":\"%s\",\"snippet\":\"%s\"}",
+            buf_printf(&d->body, "%s{\"title\":\"%s\",\"url\":\"%s\",\"snippet\":\"%s\"}",
                        i ? "," : "", res[i].title ? res[i].title : "",
                        res[i].url ? res[i].url : "",
                        res[i].snippet ? res[i].snippet : "");
         }
-        buf_puts(&out, "]\n");
+        buf_puts(&d->body, "]\n");
     } else {
         for (size_t i = 0; i < nres; i++)
-            buf_printf(&out, "%zu\t%s\t%s\t%s\n", i + 1,
+            buf_printf(&d->body, "%zu\t%s\t%s\t%s\n", i + 1,
                        res[i].title ? res[i].title : "",
                        res[i].url ? res[i].url : "",
                        res[i].snippet ? res[i].snippet : "");
     }
     results_free(res, nres);
-    http_out(fd, 200, use_json ? "application/json" : "text/plain; charset=utf-8",
-             out.p ? out.p : "");
-    buf_free(&out);
+    d->ctype = use_json ? "application/json" : "text/plain; charset=utf-8";
 }
 
 typedef struct {
@@ -470,11 +519,11 @@ static void scrape_one(job_t *jb)
     fetch_worker(jb->arg);
 }
 
-static void handle_scrape(int fd, const char *query, const char *body)
+static void handle_scrape(dout_t *d, const char *body)
 {
-    (void)query;
     if (!body || !body[0]) {
-        http_out(fd, 400, "text/plain", "error: empty body\n");
+        d->status = 400;
+        buf_puts(&d->body, "error: empty body\n");
         return;
     }
     size_t njobs = 0;
@@ -511,60 +560,93 @@ static void handle_scrape(int fd, const char *query, const char *body)
         p = eol ? eol + 1 : p + len;
     }
     if (njobs == 0) {
-        http_out(fd, 400, "text/plain", "error: no valid urls\n");
+        d->status = 400;
+        buf_puts(&d->body, "error: no valid urls\n");
         free(jobs);
         return;
     }
     for (size_t i = 0; i < njobs; i++)
         pool_submit(&g_pool, scrape_one, &jobs[i]);
     pool_wait(&g_pool);
-    buf_t out;
-    buf_init(&out, 8192);
-    buf_printf(&out, "ok %zu\n", njobs);
+    buf_printf(&d->body, "ok %zu\n", njobs);
     for (size_t i = 0; i < njobs; i++) {
         fetch_job_t *j = &jobs[i];
         if (j->status == 0)
-            buf_printf(&out, "fetch %s %zu ok\n", j->url, strlen(j->result));
+            buf_printf(&d->body, "fetch %s %zu ok\n", j->url, strlen(j->result));
         else
-            buf_printf(&out, "fetch %s error: %s\n", j->url, j->err);
+            buf_printf(&d->body, "fetch %s error: %s\n", j->url, j->err);
         free((void *)j->url);
         free(j->result);
     }
     free(jobs);
-    http_out(fd, 200, "text/plain", out.p ? out.p : "");
-    buf_free(&out);
 }
 
-static void handle_stats(int fd)
+static void handle_stats(dout_t *d)
 {
-    char out[512];
-    snprintf(out, sizeof out,
-             "fetches: %zu\nerrors: %zu\ncache_hits: %zu\nbytes: %llu\n",
-             g_fetches, g_errors, g_cache_hits,
-             (unsigned long long)g_bytes);
-    http_out(fd, 200, "text/plain", out);
+    buf_printf(&d->body,
+               "fetches: %zu\nerrors: %zu\ncache_hits: %zu\nbytes: %llu\n",
+               g_fetches, g_errors, g_cache_hits,
+               (unsigned long long)g_bytes);
 }
 
 int g_rate_limit_active = 0;
 
-static void handle_spec(int fd)
+/* the self-describing spec: GET / in server mode, and the no-arg guide
+ * in console mode. */
+static const char *spec_text(void)
 {
-    http_out(fd, 200, "text/plain; charset=utf-8",
-             "exocrawl v0.1.0 - AI-native web research daemon\n"
-             "plain text, lowercase ok/error replies, token-efficient\n"
-             "GET / - this specification\n\n"
-             "GET /search?q=<query>[&n=10][&engines=ddg,mojeek,marginalia,bing,wikipedia|all][&json=1]\n"
-             "  independent private metasearch (own adapters, no third-party\n"
-             "  aggregator; ads filtered, rotated, no accounts/cookies)\n"
-             "GET /fetch?url=<http(s) url>[&max=8000][&links=1][&images=1]\n"
-             "  HTML -> clean plain text (boilerplate removed, headings as\n"
-             "  ##, links/images appended as sections when requested)\n"
-             "POST /scrape  body: one url per line [TAB max] - concurrent\n"
-             "  fetch-all with per-host pacing and identity rotation\n"
-             "GET /stats - counters\n"
-             "GET /ping - pong\n\n"
-             "privacy: stateless, no cookies, no JS, no tracking params;\n"
-             "optional exomind cache (keys exocrawl:cache:*).\n");
+    return "exocrawl v" EXO_VERSION " - AI-native web research daemon\n"
+           "plain text, lowercase ok/error replies, token-efficient\n"
+           "GET / - this specification\n\n"
+           "GET /search?q=<query>[&n=10][&engines=ddg,mojeek,marginalia,bing,wikipedia|all][&json=1]\n"
+           "  independent private metasearch (own adapters, no third-party\n"
+           "  aggregator; ads filtered, rotated, no accounts/cookies)\n"
+           "GET /fetch?url=<http(s) url>[&max=8000][&links=1][&images=1]\n"
+           "  HTML -> clean plain text (boilerplate removed, headings as\n"
+           "  ##, links/images appended as sections when requested)\n"
+           "POST /scrape  body: one url per line [TAB max] - concurrent\n"
+           "  fetch-all with per-host pacing and identity rotation\n"
+           "GET /stats - counters\n"
+           "GET /ping - pong\n\n"
+           "console: exocrawl /search?q=... | /fetch?url=... | /scrape | /stats | /ping\n"
+           "  same endpoints, one-shot, in-process, no port bound (body on\n"
+           "  --body <text> or stdin); --extract <file.html> is a legacy\n"
+           "  offline extraction op\n"
+           "server: only with --serve (or --port <n>)\n\n"
+           "privacy: stateless, no cookies, no JS, no tracking params;\n"
+           "optional exomind cache (keys exocrawl:cache:*).\n";
+}
+
+static void handle_spec(dout_t *d)
+{
+    buf_puts(&d->body, spec_text());
+}
+
+/* in-process dispatch: the same routing server mode and console mode
+ * share. method/path/query/body come from the request line, or from
+ * args/stdin in console mode. No auth here - that is server-layer. */
+static void dispatch(const char *method, const char *path, const char *query,
+                     const char *body, dout_t *d)
+{
+    if (!strncmp(path, "/exoexocrawl", 12) &&
+        (path[12] == 0 || path[12] == '/'))
+        path += 12;
+    if (strcmp(path, "/") == 0)
+        handle_spec(d);
+    else if (strcmp(path, "/ping") == 0)
+        buf_puts(&d->body, "pong\n");
+    else if (strcmp(path, "/search") == 0)
+        handle_search(d, query);
+    else if (strcmp(path, "/fetch") == 0)
+        handle_fetch(d, query);
+    else if (strcmp(path, "/scrape") == 0 && strcmp(method, "POST") == 0)
+        handle_scrape(d, body);
+    else if (strcmp(path, "/stats") == 0)
+        handle_stats(d);
+    else {
+        d->status = 404;
+        buf_puts(&d->body, "error: unknown path\n");
+    }
 }
 
 static void route(int fd, const char *method, const char *path,
@@ -578,23 +660,11 @@ static void route(int fd, const char *method, const char *path,
         http_out(fd, 429, "text/plain", "error: rate limit exceeded\n");
         return;
     }
-    if (!strncmp(path, "/exoexocrawl", 12) &&
-        (path[12] == 0 || path[12] == '/'))
-        path += 12;
-    if (strcmp(path, "/") == 0)
-        handle_spec(fd);
-    else if (strcmp(path, "/ping") == 0)
-        http_out(fd, 200, "text/plain", "pong\n");
-    else if (strcmp(path, "/search") == 0)
-        handle_search(fd, query);
-    else if (strcmp(path, "/fetch") == 0)
-        handle_fetch(fd, query, body);
-    else if (strcmp(path, "/scrape") == 0 && strcmp(method, "POST") == 0)
-        handle_scrape(fd, query, body);
-    else if (strcmp(path, "/stats") == 0)
-        handle_stats(fd);
-    else
-        http_out(fd, 404, "text/plain", "error: unknown path\n");
+    dout_t d;
+    dout_init(&d, 16384);
+    dispatch(method, path, query, body, &d);
+    http_out(fd, d.status, d.ctype, d.body.p ? d.body.p : "");
+    dout_free(&d);
 }
 
 static void *conn_thread(void *arg)
@@ -670,9 +740,66 @@ static void *conn_thread(void *arg)
 static void usage(const char *prog)
 {
     fprintf(stderr,
-            "usage: %s [--port 7658] [--token secret] [--concurrency 16]\n"
-            "       [--pace-ms 200] [--cache exomind] [--robots] [--proxy http://...]\n",
-            prog);
+            "usage: %s [--serve] [--port 7658] [--token secret]\n"
+            "       [--concurrency 16] [--pace-ms 200]\n"
+            "       [--cache http://127.0.0.1:7654] [--robots] [--proxy http://...]\n"
+            "       %s /search?q=... | /fetch?url=... | /scrape | /stats | /ping\n"
+            "       %s --extract <file.html>\n",
+            prog, prog, prog);
+}
+
+/* console mode: run ONE operation in-process (`exocrawl /fetch?url=...`),
+ * body on --body or stdin (POST ops only, and only when stdin is not a
+ * terminal), print the response body, exit 0/1/2. No socket is opened. */
+static int console_run(const char *path_arg, const char *body_arg)
+{
+    char pathbuf[512];
+    char query[1536] = "";
+    snprintf(pathbuf, sizeof pathbuf, "%s", path_arg);
+    char *q = strchr(pathbuf, '?');
+    if (q) {
+        *q = 0;
+        snprintf(query, sizeof query, "%s", q + 1);
+    }
+    if (!strncmp(pathbuf, "/exoexocrawl", 12) &&
+        (pathbuf[12] == 0 || pathbuf[12] == '/')) {
+        memmove(pathbuf, pathbuf + 12, strlen(pathbuf + 12) + 1);
+        if (!pathbuf[0])
+            snprintf(pathbuf, sizeof pathbuf, "/");
+    }
+    /* method map from the route checks: only /scrape is POST */
+    const char *method = "GET";
+    if (!strcmp(pathbuf, "/scrape"))
+        method = "POST";
+    char body[65536] = "";
+    size_t blen = 0;
+    if (body_arg[0]) {
+        snprintf(body, sizeof body, "%s", body_arg);
+        blen = strlen(body);
+    } else if (!strcmp(method, "POST") && !isatty(0)) {
+        ssize_t n;
+        while (blen < sizeof body - 1 &&
+               (n = read(0, body + blen, sizeof body - 1 - blen)) > 0)
+            blen += (size_t)n;
+        body[blen] = 0;
+    }
+    dout_t d;
+    dout_init(&d, 16384);
+    dispatch(method, pathbuf, query, body, &d);
+    if (d.status == 404) {
+        fprintf(stderr, "exocrawl: unknown operation %s\n", path_arg);
+        dout_free(&d);
+        return 2;
+    }
+    if (d.status >= 400) {
+        fprintf(stderr, "exocrawl: %s failed (%d)\n%s", pathbuf, d.status,
+                d.body.p ? d.body.p : "");
+        dout_free(&d);
+        return 1;
+    }
+    fputs(d.body.p ? d.body.p : "", stdout);
+    dout_free(&d);
+    return 0;
 }
 
 int main(int argc, char **argv)
@@ -680,18 +807,29 @@ int main(int argc, char **argv)
     g_cfg.port = 7658;
     g_cfg.concurrency = 16;
     g_cfg.pace_ms = 200;
+    g_cfg.cache_port = 7654;
     net_init(&g_net);
-    for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--port") && i + 1 < argc)
+    const char *console_path = (argc >= 2 && argv[1][0] == '/') ? argv[1]
+                                                                : NULL;
+    int want_server = 0; /* only --serve or --port start the server */
+    const char *body_arg = "";
+    for (int i = console_path ? 2 : 1; i < argc; i++) {
+        const char *a = argv[i];
+        if (!strcmp(a, "--port") && i + 1 < argc) {
             g_cfg.port = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--token") && i + 1 < argc)
+            want_server = 1;
+        } else if (!strcmp(a, "--serve"))
+            want_server = 1;
+        else if (!strcmp(a, "--body") && i + 1 < argc)
+            body_arg = argv[++i];
+        else if (!strcmp(a, "--token") && i + 1 < argc)
             g_cfg.token = argv[++i];
-        else if (!strcmp(argv[i], "--keys") && i + 1 < argc)
+        else if (!strcmp(a, "--keys") && i + 1 < argc)
             g_cfg.token = argv[++i];
-        else if (!strcmp(argv[i], "--rate-limit") && i + 1 < argc) {
+        else if (!strcmp(a, "--rate-limit") && i + 1 < argc) {
             exo_rate_init(atol(argv[++i]));
             g_rate_limit_active = 1;
-        } else if (!strcmp(argv[i], "--log-level") && i + 1 < argc) {
+        } else if (!strcmp(a, "--log-level") && i + 1 < argc) {
             int lv = exo_parse_log_level(argv[++i]);
             if (lv < 0) {
                 fprintf(stderr,
@@ -699,15 +837,16 @@ int main(int argc, char **argv)
                 return 1;
             }
             exo_set_log_level(lv);
-        } else if (!strcmp(argv[i], "--version")) {
+        } else if (!strcmp(a, "--version")) {
             printf("exocrawl v%s\n", EXO_VERSION);
             return 0;
-        } else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
+        } else if (!strcmp(a, "--help") || !strcmp(a, "-h")) {
             static exo_help_t self[1];
             self[0].name = "exocrawl";
             self[0].spec = "exocrawl v%s - AI-native web research daemon\n"
-                "usage: exocrawl [--port 7658] [--token t | --keys file]\n"
-                "       [--proxy url] [--robots] [--rate-limit n]\n"
+                "usage: exocrawl [--serve] [--port 7658] [--token t | --keys file]\n"
+                "       [--proxy url] [--robots] [--rate-limit n] [--cache url]\n"
+                "console: exocrawl /search?q=... | /fetch?url=... | /scrape | /stats | /ping\n"
                 "GET /search /fetch /scrape /stats; GET / = usage\n",
                 EXO_VERSION;
             exo_help_add(self, 1);
@@ -723,17 +862,18 @@ int main(int argc, char **argv)
             usage(argv[0]);
             return 0;
         }
-        else if (!strcmp(argv[i], "--concurrency") && i + 1 < argc)
+        else if (!strcmp(a, "--concurrency") && i + 1 < argc)
             g_cfg.concurrency = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--pace-ms") && i + 1 < argc)
+        else if (!strcmp(a, "--pace-ms") && i + 1 < argc)
             g_cfg.pace_ms = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--cache") && i + 1 < argc)
-            g_cfg.use_cache = 1, g_cfg.exomind = argv[++i];
-        else if (!strcmp(argv[i], "--robots"))
+        else if (!strcmp(a, "--cache") && i + 1 < argc)
+            cache_parse(argv[++i]);
+        else if (!strcmp(a, "--robots"))
             g_cfg.robots = 1;
-        else if (!strcmp(argv[i], "--extract") && i + 1 < argc) {
-            /* offline extractor: read the file, print the extracted text.
-             * Used by the extraction regression corpus (issue:008). */
+        else if (!strcmp(a, "--extract") && i + 1 < argc) {
+            /* legacy offline extraction op: read the file, print the
+             * extracted text. Used by the extraction regression corpus
+             * (issue:008). */
             FILE *f = fopen(argv[++i], "rb");
             if (!f) {
                 fprintf(stderr, "exocrawl: cannot open %s: %s\n",
@@ -772,24 +912,42 @@ int main(int argc, char **argv)
             free(html);
             return 0;
         }
-        else if (!strcmp(argv[i], "--proxy") && i + 1 < argc)
+        else if (!strcmp(a, "--proxy") && i + 1 < argc)
             g_net.proxy = argv[++i];
-        else if (!strcmp(argv[i], "--engine-base") && i + 1 < argc)
+        else if (!strcmp(a, "--engine-base") && i + 1 < argc)
             g_net.engine_base = argv[++i];
-        else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
-            usage(argv[0]);
-            return 0;
-        } else {
-            fprintf(stderr, "exocrawl: unknown argument %s\n", argv[i]);
+        else {
+            fprintf(stderr, "exocrawl: unknown argument %s\n", a);
             usage(argv[0]);
             return 1;
         }
     }
+    signal(SIGPIPE, SIG_IGN);
+
+    if (!want_server) {
+        /* no HTTP listener except in server mode: run the op in-process
+         * (state init before dispatch, cleanup after), or print the guide
+         * (the same text GET / serves) */
+        if (console_path) {
+            if (pool_init(&g_pool, g_cfg.concurrency) != 0) {
+                fprintf(stderr, "exocrawl: pool init failed\n");
+                net_free(&g_net);
+                return 1;
+            }
+            int rc = console_run(console_path, body_arg);
+            pool_destroy(&g_pool);
+            net_free(&g_net);
+            return rc;
+        }
+        printf("%s", spec_text());
+        net_free(&g_net);
+        return 0;
+    }
+
     if (pool_init(&g_pool, g_cfg.concurrency) != 0) {
         fprintf(stderr, "exocrawl: pool init failed\n");
         return 1;
     }
-    signal(SIGPIPE, SIG_IGN);
 
     int srv = socket(AF_INET, SOCK_STREAM, 0);
     if (srv < 0) {
@@ -809,9 +967,13 @@ int main(int argc, char **argv)
         return 1;
     }
     listen(srv, 64);
+    char cacheinfo[320] = "";
+    if (g_cfg.use_cache)
+        snprintf(cacheinfo, sizeof cacheinfo, ", cache %s:%d",
+                 g_cfg.cache_host, g_cfg.cache_port);
     fprintf(stderr, "exocrawl v%s on %d (concurrency %d, pace %d ms%s)\n",
             EXO_VERSION, g_cfg.port, g_cfg.concurrency, g_cfg.pace_ms,
-            g_cfg.use_cache ? ", cache exomind" : "");
+            cacheinfo);
     for (;;) {
         int fd = accept(srv, NULL, NULL);
         if (fd < 0) {

@@ -496,13 +496,37 @@ check "10MB single-line doc does not crash and yields FAILs" \
     "$(grep -c '^FAIL huge:' "$OUTD")"
 
 # ================= run 5: cli basics ========================================
-check "--version prints exodoc v0.1.0" \
-    "$([ "$(timeout 5 "$BIN" --version)" = 'exodoc v0.1.0' ] && echo 0 || echo 1)" \
+check "--version prints exodoc v0.4.0-alpha.1" \
+    "$([ "$(timeout 5 "$BIN" --version)" = 'exodoc v0.4.0-alpha.1' ] && echo 0 || echo 1)" \
     "$(timeout 5 "$BIN" --version)"
 timeout 5 "$BIN" audit --bogus >/dev/null 2>&1
 check "unknown option exits 2" "$([ $? = 2 ] && echo 0 || echo 1)"
 timeout 5 "$BIN" audit --stack /nonexistent.tsv >/dev/null 2>&1
 check "missing manifest exits 1" "$([ $? = 1 ] && echo 0 || echo 1)"
+
+# ================= run 6: operation form (/op?k=v) =========================
+timeout 60 "$BIN" "/audit?stack=$TDIR/docs/stack.tsv&base=$TDIR" \
+    > "$TDIR/opA.txt" 2>/dev/null
+check "op /audit offline exits 0" "$([ $? = 0 ] && echo 0 || echo 1)"
+check "op /audit summary line (no live)" \
+    "$(grep -q '=== audit: 54 pass, 2 fail (score 96%) ===' "$TDIR/opA.txt" && echo 0 || echo 1)" \
+    "$(grep '=== audit' "$TDIR/opA.txt")"
+timeout 60 "$BIN" "/audit?stack=$TDIR/docs/stack.tsv&base=$TDIR&json=1&live=0" \
+    > "$TDIR/opB.json" 2>/dev/null
+check "op /audit json exits 0" "$([ $? = 0 ] && echo 0 || echo 1)"
+check "op /audit json parses" \
+    "$(timeout 5 python3 -m json.tool "$TDIR/opB.json" > /dev/null 2>&1 && echo 0 || echo 1)" ""
+check "op /audit json has 7 components" \
+    "$(grep -c '"name"' "$TDIR/opB.json" | grep -qx 7 && echo 0 || echo 1)" \
+    "$(grep -c '"name"' "$TDIR/opB.json")"
+timeout 60 "$BIN" "/audit?stack=$TDIR/docs/stack.tsv&base=$TDIR&out=$TDIR/opC.txt" \
+    > /dev/null 2>&1
+check "op /audit --out file written" \
+    "$(grep -q '=== audit: 54 pass, 2 fail (score 96%) ===' "$TDIR/opC.txt" && echo 0 || echo 1)" ""
+timeout 5 "$BIN" "/bogus?x=1" >/dev/null 2>&1
+check "op unknown exits 2" "$([ $? = 2 ] && echo 0 || echo 1)"
+timeout 5 "$BIN" "/audit?nope=1" >/dev/null 2>&1
+check "op unknown param exits 2" "$([ $? = 2 ] && echo 0 || echo 1)"
 
 say() { printf '%s\n' "$*"; }
 say ""

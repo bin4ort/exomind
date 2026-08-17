@@ -28,7 +28,7 @@ cleanup() {
 trap cleanup EXIT
 
 EM_PORT=${EM_PORT:-7681}; QMS_A=${QMS_A:-7682}; QMS_B=${QMS_B:-7683}
-QMS_C=${QMS_C:-7684}; QMS_E=${QMS_E:-7686}
+QMS_C=${QMS_C:-7684}; QMS_D=${QMS_D:-7685}; QMS_E=${QMS_E:-7686}
 EM="http://127.0.0.1:$EM_PORT"
 BASE=http://127.0.0.1
 
@@ -251,7 +251,7 @@ em_set "agent:b2:status" ok
 
 # ============================================================================
 t "ping answers pong" "pong" "$(timeout 5 curl -s $BASE:$QMS_A/ping)"
-t_contains "GET / is self-describing" "exoqms v0.2.0" \
+t_contains "GET / is self-describing" "exoqms v0.4" \
     "$(timeout 5 curl -s $BASE:$QMS_A/)"
 
 # ---- objectives (ISO 9001 6.2) ---------------------------------------------
@@ -621,6 +621,41 @@ t_contains "audit json parses" 1 \
     "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$AUDID&json=1" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(1 if d["score"]==100 and len(d["findings"])==8 else 0)')"
 t_contains "audits json parses" 1 \
     "$(timeout 5 curl -s "$BASE:$QMS_A/audits?json=1" | python3 -c 'import sys,json;print(1 if len(json.load(sys.stdin))>=4 else 0)')"
+
+# ---- console operations (one-shot, in-process, no server) -------------------
+GUIDE=$(timeout 5 ./build/exoqms 2>/dev/null); rc=$?
+t "console: no args prints the guide, exit 0" 0 "$rc"
+t_contains "console: guide is self-describing" "exoqms v" "$GUIDE"
+t_contains "console: guide lists the operations" "/objectives" "$GUIDE"
+COBJ=$(timeout 5 ./build/exoqms /objectives --exomind $EM --repo "$TDIR/repo" 2>/dev/null); rc=$?
+t "console: /objectives GET lists, exit 0" 0 "$rc"
+t "console: /objectives reflects the daemon state" 3 "$(printf '%s\n' "$COBJ" | grep -c .)"
+t_contains "console: /objectives carries the period field" "q2" "$COBJ"
+CONA=$(timeout 20 ./build/exoqms /audit?criteria=metrics --exomind $EM \
+    --repo "$TDIR/repo" 2>/dev/null); rc=$?
+t "console: /audit?criteria= runs in-process, exit 0" 0 "$rc"
+t_contains "console: audit scores the metrics check" "ok " "$CONA"
+t_contains "console: audit verdict is a percentage" "100%" "$CONA"
+t_contains "console: /report works in-process" "objectives_summary" \
+    "$(timeout 5 ./build/exoqms /report --exomind $EM 2>/dev/null)"
+t_contains "console: /issues lists the registry" "code-safety" \
+    "$(timeout 5 ./build/exoqms /issues --exomind $EM 2>/dev/null)"
+t "console: bad body exits 1" 1 \
+    "$(timeout 5 ./build/exoqms /objectives --body 'only-one-field' \
+      --exomind $EM >/dev/null 2>&1; echo $?)"
+t "console: unknown op exits 2 (usage)" 2 \
+    "$(timeout 5 ./build/exoqms /nosuchop >/dev/null 2>&1; echo $?)"
+./build/exoqms --serve --port $QMS_D --exomind $EM --exodoc $EXODOC_BIN \
+    --repo "$TDIR/repo" > "$TDIR/consoled.log" 2>&1 &
+CONSOLE_PID=$!
+PIDS="$PIDS $CONSOLE_PID"
+ok=0
+for i in $(seq 1 40); do
+    if timeout 3 curl -s "$BASE:$QMS_D/ping" | grep -q pong; then ok=1; break; fi
+    sleep 0.5
+done
+t "console: --serve --port binds and answers" 1 "$ok"
+kill -9 $CONSOLE_PID 2>/dev/null
 
 # ---- reload after SIGKILL restart --------------------------------------------
 eval "kill -9 \$QMS_${QMS_A}_PID" 2>/dev/null

@@ -66,10 +66,11 @@ curl -s -X POST "http://127.0.0.1:7691/audit?target=exoqms/ui/fixtures/good.html
 ## usage
 
 ```
-./build/exoqms [--host <addr>] [--port <n>] [--exomind <url>]
-               [--exosched <url>] [--exodoc <path>] [--ui <path>]
-               [--code <path>] [--svg <path>] [--repo <dir>]
-               [--agents <a,b,c>] [--notes24h <n>] [--token <t>]
+./exoqms/build/exoqms [--serve] [--host <addr>] [--port <n>]
+                      [--exomind <url>] [--exosched <url>]
+                      [--exodoc <path>] [--ui <path>] [--code <path>]
+                      [--svg <path>] [--kit <path>] [--repo <dir>]
+                      [--agents <a,b,c>] [--notes24h <n>] [--token <t>]
 ```
 
 Defaults: port 7657, exomind `http://127.0.0.1:7654`, exosched
@@ -79,6 +80,34 @@ require `Authorization: Bearer <token>` on every request. `--ui`
 points at the exoqms-ui binary and enables the `ui-audit` check;
 `--code` enables `code-safety`; `--svg` enables `asset-logic`;
 without a module's binary that check reports `skip`.
+
+`--serve` (or an explicit `--port`) is the only way to run the HTTP
+daemon; without it the binary never binds a port. With no arguments it
+prints the same spec text `GET /` serves and exits 0.
+
+### console operations
+
+`argv[1]` starting with `/` runs one operation in-process through the
+same dispatcher the daemon serves, prints the response body and exits
+(0 ok, 1 the operation failed with an `error:` response, 2 usage —
+unknown operation):
+
+```
+./exoqms/build/exoqms /objectives                         # GET list
+printf 'iter10 passing\tmetric:iter10:tests_passing\t50\n' |
+    ./exoqms/build/exoqms /objectives                     # POST add
+./exoqms/build/exoqms /nc --body $'broken build\tmajor\tlog tail'
+./exoqms/build/exoqms /audit?criteria=metrics             # run audit
+./exoqms/build/exoqms /audit?id=<audit-id>                # report
+./exoqms/build/exoqms /report /trends /audits /issues /ping
+```
+
+`/objectives`, `/nc` and `/audit` select POST when a body is supplied
+(`--body <text>` wins; otherwise stdin, read only when it is not a
+terminal); without a body they fall back to GET (list / detail).
+`/audit?criteria=<a,b,c>` runs an audit program named `console` from
+the query string; other options (`--exomind`, `--repo`, `--code`,
+...) work as in daemon mode.
 
 ## endpoints
 
@@ -95,6 +124,7 @@ without a module's binary that check reports `skip`.
 | POST | /audit | run an audit program (body below) |
 | GET | /audit?id=<id> | audit report with findings |
 | GET | /audits | audit program list |
+| GET | /issues | detection registry (issue:&lt;check&gt; records) |
 | GET | /report | consolidated quality picture |
 | GET | /trends | metric trend + verdict |
 

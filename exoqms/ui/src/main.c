@@ -28,6 +28,9 @@ static void usage(FILE *f)
         "                      allowlist of emoji characters (default empty)\n"
         "  --help              this text\n"
         "  --version           print version\n"
+        "operation (same /op?k=v console grammar as the stack):\n"
+        "  exoqms-ui /audit?file=<target>&json=1&no_emoji=1&\n"
+        "             emoji_allowlist=<chars>\n"
         "\n"
         "checks:\n"
         "  emoji-icon       emoji in interactive/icon contexts (use SVG icons)\n"
@@ -242,8 +245,83 @@ static void emit_plain(const vec_t *findings, int multi)
     }
 }
 
+static int is_op(const char *a)
+{
+    return a[0] == '/' && (strchr(a, '?') != NULL || !strcmp(a, "/audit"));
+}
+
+static int flag_is_off(const char *v)
+{
+    return !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no") ||
+           !strcmp(v, "off");
+}
+
+/* console-mode operation: /audit?file=<target>&json=1&no_emoji=1&
+ * emoji_allowlist=<chars> — the /op?k=v grammar shared by the stack,
+ * mapped onto the target-file audit. Values live in the static buf. */
+static int console_op(const char *spec, char *av[], int max)
+{
+    static char buf[8192];
+    snprintf(buf, sizeof buf, "%s", spec);
+    char *q = strchr(buf, '?');
+    if (q)
+        *q = 0;
+    if (strcmp(buf, "/audit") != 0) {
+        fprintf(stderr, "exoqms-ui: unknown operation %s\n", buf);
+        return -1;
+    }
+    int n = 0;
+    if (n >= max)
+        return -1;
+    av[n++] = "";
+    if (q) {
+        for (char *kv = strtok(q + 1, "&"); kv; kv = strtok(NULL, "&")) {
+            char *eq = strchr(kv, '=');
+            if (eq)
+                *eq = 0;
+            const char *k = kv;
+            const char *v = eq ? eq + 1 : "1";
+            if (!strcmp(k, "file")) {
+                if (n + 1 >= max)
+                    return -1;
+                av[n++] = (char *)v;
+            } else if (!strcmp(k, "json")) {
+                if (!flag_is_off(v)) {
+                    if (n + 1 >= max)
+                        return -1;
+                    av[n++] = "--json";
+                }
+            } else if (!strcmp(k, "no_emoji")) {
+                if (!flag_is_off(v)) {
+                    if (n + 1 >= max)
+                        return -1;
+                    av[n++] = "--no-emoji";
+                }
+            } else if (!strcmp(k, "emoji_allowlist")) {
+                if (n + 2 >= max)
+                    return -1;
+                av[n++] = "--emoji-allowlist";
+                av[n++] = (char *)v;
+            } else {
+                fprintf(stderr, "exoqms-ui: /audit: unknown parameter %s\n",
+                        k);
+                return -1;
+            }
+        }
+    }
+    return n;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc >= 2 && is_op(argv[1])) {
+        static char *opav[32];
+        int on = console_op(argv[1], opav, 32);
+        if (on < 0)
+            return 2;
+        argv = opav;
+        argc = on;
+    }
     const char *target = NULL;
     const char *emoji_allow = NULL;
     int json = 0;

@@ -59,6 +59,7 @@ typedef struct {
 } net_t;
 
 void net_init(net_t *n);
+void net_free(net_t *n);
 int net_fetch(net_t *n, const char *url, resp_t *r, char *err, size_t errsz);
 void resp_free(resp_t *r);
 

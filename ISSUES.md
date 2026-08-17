@@ -17,6 +17,9 @@ Status legend: `open` (active) · `fixed` (resolution landed on main) ·
 | ISSUE-005 | Build/test commands that hang freeze the whole session | mitigated | every command runs under a hard `timeout`; hung processes are killed, never awaited |
 | ISSUE-015 | `/outdate`/`/link` reasons with spaces silently rejected (raw URLs) | fixed | URL-encoding required; spec documents it; reorg used `%20` |
 | ISSUE-016 | QMS audit records (`exoqms:audit:*`, `exodoc:audit:*`) pollute `/list` on the main store | tracked | they are the persistent record store (`/audit?id=` reads them) — reserved prefixes documented in `p:exo:memmodel`; long-term: write under `p:` or rotate |
+| ISSUE-017 | exoqms `qms_reload` truncated reloaded audit records at the first tab — after a daemon restart every `/audit?id=` lost check/result/evidence | fixed | `parse_audit_record()` in `exoqms/src/model.c` (six header fields split, tabbed findings tail kept) |
+| ISSUE-018 | Stale version pins in test suites (exodoc/exokit/exoqms-ui/exoqms-svg expected `v0.1.0`) — four suites failed at baseline after the version bump | fixed | tests re-pinned via the binaries' `--version` output; lesson: never pin literals |
+| ISSUE-019 | exoqms issue-detection registry: 3 suite tests fail (`issue:<check>` records missing on QMS_A under the stub environment) while the manual 7688 demo works | open | detection registered (open) / recurrence counted (consec=2) / history kept after close; stub interplay unverified |
 
 ## Software issues
 

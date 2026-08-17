@@ -53,6 +53,21 @@ static void usage(const char *argv0)
     printf("exoqms v" EXOQMS_VERSION
            " - the Quality Management System for the AI-native stack\n"
            "usage: %s [options]\n"
+           "       %s /operation [options]  one-shot console op, no server\n"
+           "  --serve          the only way to run the HTTP server\n"
+           "                   (with --host/--port); without it the binary\n"
+           "                   never binds a port\n"
+           "  --body <text>    request body for the operation, instead\n"
+           "                   of reading stdin\n"
+           "  <operation>      run ONE API operation in-process and print\n"
+           "                   the response body: /objectives (list, or\n"
+           "                   POST a body title<TAB>metric<TAB>target to\n"
+           "                   add), /nc (list, POST a body to raise, or\n"
+           "                   /nc?id=<id>&action=<a> to transition),\n"
+           "                   /audit (POST a body name<TAB>criteria, or\n"
+           "                   /audit?criteria=<a,b,c> to run a program;\n"
+           "                   /audit?id=<id> prints a report), /audits,\n"
+           "                   /issues, /report, /trends, /ping\n"
            "  --host <addr>      bind address (default 127.0.0.1)\n"
            "  --port <n>         port (default 7657)\n"
            "  --exomind <url>    storage backend (default http://127.0.0.1:7654)\n"
@@ -71,7 +86,7 @@ static void usage(const char *argv0)
            "  --help             show this help\n"
            "  --version          show version\n"
            "env: EXOQMS_TOKEN same as --token\n",
-           argv0);
+           argv0, argv0);
 }
 
 /* keeps retrying the startup reload until exomind answers; runs detached so
@@ -93,6 +108,136 @@ static void *reload_thread(void *arg)
     return NULL;
 }
 
+/* the one-shot console operations: the same paths GET / serves on the
+ * daemon. Exit codes: 0 ok, 1 the operation failed (error response),
+ * 2 usage (no such operation). */
+static int known_console_op(const char *path)
+{
+    static const char *ops[] = {"/",          "/help",     "/spec",
+                                "/ping",      "/objectives", "/nc",
+                                "/audit",     "/audits",     "/issues",
+                                "/report",    "/trends"};
+    for (size_t i = 0; i < sizeof ops / sizeof ops[0]; i++)
+        if (!strcmp(ops[i], path))
+            return 1;
+    return 0;
+}
+
+static int qp_get(const char *qs, const char *name, char *out, size_t cap)
+{
+    size_t nl = strlen(name);
+    const char *p = qs;
+    while (p && *p) {
+        const char *amp = strchr(p, '&');
+        size_t seglen = amp ? (size_t)(amp - p) : strlen(p);
+        if (seglen > nl && strncmp(p, name, nl) == 0 && p[nl] == '=') {
+            size_t vlen = seglen - nl - 1;
+            if (vlen >= cap)
+                vlen = cap - 1;
+            memcpy(out, p + nl + 1, vlen);
+            out[vlen] = 0;
+            for (char *q = out; *q; q++)
+                if (*q == '+')
+                    *q = ' ';
+            return 1;
+        }
+        p = amp ? amp + 1 : NULL;
+    }
+    return 0;
+}
+
+/* request body: --body wins; else stdin, but only when it is not a
+ * terminal (a TTY would block waiting for EOF). Returns the byte count. */
+static size_t console_body(const char *body_arg, char *body, size_t cap)
+{
+    size_t blen = 0;
+    if (body_arg[0]) {
+        snprintf(body, cap, "%s", body_arg);
+        return strlen(body);
+    }
+    if (isatty(0))
+        return 0;
+    ssize_t n;
+    while (blen < cap - 1 &&
+           (n = read(0, body + blen, cap - 1 - blen)) > 0)
+        blen += (size_t)n;
+    body[blen] = 0;
+    /* a pipe line usually carries a trailing newline; strip the line
+     * terminator so the last TSV field is clean (curl -d / --body are
+     * passed through verbatim) */
+    while (blen > 0 && (body[blen - 1] == '\n' || body[blen - 1] == '\r'))
+        blen--;
+    body[blen] = 0;
+    return blen;
+}
+
+/* console-mode operation: run one exact API operation in-process
+ * (`exoqms /objectives`, `exoqms /audit?criteria=metrics`), print the
+ * response body, exit 0/1/2. No HTTP socket is ever opened in this mode. */
+static int console_run(const char *path, const char *body_arg,
+                       exo_t *e, cfg_t *cfg, qms_t *q)
+{
+    char pathbuf[2048];
+    char query[8192] = "";
+    snprintf(pathbuf, sizeof pathbuf, "%s", path);
+    char *qmark = strchr(pathbuf, '?');
+    if (qmark) {
+        *qmark = 0;
+        snprintf(query, sizeof query, "%s", qmark + 1);
+    }
+    /* modules are reachable at /exoexoqms as well as at / */
+    if (!strncmp(pathbuf, "/exoexoqms", 10) &&
+        (pathbuf[10] == 0 || pathbuf[10] == '/')) {
+        memmove(pathbuf, pathbuf + 10, strlen(pathbuf + 10) + 1);
+        if (!pathbuf[0])
+            snprintf(pathbuf, sizeof pathbuf, "/");
+    }
+    if (!known_console_op(pathbuf)) {
+        fprintf(stderr, "exoqms: no such operation '%s' (run exoqms with "
+                        "no arguments for the guide)\n", pathbuf);
+        return 2;
+    }
+    /* method map from the route() checks: /objectives, /nc and /audit
+     * take POST (create / transition / run an audit program); every op
+     * falls back to GET (list / detail) when no body is supplied */
+    const char *method = "GET";
+    char body[65536] = "";
+    size_t blen = 0;
+    int postable = !strcmp(pathbuf, "/objectives") || !strcmp(pathbuf, "/nc") ||
+                   !strcmp(pathbuf, "/audit");
+    if (postable) {
+        blen = console_body(body_arg, body, sizeof body);
+        if (blen)
+            method = "POST";
+    }
+    /* console-friendly audit run: the criteria in the query string
+     * instead of a body — exoqms /audit?criteria=metrics */
+    if (postable && !blen && !strcmp(pathbuf, "/audit")) {
+        char crit[512];
+        if (qp_get(query, "criteria", crit, sizeof crit) && crit[0]) {
+            char name[128];
+            if (!(qp_get(query, "name", name, sizeof name) && name[0]))
+                snprintf(name, sizeof name, "console");
+            blen = (size_t)snprintf(body, sizeof body, "%s\t%s", name, crit);
+            method = "POST";
+        }
+    }
+    buf_t out = {0};
+    int status = 200;
+    const char *ctype = "text/plain";
+    http_dispatch(method, pathbuf, query, body, blen, &out, &status,
+                  &ctype, e, cfg, q);
+    if (status >= 400) {
+        fprintf(stderr, "exoqms: %s failed (%d)\n%s", pathbuf, status,
+                out.p ? out.p : "");
+        buf_free(&out);
+        return 1;
+    }
+    fputs(out.p ? out.p : "", stdout);
+    buf_free(&out);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *host = "127.0.0.1";
@@ -102,15 +247,26 @@ int main(int argc, char **argv)
     cfg_t cfg;
     cfg_defaults(&cfg);
     char *agents = NULL;
+    int want_server = 0; /* --serve or an explicit --port requested */
+    const char *body_arg = "";
 
-    for (int i = 1; i < argc; i++) {
+    /* a leading /operation is a one-shot console op: run it directly */
+    const char *console_path = (argc >= 2 && argv[1][0] == '/') ? argv[1]
+                                                                : NULL;
+
+    for (int i = console_path ? 2 : 1; i < argc; i++) {
         const char *a = argv[i];
         if (!strcmp(a, "--host") && i + 1 < argc)
             host = argv[++i];
-        else if (!strcmp(a, "--port") && i + 1 < argc)
+        else if (!strcmp(a, "--port") && i + 1 < argc) {
             port = atoi(argv[++i]);
+            want_server = 1;
+        } else if (!strcmp(a, "--serve"))
+            want_server = 1;
         else if (!strcmp(a, "--exomind") && i + 1 < argc)
             exomind_url = argv[++i];
+        else if (!strcmp(a, "--body") && i + 1 < argc)
+            body_arg = argv[++i];
         else if (!strcmp(a, "--exosched") && i + 1 < argc)
             snprintf(cfg.exosched_url, sizeof cfg.exosched_url, "%s",
                      argv[++i]);
@@ -198,6 +354,37 @@ int main(int argc, char **argv)
     else
         fprintf(stderr, "exoqms: no %s/.exoqms.json; universal checks use "
                         "defaults\n", cfg.repo);
+
+    if (!want_server) {
+        /* no HTTP listener except in server mode: run the operation
+         * in-process, or show the guide (the same text GET / serves) */
+        if (console_path) {
+            qms_t q;
+            qms_init(&q);
+            if (!agents)
+                agents = xstrdup(cfg.agents);
+            int loaded = 0;
+            struct timespec pause = {.tv_sec = 0, .tv_nsec = 250000000L};
+            for (int attempt = 0; attempt < 5; attempt++) {
+                if (qms_reload(&q, &exo, &agents, &cfg.notes24h, err,
+                               sizeof err) == 0) {
+                    loaded = 1;
+                    break;
+                }
+                nanosleep(&pause, NULL);
+            }
+            if (!loaded)
+                fprintf(stderr, "exoqms: exomind down at startup; running "
+                                "the operation with an empty registry\n");
+            int rc = console_run(console_path, body_arg, &exo, &cfg, &q);
+            qms_free(&q);
+            free(agents);
+            pcfg_free(&cfg.pcfg);
+            return rc;
+        }
+        printf("%s", http_spec_text());
+        return 0;
+    }
 
     int lfd = socket(AF_INET, SOCK_STREAM, 0);
     if (lfd < 0) {

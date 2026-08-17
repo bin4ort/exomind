@@ -595,6 +595,68 @@ assert_contains "mcp tools/list" '"name":"search"' "$MCPOUT"
 assert_contains "mcp set ok" '"text":"ok"' "$MCPOUT"
 assert_contains "mcp get value" '"text":"mcpv"' "$MCPOUT"
 
+# ---- console surface: one-shot operations (no server) ------------------------
+C="$BIN --data $DATA/console.dat"
+rm -f "$DATA/console.dat"
+
+guide=$("$BIN" --data "$DATA/console.dat" 2>/dev/null | head -1)
+assert_contains "console no-args guide" "# exomind" "$guide"
+
+r=$("$BIN" /set?key=con:a --body alpha --data "$DATA/console.dat" 2>/dev/null)
+assert_eq "console op /set" "ok" "$r"
+
+r=$("$BIN" /get?key=con:a --data "$DATA/console.dat" 2>/dev/null)
+assert_eq "console op /get" "alpha" "$r"
+
+r=$(printf 'beta' | "$BIN" /append?key=con:a --data "$DATA/console.dat" 2>/dev/null)
+assert_eq "console op /append stdin body" "ok" "$r"
+
+r=$("$BIN" /get?key=con:a --data "$DATA/console.dat" 2>/dev/null)
+assert_eq "console append persisted" "alpha
+beta" "$r"
+
+r=$("$BIN" /list?prefix=con: --data "$DATA/console.dat" 2>/dev/null)
+assert_contains "console op /list prefix" "con:a" "$r"
+
+r=$("$BIN" /search?q=beta --data "$DATA/console.dat" 2>/dev/null)
+assert_contains "console op /search" "con:a" "$r"
+
+r=$("$BIN" /note --body 'console note test' --data "$DATA/console.dat" 2>/dev/null)
+assert_contains "console op /note" "note:" "$r"
+
+r=$("$BIN" /get?key=missing --data "$DATA/console.dat" 2>/dev/null)
+assert_eq "console op missing key exits 1" "1" "$?"
+
+r=$("$BIN" /set?key=con:b%20x --body spacers --data "$DATA/console.dat" 2>/dev/null)
+r=$("$BIN" /get?key=con:b%20x --data "$DATA/console.dat" 2>/dev/null)
+assert_eq "console op decodes %20 in query" "spacers" "$r"
+
+PORT2=$((PORT + 1))
+"$BIN" --serve --port "$PORT2" --data "$DATA/serve.dat" \
+    --project-root "$DATA" 2>/dev/null &
+SV=$!
+for _ in $(seq 1 100); do
+    curl -s -o /dev/null "http://127.0.0.1:$PORT2/ping" 2>/dev/null && break
+    sleep 0.05
+done
+r=$(curl -s "http://127.0.0.1:$PORT2/ping")
+assert_eq "serve flag binds the daemon" "pong" "$r"
+kill "$SV" 2>/dev/null
+wait "$SV" 2>/dev/null
+
+r=$("$BIN" /set?key=snap:x --body snapval --data "$DATA/console.dat" \
+    --project-root "$DATA" >/dev/null 2>&1; echo $?)
+assert_eq "console op with --project-root ok" "0" "$r"
+
+r=$("$BIN" /snapshot --data "$DATA/console.dat" 2>/dev/null)
+assert_contains "console op /snapshot" "snap:x" "$r"
+
+r=$("$BIN" /batch --body '[["set","b1","v1"]]' \
+    --data "$DATA/console.dat" 2>/dev/null)
+assert_contains "console op /batch" "set b1 ok" "$r"
+r=$("$BIN" /get?key=b1 --data "$DATA/console.dat" 2>/dev/null)
+assert_eq "console op /batch wrote" "v1" "$r"
+
 # ---- server surface: /exo<module> prefix + rate limit -----------------------
 start_server
 r=$(curl -s -m 3 "$BASE/exoexomind/ping")

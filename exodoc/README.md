@@ -39,6 +39,25 @@ Produces `exodoc/build/exodoc`. Requires only a C11 compiler.
 - `--live` — crawl daemons; verify version + API conformance against `GET /`
 - `--json` — machine-readable report (for the future QMS component)
 
+### operation form (one console grammar for the whole stack)
+
+```
+./exodoc/build/exodoc /audit?live=1&stack=docs/stack.tsv&base=.&exomind=http://127.0.0.1:7654&out=report.txt
+```
+
+Runs one audit with the same options as the `audit` subcommand, using the
+`/op?k=v…` syntax the daemon modules serve, so daemons and batch tools
+speak one grammar:
+
+| op | params | maps to |
+|----|--------|---------|
+| `/audit` | `stack`, `base`, `exomind`, `out`; flags `live=1`, `json=1` | `audit [--stack …] [--base …] [--exomind …] [--out …] [--live] [--json]` |
+
+Values are literal (no URL decoding); `&` separates parameters. Flags
+(`live`, `json`) accept off values `0`/`false`/`no`/`off`. Unknown
+operations or parameters exit 2. Exit codes are the subcommand's — 0 for
+a completed run regardless of findings (the gate is the report line).
+
 Exit status is 0 for a completed run regardless of failures; the gate is
 the report line `=== audit: N pass, M fail (score X%) ===` — integration
 wiring greps that line for `0 fail`.

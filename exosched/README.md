@@ -12,7 +12,7 @@ stack reference (this file has the complete exosched documentation).
 
 ```
 make exosched        # builds exosched/build/exosched (from the repo root)
-make test-exosched   # runs exosched/test/test.sh (54 checks, ~2.5min)
+make test-exosched   # runs exosched/test/test.sh (66 checks, ~2.5min)
 ```
 
 ## build
@@ -23,14 +23,47 @@ dependencies beyond libc + pthread.
 
 ## usage
 
+The same binary has two lives: one-shot **console operations** and the
+**HTTP daemon**.
+
 ```
-./build/exosched --port 7655 --exomind http://127.0.0.1:7654 [--token secret]
+./build/exosched                    # prints the API guide and exits
+./build/exosched /remind --body 'in 5m "water the plants"'   # one-shot
+./build/exosched /timers            # list active timers
+./build/exosched /timer?id=<id>     # cancel a timer
+./build/exosched --serve --port 7655 --exomind http://127.0.0.1:7654
 ```
 
-`--exomind` defaults to `http://127.0.0.1:7654`, `--port` to 7655.
-Set `--token` (or env `EXOSCHED_TOKEN`) to require
-`Authorization: Bearer <token>` on every request, including the
-WebSocket upgrade.
+With no arguments the API guide (the same text the daemon's `GET /`
+serves) is printed and nothing is bound. A first argument starting with
+`/` is a console operation: it runs in-process through the internal
+dispatcher — no server and no socket is ever opened — and prints the
+response body. Exit status is `0` on success (HTTP < 400), `1` on an
+API error (>= 400), `2` on a usage error.
+
+Console operations default to `GET`; the mutating ones are `POST`
+(`/remind`, `/timer`). A `POST` body comes from `--body <text>` when
+given, otherwise from stdin (only when stdin is not a tty). Console
+state is best-effort reloaded from exomind before the op runs, so
+`/timers` shows what the daemon would — and a timer scheduled from the
+console takes effect on the next daemon start (the running daemon only
+reloads at startup).
+
+The daemon binds a port **only** when started with `--serve` (or an
+explicit `--port`); with neither, no socket is opened:
+
+```
+./build/exosched --serve --exomind http://127.0.0.1:7654 [--token secret]
+./build/exosched --serve --host 0.0.0.0 --port 7655
+```
+
+`--exomind` defaults to `http://127.0.0.1:7654`, `--port` to 7655,
+`--host` to 127.0.0.1. Set `--token` (or env `EXOSCHED_TOKEN`) to
+require `Authorization: Bearer <token>` on every request, including
+the WebSocket upgrade. `--rate-limit <n>` caps requests per second,
+`--log-level <error|warn|info|debug>` tunes diagnostics. `--help`,
+`--version` and the `--help <name>` / `--help modules` stack help
+work as before.
 
 ## endpoints
 
@@ -139,6 +172,11 @@ catch-up of overdue recurring timers, 0.1.0 one-shot wire values
 (`fire\tmsg`) loading and firing, and the reload/cancel race: a timer
 cancelled while a degraded-startup background reload is in flight is
 never resurrected by the stale snapshot.
+
+The console surface is covered too: no-args prints the guide without
+binding, a one-shot `/remind` (body via `--body` and via a piped
+stdin) plus `/timers` listing it, API errors exit 1, the daemon binds
+with `--serve --port` and answers, and `--version` keeps working.
 
 ## License
 

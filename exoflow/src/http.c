@@ -808,6 +808,31 @@ static void route(req_t *r, cli_t *xm, cli_t *xs, buf_t *out, int *status,
     buf_puts(out, "error: unknown path");
 }
 
+/* internal dispatch for the console mode (no HTTP auth: the channel is
+ * the local process); path may carry the /exoexoflow prefix which the
+ * caller strips. shares route() with the socket path. */
+void http_dispatch(const char *method, const char *path, const char *query,
+                   const char *body, size_t blen, buf_t *out, int *status,
+                   const char **ctype, cli_t *xm, cli_t *xs)
+{
+    req_t r;
+    memset(&r, 0, sizeof r);
+    snprintf(r.method, sizeof r.method, "%s", method);
+    snprintf(r.path, sizeof r.path, "%s", path);
+    if (query)
+        snprintf(r.query, sizeof r.query, "%s", query);
+    if (body && blen > 0) {
+        r.body = xmalloc(blen + 1);
+        memcpy(r.body, body, blen);
+        r.body[blen] = 0;
+        r.body_len = blen;
+    }
+    *status = 200;
+    *ctype = "text/plain; charset=utf-8";
+    route(&r, xm, xs, out, status, ctype);
+    free(r.body);
+}
+
 int http_handle_conn(int fd, cli_t *xm, cli_t *xs)
 {
     struct timeval tv = {.tv_sec = 10, .tv_usec = 0};

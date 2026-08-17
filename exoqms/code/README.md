@@ -31,6 +31,26 @@ Findings, one per line:
 Exit 0 = clean, 1 = findings, 2 = usage error. `--json` emits a JSON array
 `{check,severity,file,line,col,reason}` for the QMS daemon.
 
+### operation form (one console grammar for the whole stack)
+
+```
+exoqms-code /scan?path=<file-or-dir>&rules=<dir>&lang=<l>&json=1&ignore=<glob>&allow=<file>
+```
+
+`/scan` runs one scan with the same options as the target-file CLI form
+(`path` may be a file or a directory, and may repeat), using the
+`/op?k=v…` syntax the daemon modules serve:
+
+| op | params | maps to |
+|----|--------|---------|
+| `/scan` | `path`, `rules`, `lang`, `ignore`, `allow`; flag `json=1` | `<target>… [--rules <d>] [--lang <l>] [--ignore <g>] [--allow <f>] [--json]` |
+
+Values are literal (no URL decoding); `&` separates parameters. Flags
+accept off values `0`/`false`/`no`/`off`. Exit codes are the CLI form's:
+0 = clean, 1 = findings, 2 = usage error (incl. unknown parameters or
+operations). A path argument that starts with `/` but is not a known
+operation (e.g. an absolute path) is treated as a file.
+
 ## Checks
 
 | id | severity | what it flags |

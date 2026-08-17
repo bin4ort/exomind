@@ -2,7 +2,8 @@
 # exoflow test suite: private exomind (7671) + exosched (7672) + exoflow
 # (7673) instances, temp data in /tmp. Covers dep-order claims, exclusive
 # claims, transitions, deadlines -> overdue, cancel, delete, restart
-# recovery, exomind-down startup retry, auth, validation errors, fuzz.
+# recovery, exomind-down startup retry, auth, validation errors, fuzz,
+# and the console one-shot ops (no server) + --serve binding.
 set -u
 cd "$(dirname "$0")"
 
@@ -64,6 +65,7 @@ cleanup() {
     stop_port $XM_PORT
     stop_port $AUTH_PORT
     stop_port $DEAD_PORT
+    stop_port 7697
 }
 trap cleanup EXIT
 
@@ -743,6 +745,55 @@ sleep 3
 r=$(curl -s -m 3 "$XF_URL/flow?id=$TF")
 check "expired claim timeout -> overdue" \
     "$(printf '%s' "$r" | grep '^step' | awk -F '\t' '$2=="quick" && $3=="overdue" {ok=1} END {exit ok?0:1}' && echo 0 || echo 1)" "$r"
+
+# --- console surface: one-shot ops (no server) --------------------------------
+CONSOLE_PORT=7697
+stop_port $CONSOLE_PORT
+
+guide=$("$XF_BIN" 2>/dev/null | head -1)
+check "console no-args prints the guide" \
+    "$(printf '%s' "$guide" | grep -q '^# exoflow' && echo 0 || echo 1)" "$guide"
+
+r=$("$XF_BIN" /flow --exomind "$XM_URL" --exosched "$XS_URL" \
+    --body $'console flow\na\tstep a\t\nb\tstep b\ta' 2>/dev/null)
+CFID=$(printf '%s' "$r" | awk '{print $2}')
+check "console op POST /flow creates" \
+    "$(printf '%s' "$r" | grep -qE '^ok [0-9]+:[0-9a-f]+ 2$' && echo 0 || echo 1)" "$r"
+
+r=$("$XF_BIN" /flows --exomind "$XM_URL" --exosched "$XS_URL" 2>/dev/null)
+check "console op GET /flows lists the created flow" \
+    "$(printf '%s' "$r" | grep -q "^flow	$CFID	" && echo 0 || echo 1)" "$r"
+
+r=$(printf 'piped flow\nx\tone\t' | "$XF_BIN" /flow --exomind "$XM_URL" \
+    --exosched "$XS_URL" 2>/dev/null)
+check "console op POST /flow reads stdin body" \
+    "$(printf '%s' "$r" | grep -qE '^ok [0-9]+:[0-9a-f]+ 1$' && echo 0 || echo 1)" "$r"
+r=$("$XF_BIN" /flows --exomind "$XM_URL" --exosched "$XS_URL" 2>/dev/null)
+check "console op persisted across runs (exomind reload)" \
+    "$(printf '%s' "$r" | grep -q 'piped flow' && echo 0 || echo 1)" "$r"
+
+"$XF_BIN" /flow?id=nope --exomind "$XM_URL" --exosched "$XS_URL" \
+    >/dev/null 2>&1
+check "console op missing flow exits 1" \
+    "$([ "$?" = "1" ] && echo 0 || echo 1)"
+
+"$XF_BIN" --bogus >/dev/null 2>&1
+check "console op unknown argument exits 2" \
+    "$([ "$?" = "2" ] && echo 0 || echo 1)"
+
+"$XF_BIN" --serve --port "$CONSOLE_PORT" --exomind "$XM_URL" \
+    --exosched "$XS_URL" >"$WORK/exoflow-console.log" 2>&1 &
+CSV=$!
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    [ "$(curl -s -m 2 "http://127.0.0.1:$CONSOLE_PORT/ping")" = "pong" ] \
+        && break
+    sleep 0.5
+done
+r=$(curl -s -m 3 "http://127.0.0.1:$CONSOLE_PORT/ping")
+check "--serve --port binds and answers" \
+    "$([ "$r" = "pong" ] && echo 0 || echo 1)" "$r"
+kill "$CSV" 2>/dev/null
+stop_port $CONSOLE_PORT
 
 say ""
 say "=== results: $PASS passed, $FAIL failed ==="

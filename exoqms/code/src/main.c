@@ -207,8 +207,83 @@ static void walk_dir(const char *dir, strvec_t *files, const char *lang,
     closedir(d);
 }
 
+static int is_op(const char *a)
+{
+    return a[0] == '/' && (strchr(a, '?') != NULL || !strcmp(a, "/scan"));
+}
+
+static int flag_is_off(const char *v)
+{
+    return !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no") ||
+           !strcmp(v, "off");
+}
+
+/* console-mode operation: /scan?path=<file-or-dir>&rules=<dir>&lang=<l>&
+ * json=1&ignore=<glob>&allow=<file> — the /op?k=v grammar shared by the
+ * stack, mapped onto the target-file scan. argv space must stay live
+ * until the scan is done (all values live in the static buf). */
+static int console_scan(const char *spec, char *av[], int max)
+{
+    static char buf[8192];
+    snprintf(buf, sizeof buf, "%s", spec);
+    char *q = strchr(buf, '?');
+    if (q)
+        *q = 0;
+    if (strcmp(buf, "/scan") != 0) {
+        fprintf(stderr, "exoqms-code: unknown operation %s\n", buf);
+        return -1;
+    }
+    int n = 0;
+    if (n >= max)
+        return -1;
+    av[n++] = "";
+    if (q) {
+        for (char *kv = strtok(q + 1, "&"); kv; kv = strtok(NULL, "&")) {
+            char *eq = strchr(kv, '=');
+            if (eq)
+                *eq = 0;
+            const char *k = kv;
+            const char *v = eq ? eq + 1 : "1";
+            if (!strcmp(k, "path")) {
+                if (n + 1 >= max)
+                    return -1;
+                av[n++] = (char *)v;
+            } else if (!strcmp(k, "json")) {
+                if (!flag_is_off(v)) {
+                    if (n + 1 >= max)
+                        return -1;
+                    av[n++] = "--json";
+                }
+            } else if (!strcmp(k, "rules") || !strcmp(k, "lang") ||
+                       !strcmp(k, "ignore") || !strcmp(k, "allow")) {
+                if (n + 2 >= max)
+                    return -1;
+                const char *opt = !strcmp(k, "rules")     ? "--rules"
+                                  : !strcmp(k, "lang")    ? "--lang"
+                                  : !strcmp(k, "ignore")  ? "--ignore"
+                                                          : "--allow";
+                av[n++] = (char *)opt;
+                av[n++] = (char *)v;
+            } else {
+                fprintf(stderr, "exoqms-code: /scan: unknown parameter %s\n",
+                        k);
+                return -1;
+            }
+        }
+    }
+    return n;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc >= 2 && is_op(argv[1])) {
+        static char *opav[128];
+        int on = console_scan(argv[1], opav, 128);
+        if (on < 0)
+            return 2;
+        argv = opav;
+        argc = on;
+    }
     strvec_t paths = {0};
     strvec_t ignores = {0};
     allowvec_t allows = {0};
@@ -238,7 +313,10 @@ int main(int argc, char **argv)
             printf(
                 "exoqms-code: multi-language quality analyzer\n\n"
                 "usage: exoqms-code <file-or-dir>... [--lang c|cpp|sh|py|rules|auto]\n"
-                "       [--rules <dir>] [--json] [--ignore <glob>] [--allow <file>]\n\n"
+                "       [--rules <dir>] [--json] [--ignore <glob>] [--allow <file>]\n"
+                "operation (same /op?k=v console grammar as the stack):\n"
+                "       exoqms-code /scan?path=<file-or-dir>&rules=<dir>&lang=<l>\n"
+                "                   &json=1&ignore=<glob>&allow=<file>\n\n"
                 "c/cpp: unchecked-return, missing-error-path, empty-error-branch,\n"
                 "       uninitialized-use, swallowed-error, unchecked-deref-alloc\n"
                 "sh:    shell-unquoted-rm, shell-unquoted-test, shell-no-shebang,\n"

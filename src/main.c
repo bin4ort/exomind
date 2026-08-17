@@ -11,6 +11,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -109,8 +110,17 @@ static void usage(const char *argv0)
            "  --mcp            serve as a stdio Model Context Protocol\n"
            "                   server (installing as `exomind-server` does\n"
            "                   the same)\n"
-           "  keys add <name[:mods]> | keys list | keys remove <name>\n"
-           "  --help [modules] show this guide, or the whole stack's\n"
+"  keys add <name[:mods]> | keys list | keys remove <name>\n"
+            "  <operation>      run ONE API operation directly, no server:\n"
+            "                   exomind /set?key=k (body = value, from\n"
+            "                   --body <text> or stdin), /get?key=k,\n"
+            "                   /search?q=..., /list?prefix=..., /note ...\n"
+            "  --serve          the only way to run the HTTP server\n"
+            "                   (with --host/--port); without it the\n"
+            "                   binary never binds a port\n"
+            "  --body <text>    request body for the operation, instead\n"
+            "                   of reading stdin\n"
+            "  --help [modules] show this guide, or the whole stack's\n"
            "  --version        show version\n"
            "env: EXOMIND_TOKEN same as --token\n"
            "the daemon serves its API at / and /exoexomind on the bound\n"
@@ -248,15 +258,79 @@ static int invoked_as_server(const char *argv0)
     return n > 7 && strncmp(b + n - 7, "-server", 7) == 0;
 }
 
+/* console-mode operation: run one exact API operation in-process
+ * (`exomind /set?key=k`, body on `--body` or stdin), print the response
+ * body, exit 0/1/2. No HTTP socket is ever opened in this mode. */
+static int console_run(const char *path, const char *body_arg,
+                       store_t *s)
+{
+    char pathbuf[512];
+    char query[1536] = "";
+    snprintf(pathbuf, sizeof pathbuf, "%s", path);
+    char *q = strchr(pathbuf, '?');
+    if (q) {
+        *q = 0;
+        snprintf(query, sizeof query, "%s", q + 1);
+    }
+    /* modules are reachable at /exo<name> as well as at / */
+    if (!strncmp(pathbuf, "/exoexomind", 11) &&
+        (pathbuf[11] == 0 || pathbuf[11] == '/')) {
+        memmove(pathbuf, pathbuf + 11, strlen(pathbuf + 11) + 1);
+        if (!pathbuf[0])
+            snprintf(pathbuf, sizeof pathbuf, "/");
+    }
+    const char *method = "GET";
+    if (!strcmp(pathbuf, "/del"))
+        method = "DELETE";
+    else if (!strcmp(pathbuf, "/set") || !strcmp(pathbuf, "/append") ||
+             !strcmp(pathbuf, "/embed") || !strcmp(pathbuf, "/sim") ||
+             !strcmp(pathbuf, "/note") || !strcmp(pathbuf, "/batch") ||
+             !strcmp(pathbuf, "/restore") || !strcmp(pathbuf, "/backup") ||
+             !strcmp(pathbuf, "/outdate") || !strcmp(pathbuf, "/revive") ||
+             !strcmp(pathbuf, "/link") || !strcmp(pathbuf, "/mandate"))
+        method = "POST";
+    char body[65536] = "";
+    size_t blen = 0;
+    if (body_arg[0]) {
+        snprintf(body, sizeof body, "%s", body_arg);
+        blen = strlen(body);
+    } else if (strcmp(method, "GET") && !isatty(0)) {
+        ssize_t n;
+        while (blen < sizeof body - 1 &&
+               (n = read(0, body + blen, sizeof body - 1 - blen)) > 0)
+            blen += (size_t)n;
+        body[blen] = 0;
+    }
+    buf_t out = {0};
+    int status = 200;
+    const char *ctype = "text/plain";
+    http_dispatch(method, pathbuf, query, body, blen, &out, &status,
+                  &ctype, s);
+    if (status >= 400) {
+        int rc = !strcmp(out.p ? out.p : "", "error: unknown path") ? 2 : 1;
+        fprintf(stderr, "exomind: %s failed (%d)\n%s", pathbuf, status,
+                out.p ? out.p : "");
+        http_buf_free(&out);
+        return rc;
+    }
+    fputs(out.p ? out.p : "", stdout);
+    http_buf_free(&out);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *host = "127.0.0.1";
     int port = 7654;
-    const char *data = "exomind.dat";
+    const char *data = getenv("EXOMIND_DATA") && getenv("EXOMIND_DATA")[0]
+                           ? getenv("EXOMIND_DATA")
+                           : "exomind.dat";
     const char *token = getenv("EXOMIND_TOKEN");
     const char *tokens_file = NULL;
     int mcp_mode = 0;
     long rate_limit = 0;
+    int want_server = 0; /* --serve or an explicit --port requested */
+    const char *body_arg = "";
     const char *backup_dir = NULL;
     const char *project_root = NULL;
     const char *mandate_text = NULL;
@@ -304,12 +378,19 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    for (int i = 1; i < argc; i++) {
+    /* a leading /operation is a one-shot console op: run it directly */
+    const char *console_path = (argc >= 2 && argv[1][0] == '/') ? argv[1]
+                                                                : NULL;
+
+    for (int i = console_path ? 2 : 1; i < argc; i++) {
         const char *a = argv[i];
         if (!strcmp(a, "--host") && i + 1 < argc)
             host = argv[++i];
-        else if (!strcmp(a, "--port") && i + 1 < argc)
+        else if (!strcmp(a, "--port") && i + 1 < argc) {
             port = atoi(argv[++i]);
+            want_server = 1;
+        } else if (!strcmp(a, "--serve"))
+            want_server = 1;
         else if (!strcmp(a, "--data") && i + 1 < argc)
             data = argv[++i];
         else if (!strcmp(a, "--token") && i + 1 < argc)
@@ -338,6 +419,8 @@ int main(int argc, char **argv)
             mandate_text = mbuf;
         } else if (!strcmp(a, "--rate-limit") && i + 1 < argc)
             rate_limit = atol(argv[++i]);
+        else if (!strcmp(a, "--body") && i + 1 < argc)
+            body_arg = argv[++i];
         else if (!strcmp(a, "--log-level") && i + 1 < argc) {
             int lv = exo_parse_log_level(argv[++i]);
             if (lv < 0) {
@@ -375,6 +458,19 @@ int main(int argc, char **argv)
         exo_mcp_register(MCP_TOOLS, sizeof MCP_TOOLS / sizeof MCP_TOOLS[0],
                          "exomind", EXOMIND_VERSION, mcp_call);
         return exo_mcp_stdio();
+    }
+
+    if (!want_server) {
+        /* no HTTP listener except in server mode: run the operation
+         * in-process, or show the guide (the same text GET / serves) */
+        if (console_path) {
+            g_store = store_open(data);
+            int rc = console_run(console_path, body_arg, g_store);
+            store_close(g_store);
+            return rc;
+        }
+        printf("%s", http_help_text());
+        return 0;
     }
 
     char *dpath = xstrdup(data);

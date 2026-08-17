@@ -348,11 +348,19 @@ const char *http_spec_text(void)
         "Start with `--token secret` (or env EXOQMS_TOKEN), then send\n"
         "`Authorization: Bearer secret` on every request.\n"
         "\n"
-        "usage: exoqms [--host <addr>] [--port <n>]\n"
+        "usage: exoqms [--serve] [--host <addr>] [--port <n>]\n"
         "              [--exomind URL] [--exosched URL] [--exodoc <path>]\n"
         "              [--ui <path>] [--code <path>] [--svg <path>]\n"
         "              [--rules <dir>] [--repo <dir>] [--agents <a,b,c>]\n"
-        "              [--notes24h <n>] [--token <t>] [--help] [--version]\n";
+        "              [--notes24h <n>] [--token <t>] [--help] [--version]\n"
+        "       exoqms /operation [--body <text>] [options]\n"
+        "              one-shot console op, no server: /objectives, /nc,\n"
+        "              /audit, /audits, /issues, /report, /trends, /ping\n"
+        "              (a body selects POST on /objectives, /nc, /audit;\n"
+        "              /audit?criteria=<checks> runs an audit program)\n"
+        "              --serve is the only way to run the HTTP server\n"
+        "              (with --host/--port); without it the binary never\n"
+        "              binds a port; no arguments prints this spec\n";
 }
 
 /* ---------- handlers ---------- */
@@ -1169,6 +1177,34 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
 
     *status = 404;
     buf_puts(out, "error: unknown path");
+}
+
+/* internal dispatch for the console one-shot operations (no HTTP auth):
+ * run one exact API operation in-process and fill *out with the body */
+int http_dispatch(const char *method, const char *path, const char *query,
+                  const char *body, size_t body_len, buf_t *out,
+                  int *status, const char **ctype, exo_t *e, cfg_t *cfg,
+                  qms_t *q)
+{
+    char pbuf[2048];
+    snprintf(pbuf, sizeof pbuf, "%s", path);
+    /* modules are reachable at /exoexoqms as well as at / */
+    if (!strncmp(pbuf, "/exoexoqms", 10) &&
+        (pbuf[10] == 0 || pbuf[10] == '/')) {
+        memmove(pbuf, pbuf + 10, strlen(pbuf + 10) + 1);
+        if (!pbuf[0])
+            snprintf(pbuf, sizeof pbuf, "/");
+    }
+    req_t r;
+    memset(&r, 0, sizeof r);
+    snprintf(r.method, sizeof r.method, "%s", method);
+    snprintf(r.path, sizeof r.path, "%s", pbuf);
+    snprintf(r.query, sizeof r.query, "%s", query ? query : "");
+    r.body = body ? (char *)body : NULL;
+    r.body_len = body_len;
+    r.auth[0] = 0;
+    route(&r, e, cfg, q, out, status, ctype);
+    return 0;
 }
 
 int http_handle_conn(int fd, exo_t *e, cfg_t *cfg, qms_t *q)

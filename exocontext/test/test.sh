@@ -56,7 +56,7 @@ sleep 0.3
 "$XM_BIN" --port $XM_PORT --data "$XM_DATA" > "$XM_LOG" 2>&1 &
 XM_PID=$!
 sleep 0.5
-"$XC_BIN" --port $XC_PORT --exomind "$XM_URL" > "$XC_LOG" 2>&1 &
+"$XC_BIN" --serve --port $XC_PORT --exomind "$XM_URL" > "$XC_LOG" 2>&1 &
 XC_PID=$!
 sleep 0.5
 
@@ -99,6 +99,21 @@ say ""
 say "=== exocontext: POST body ==="
 r=$(curl -s -m 3 -X POST "$XC_URL/context" -d 'agent=alice&budget=2000')
 check "POST digest works" "$(printf '%s' "$r" | grep -q 'agent:alice:plan' && echo 0 || echo 1)" "$r"
+
+say ""
+say "=== exocontext: console ops (no daemon) ==="
+G=$(timeout 5 "$XC_BIN" 2>/dev/null)
+check "console guide mentions exocontext" "$(printf '%s' "$G" | grep -q 'exocontext' && echo 0 || echo 1)" "$G"
+check "console guide exit 0" "$(timeout 5 "$XC_BIN" >/dev/null 2>&1 && echo 0 || echo 1)" ""
+r=$(timeout 5 "$XC_BIN" "/context?agent=alice&budget=2000" --exomind "$XM_URL" 2>/dev/null)
+check "console /context works" "$(printf '%s' "$r" | grep -q 'agent:alice:state' && echo 0 || echo 1)" "$r"
+check "console /context exit 0" "$(timeout 5 "$XC_BIN" "/context?agent=alice" --exomind "$XM_URL" >/dev/null 2>&1 && echo 0 || echo 1)" ""
+r=$(timeout 5 "$XC_BIN" /context --exomind "$XM_URL" --body "agent=alice&budget=2000" 2>/dev/null)
+check "console /context --body" "$(printf '%s' "$r" | grep -q 'agent:alice:plan' && echo 0 || echo 1)" "$r"
+"$XC_BIN" /context --exomind "$XM_URL" >/dev/null 2>&1
+check "console missing agent exit 1" "$([ $? -eq 1 ] && echo 0 || echo 1)" ""
+"$XC_BIN" /nope 2>/dev/null
+check "console unknown op exit 2" "$([ $? -eq 2 ] && echo 0 || echo 1)" ""
 
 say ""
 say "=== exocontext: error paths ==="
