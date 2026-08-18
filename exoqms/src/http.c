@@ -244,8 +244,8 @@ const char *http_spec_text(void)
         "9001-flavored quality objectives (6.2), monitoring and\n"
         "measurement (9.1), non-conformity + corrective action (8.7,\n"
         "10.2) and ISO 19011 audit programs. Durable state lives in\n"
-        "exomind under `exoqms:*` keys. The audit program runs the ten\n"
-        "checks defined in exoqms/standard.md, invoking exodoc, exoqms-ui,\n"
+        "exomind under `exoqms:*` keys. The audit program runs the checks\n"
+        "defined in exoqms/standard.md, invoking exodoc, exoqms-ui,\n"
         "exoqms-code and exoqms-svg as child processes under a 5s hard\n"
         "timeout each. The universal checks (debt, hygiene, secrets) run\n"
         "exoqms-code --rules against the rule files and partition the\n"
@@ -303,9 +303,10 @@ const char *http_spec_text(void)
         "## audit programs (ISO 19011)\n"
         "\n"
         "POST /audit body: `name<TAB>criteria` where criteria is a\n"
-        "comma-separated list of check ids (empty = all seven, and\n"
-        "`detect` is an alias for the same standard detection program),\n"
-        "plus an optional third field `agents` for the dogfood check.\n"
+        "comma-separated list of check ids (empty = the full standard\n"
+        "program, and `detect` is an alias for the same standard\n"
+        "detection program), plus an optional third field `agents` for\n"
+        "the dogfood check.\n"
         "`?target=<path>` feeds the ui-audit check (and overrides the\n"
         "scan target of code-safety and asset-logic). Each check runs\n"
         "with a 5s timeout; child processes that overrun are SIGKILLed.\n"
@@ -322,7 +323,13 @@ const char *http_spec_text(void)
         "thresholds.debt from .exoqms.json, default 10), `hygiene`\n"
         "(passes when 0 hygiene-* findings), `secrets` (passes when 0\n"
         "secrets-* findings; matched lines are masked to *** in the\n"
-        "evidence). Without a stack manifest the component-tests check\n"
+        "evidence). The swarm checks: `agent-health` (no agent frozen on\n"
+        "a fired reminder), `docs-coverage` (every manifest module ships\n"
+        "README + test/test.sh + standard.md or docs/), `kit-fidelity`\n"
+        "(the repo's kit/ ledger audits green via exokit), `memory-awareness`\n"
+        "(every configured agent acknowledged the mandate),\n"
+        "`issue-tracking` (no recurring open issue:<check> record).\n"
+        "Without a stack manifest the component-tests check\n"
         "runs the `test` commands from .exoqms.json against the whole\n"
         "project, and doc-compliance verifies the `docs` file list.\n"
         "Answer:\n"
@@ -848,6 +855,7 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
             ids[nids++] = (char *)"metrics";
             ids[nids++] = (char *)"code-safety";
             ids[nids++] = (char *)"asset-logic";
+            ids[nids++] = (char *)"docs-coverage";
             ids[nids++] = (char *)"kit-fidelity";
         } else {
             char *copy = xstrdup(criteria);
@@ -890,6 +898,7 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
                 ids[i] != (char *)"metrics" &&
                 ids[i] != (char *)"code-safety" &&
                 ids[i] != (char *)"asset-logic" &&
+                ids[i] != (char *)"docs-coverage" &&
                 ids[i] != (char *)"debt" &&
                 ids[i] != (char *)"hygiene" &&
                 ids[i] != (char *)"secrets" &&

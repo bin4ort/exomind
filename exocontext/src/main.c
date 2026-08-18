@@ -42,6 +42,8 @@ static int seen_before(char **seen, size_t n, const char *key)
 
 /* Compose the context digest. Emits into out (plain text):
  *   # context for <agent> (budget <n> chars)
+ *   ## summary (compressed history)        <- only after auto-compression
+ *   <raw summary lines, re-expanded>
  *   ## notes (newest first)
  *   <raw note line>
  *   ## state
@@ -53,31 +55,13 @@ void ctx_build(exo_t *e, const char *agent, size_t budget, buf_t *out,
 {
     buf_printf(out, "# context for %s (budget %zu chars)\n", agent, budget);
 
-    /* 1. notes mentioning the agent, newest first (exomind orders desc) */
-    char q[1024];
-    snprintf(q, sizeof q, "/notes?limit=200&q=agent%%3A%s", agent);
-    char *resp = NULL;
-    size_t rlen = 0;
-    int status = 0;
     char **seen = NULL;
     size_t nseen = 0;
-    if (exo_request(e, "GET", q, NULL, 0, 0, &resp, &rlen, &status, err,
-                    errsz) == 0 && status == 200 && resp) {
-        buf_puts(out, "\n## notes (newest first)\n");
-        char *save = NULL;
-        for (char *l = strtok_r(resp, "\n", &save); l;
-             l = strtok_r(NULL, "\n", &save)) {
-            if (out->len >= budget)
-                break;
-            if (seen_before(seen, nseen, l))
-                continue;
-            seen = xrealloc(seen, (nseen + 1) * sizeof(*seen));
-            seen[nseen++] = xstrdup(l);
-            buf_printf(out, "%s\n", l);
-        }
-    }
 
-    /* 2. agent state keys (namespace `agent:<id>:*`), values via batch */
+    /* 1. agent state keys (namespace `agent:<id>:*`), values via batch.
+     * The compressed-history summary, when present, is re-expanded
+     * first so a resuming agent sees the summarized decisions/state
+     * before the live tail. */
     char pf[512];
     snprintf(pf, sizeof pf, "agent:%s:", agent);
     char **keys = NULL;
@@ -86,12 +70,32 @@ void ctx_build(exo_t *e, const char *agent, size_t budget, buf_t *out,
         char **vals = NULL;
         if (exo_batch_get(e, keys, nk, &vals, err, errsz) != 0) {
             free(keys);
-            free(resp);
             return;
+        }
+        size_t plen = strlen(pf);
+        size_t sidx = nk;
+        for (size_t i = 0; i < nk; i++)
+            if (strcmp(keys[i] + plen, CTX_SUMMARY_SUFFIX + 1) == 0) {
+                sidx = i;
+                break;
+            }
+        if (sidx < nk) {
+            seen = xrealloc(seen, (nseen + 1) * sizeof(*seen));
+            seen[nseen++] = xstrdup(keys[sidx]);
+        }
+        if (sidx < nk && vals[sidx] && vals[sidx][0]) {
+            buf_puts(out, "\n## summary (compressed history)\n");
+            char *save = NULL;
+            for (char *l = strtok_r(vals[sidx], "\n", &save); l;
+                 l = strtok_r(NULL, "\n", &save)) {
+                if (out->len >= budget)
+                    break;
+                buf_printf(out, "%s\n", l);
+            }
         }
         buf_puts(out, "\n## state (agent:<id>:* keys)\n");
         for (size_t i = 0; i < nk && out->len < budget; i++) {
-            if (!vals[i])
+            if (i == sidx || !vals[i])
                 continue;
             if (seen_before(seen, nseen, keys[i]))
                 continue;
@@ -108,10 +112,238 @@ void ctx_build(exo_t *e, const char *agent, size_t budget, buf_t *out,
         free(vals);
         free(keys);
     }
+
+    /* 2. notes mentioning the agent, newest first (exomind orders desc) */
+    char q[1024];
+    snprintf(q, sizeof q, "/notes?limit=200&q=agent%%3A%s", agent);
+    char *resp = NULL;
+    size_t rlen = 0;
+    int status = 0;
+    if (exo_request(e, "GET", q, NULL, 0, 0, &resp, &rlen, &status, err,
+                    errsz) == 0 && status == 200 && resp) {
+        buf_puts(out, "\n## notes (newest first)\n");
+        char *save = NULL;
+        for (char *l = strtok_r(resp, "\n", &save); l;
+             l = strtok_r(NULL, "\n", &save)) {
+            if (out->len >= budget)
+                break;
+            if (seen_before(seen, nseen, l))
+                continue;
+            seen = xrealloc(seen, (nseen + 1) * sizeof(*seen));
+            seen[nseen++] = xstrdup(l);
+            buf_printf(out, "%s\n", l);
+        }
+    }
     for (size_t i = 0; i < nseen; i++)
         free(seen[i]);
     free(seen);
     free(resp);
+}
+
+/* ---------------- session auto-compression ---------------- */
+
+/* storage byte budget for one session's log: EXO_CTX_BUDGET env,
+ * default 16 KiB. Measured as the sum of `strlen(key)+strlen(value)+2`
+ * over the live `agent:<id>:*` keys (the summary key excluded). */
+static size_t ctx_storage_budget(void)
+{
+    const char *v = getenv("EXO_CTX_BUDGET");
+    if (!v || !*v)
+        return CTX_BUDGET_DEFAULT;
+    long n = atol(v);
+    return n > 0 ? (size_t)n : CTX_BUDGET_DEFAULT;
+}
+
+static void strlist_add(strlist_t *sl, const char *s)
+{
+    for (size_t i = 0; i < sl->len; i++)
+        if (strcmp(sl->p[i], s) == 0)
+            return;
+    sl->p = xrealloc(sl->p, (sl->len + 1) * sizeof(*sl->p));
+    sl->p[sl->len++] = xstrdup(s);
+}
+
+/* carry the terse decisions/state lines of a folded value forward:
+ * keep only `decided:` / `state:` prefixed lines (case-insensitive) */
+static void summary_state_lines(const char *val, strlist_t *lines)
+{
+    char *copy = xstrdup(val);
+    char *save = NULL;
+    for (char *l = strtok_r(copy, "\n", &save); l;
+         l = strtok_r(NULL, "\n", &save)) {
+        size_t n = strlen(l);
+        while (n > 0 && (l[n - 1] == '\r' || l[n - 1] == '\n'))
+            l[--n] = 0;
+        if (ci_prefix(l, "decided:") || ci_prefix(l, "state:"))
+            strlist_add(lines, l);
+    }
+    free(copy);
+}
+
+/* cumulative entry count from an existing summary header:
+ * `# summary <n> entries (compressed at <epoch>)` */
+static size_t summary_count_of(const char *val)
+{
+    size_t n = 0;
+    if (val && sscanf(val, "# summary %zu entries", &n) == 1)
+        return n;
+    return 0;
+}
+
+/* the state lines already carried in an existing summary (skips the
+ * `# summary` header and the `(+N entries compressed)` footer) */
+static void summary_lines_of(const char *val, strlist_t *lines)
+{
+    if (!val)
+        return;
+    char *copy = xstrdup(val);
+    char *save = NULL;
+    for (char *l = strtok_r(copy, "\n", &save); l;
+         l = strtok_r(NULL, "\n", &save)) {
+        if (strncmp(l, "# summary", 9) == 0)
+            continue;
+        if (l[0] == '(' && l[1] == '+')
+            continue;
+        strlist_add(lines, l);
+    }
+    free(copy);
+}
+
+/* Auto-compress a long session: when the stored `agent:<id>:*` log
+ * exceeds the byte budget, fold the oldest entries into a line-based
+ * summary under `agent:<id>:summary` (decisions/state lines carried
+ * forward, cumulative folded count + compression timestamp recorded)
+ * and delete them; `ctx:summary:<id>` records the last compression.
+ * Best-effort: backend failures are logged, the live keys are left in
+ * place, and the caller op still succeeds. Returns the number of
+ * entries folded (0 = session fits the budget, nothing to fold). */
+int ctx_compress(exo_t *e, const char *agent, char *err, size_t errsz)
+{
+    size_t budget = ctx_storage_budget();
+    char pf[512];
+    snprintf(pf, sizeof pf, "agent:%s:", agent);
+    char **keys = NULL;
+    size_t nk = 0;
+    if (exo_list(e, pf, &keys, &nk, err, errsz) != 0) {
+        free(keys);
+        return 0;
+    }
+    if (nk == 0) {
+        free(keys);
+        return 0;
+    }
+    char **vals = NULL;
+    if (exo_batch_get(e, keys, nk, &vals, err, errsz) != 0) {
+        for (size_t i = 0; i < nk; i++)
+            free(keys[i]);
+        free(keys);
+        return 0;
+    }
+    size_t plen = strlen(pf);
+    size_t sidx = nk;
+    for (size_t i = 0; i < nk; i++)
+        if (strcmp(keys[i] + plen, CTX_SUMMARY_SUFFIX + 1) == 0) {
+            sidx = i;
+            break;
+        }
+    size_t live = nk - (sidx != nk);
+    size_t total = 0;
+    for (size_t i = 0; i < nk; i++) {
+        if (i == sidx)
+            continue;
+        total += strlen(keys[i]) + strlen(vals[i]) + 2;
+    }
+    if (live <= 1 || total <= budget) {
+        for (size_t i = 0; i < nk; i++) {
+            free(keys[i]);
+            free(vals[i]);
+        }
+        free(keys);
+        free(vals);
+        return 0;
+    }
+
+    /* fold from the oldest entries (the log lists keys asc) until the
+     * live tail fits the budget; the newest entry is never folded */
+    strlist_t lines = {0};
+    size_t folded = 0, folded_bytes = 0;
+    for (size_t i = 0; i < nk && folded < live - 1 &&
+                        total - folded_bytes > budget; i++) {
+        if (i == sidx)
+            continue;
+        summary_state_lines(vals[i], &lines);
+        folded++;
+        folded_bytes += strlen(keys[i]) + strlen(vals[i]) + 2;
+    }
+    if (folded == 0) {
+        for (size_t i = 0; i < nk; i++) {
+            free(keys[i]);
+            free(vals[i]);
+        }
+        free(keys);
+        free(vals);
+        return 0;
+    }
+
+    /* merge into any existing summary: header count accumulates,
+     * state lines dedupe, footer records this round's increment */
+    strlist_t old = {0};
+    size_t oldcount = 0;
+    if (sidx != nk) {
+        oldcount = summary_count_of(vals[sidx]);
+        summary_lines_of(vals[sidx], &old);
+    }
+    buf_t sb = {0};
+    buf_printf(&sb, "# summary %zu entries (compressed at %lld)\n",
+               oldcount + folded, (long long)now_epoch());
+    size_t kept = 0;
+    for (size_t i = 0; i < lines.len && kept < CTX_SUMMARY_MAX_LINES; i++) {
+        buf_printf(&sb, "%s\n", lines.p[i]);
+        kept++;
+    }
+    for (size_t i = 0; i < old.len && kept < CTX_SUMMARY_MAX_LINES; i++) {
+        buf_printf(&sb, "%s\n", old.p[i]);
+        kept++;
+    }
+    buf_printf(&sb, "(+%zu entries compressed)\n", folded);
+
+    char sk[512];
+    snprintf(sk, sizeof sk, "agent:%s" CTX_SUMMARY_SUFFIX, agent);
+    if (exo_persist(e, sk, sb.p, 0, err, errsz) != 0) {
+        exo_log(EXO_LOG_WARN, "exocontext: summary write failed for %s",
+                agent);
+        goto out;
+    }
+    char mk[512];
+    snprintf(mk, sizeof mk, "ctx:summary:%s", agent);
+    char ts[32];
+    snprintf(ts, sizeof ts, "%lld", (long long)now_epoch());
+    if (exo_persist(e, mk, ts, 0, err, errsz) != 0)
+        exo_log(EXO_LOG_WARN,
+                "exocontext: summary marker write failed for %s", agent);
+    size_t del_left = folded;
+    for (size_t i = 0; i < nk && del_left > 0; i++) {
+        if (i == sidx)
+            continue;
+        if (exo_del(e, keys[i], NULL, err, errsz) != 0)
+            exo_log(EXO_LOG_WARN, "exocontext: del %s failed", keys[i]);
+        del_left--;
+    }
+out:
+    buf_free(&sb);
+    for (size_t i = 0; i < lines.len; i++)
+        free(lines.p[i]);
+    free(lines.p);
+    for (size_t i = 0; i < old.len; i++)
+        free(old.p[i]);
+    free(old.p);
+    for (size_t i = 0; i < nk; i++) {
+        free(keys[i]);
+        free(vals[i]);
+    }
+    free(keys);
+    free(vals);
+    return (int)folded;
 }
 
 /* ---------------- minimal HTTP layer ---------------- */
@@ -136,6 +368,12 @@ static const char *spec_text(void)
            "   budget (default 4000 chars). An agent can reconstruct its\n"
            "   working context after a restart from this single call.\n"
            "POST /context - same, body `agent=<id>[&budget=<chars>]`\n"
+           "Auto-compress: when a session's stored log (`agent:<id>:*` keys)\n"
+           "   exceeds EXO_CTX_BUDGET bytes (default 16384), the oldest\n"
+           "   entries are folded into a summary under `agent:<id>:summary`\n"
+           "   (decided:/state: lines carried forward, folded count +\n"
+           "   timestamp recorded) and the digest re-expands it before the\n"
+           "   live tail; `ctx:summary:<id>` records the last compression.\n"
            "Add `json=1` for a JSON array.\n"
            "console: exocontext /context?agent=<id>[&budget=<chars>]\n"
            "  one-shot, in-process, no port bound (body on --body or stdin);\n"
@@ -240,6 +478,7 @@ static void dispatch(const char *method, char *path, const char *qs,
         if (budget > MAX_CONTEXT_BUDGET)
             budget = MAX_CONTEXT_BUDGET;
         char err[256];
+        (void)ctx_compress(g_exo_ctx, agent, err, sizeof err);
         ctx_build(g_exo_ctx, agent, budget, out, err, sizeof err);
         return;
     }

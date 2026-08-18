@@ -1,6 +1,8 @@
 /* exosched WebSocket layer (RFC 6455), implemented by hand: SHA-1 +
  * base64 accept key, text frames on fire, one thread per client, close
- * handling and dead-client purge. */
+ * handling and dead-client purge. Clients may ACK a push with a text
+ * frame `ack <id> <epoch>`; the broadcaster waits a short window for
+ * those and the fired-timer bookkeeping records the outcome. */
 #include "exosched.h"
 
 #include <errno.h>
@@ -9,17 +11,33 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #define WS_MAX_FRAME (64u * 1024u * 1024u)
+#define WS_ACK_WINDOW_NS (500 * 1000000L) /* wait 500ms for client acks */
 
 typedef struct wsclient {
     int fd;
     struct wsclient *next;
 } wsclient_t;
 
+/* the broadcast currently waiting for acks (the timer thread is the only
+ * broadcaster, so at most one is in flight at a time) */
+typedef struct {
+    char id[TIMER_ID_MAX];
+    int64_t epoch;
+    int acked;   /* distinct clients that ACKed */
+    int total;   /* clients the frame was delivered to */
+    int *fds;    /* fds that already ACKed (dedupe) */
+    size_t nfds, capfds;
+} ackrec_t;
+
 static pthread_mutex_t ws_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t ws_cv; /* monotonic; broadcast on every ack */
+static int ws_cv_ok = 0;
 static wsclient_t *g_clients = NULL;
+static ackrec_t g_pending;
 
 /* ---- SHA-1 (RFC 3174) ---- */
 
@@ -209,6 +227,9 @@ static int send_frame(int fd, int opcode, const void *payload, size_t n)
     return 0;
 }
 
+/* records one client's ack for the broadcast in flight */
+static void ws_note_ack(int fd, const char *id, int64_t epoch);
+
 /* reads exactly n bytes; returns 0 ok, -1 eof/error */
 static int recv_full(int fd, void *buf, size_t n)
 {
@@ -228,6 +249,7 @@ static int recv_full(int fd, void *buf, size_t n)
  * closed again by us). */
 static int ws_client_loop(int fd)
 {
+    char tmp[256];
     for (;;) {
         unsigned char hdr[2];
         if (recv_full(fd, hdr, 2) != 0)
@@ -271,8 +293,20 @@ static int ws_client_loop(int fd)
             send_frame(fd, 0xA, payload, (size_t)n);
             break;
         case 0xA: /* pong */
-        case 0x1: /* text from client: ignored, we only push */
         case 0x0: /* continuation of an ignored stream */
+            break;
+        case 0x1: /* text frame: optional delivery ack "ack <id> <epoch>" */
+            if (n > 4 && memcmp(payload, "ack ", 4) == 0) {
+                size_t tn = (size_t)n;
+                if (tn > sizeof tmp - 1)
+                    tn = sizeof tmp - 1;
+                memcpy(tmp, payload, tn);
+                tmp[tn] = 0;
+                char id[TIMER_ID_MAX];
+                long long ep = 0;
+                if (sscanf(tmp + 4, "%39s %lld", id, &ep) == 2)
+                    ws_note_ack(fd, id, (int64_t)ep);
+            }
             break;
         default: /* reserved opcodes are a protocol error */
             free(payload);
@@ -310,12 +344,62 @@ void ws_handle_conn(int fd)
         close(fd);
 }
 
-/* pushes one text frame to every live client; purges dead ones */
-void ws_broadcast(const char *id, int64_t epoch, const char *msg)
+/* records one client's ack for the broadcast in flight; caller is the
+ * client's read loop. ignored when no ack is pending or it does not
+ * match the pushed (id, epoch). */
+static void ws_note_ack(int fd, const char *id, int64_t epoch)
+{
+    pthread_mutex_lock(&ws_mu);
+    if (g_pending.id[0] && strcmp(g_pending.id, id) == 0 &&
+        g_pending.epoch == epoch) {
+        int seen = 0;
+        for (size_t i = 0; i < g_pending.nfds; i++)
+            if (g_pending.fds[i] == fd) {
+                seen = 1;
+                break;
+            }
+        if (!seen) {
+            if (g_pending.nfds == g_pending.capfds) {
+                g_pending.capfds = g_pending.capfds ? g_pending.capfds * 2
+                                                    : 8;
+                g_pending.fds = xrealloc(g_pending.fds,
+                                         g_pending.capfds *
+                                             sizeof *g_pending.fds);
+            }
+            g_pending.fds[g_pending.nfds++] = fd;
+            g_pending.acked++;
+            pthread_cond_broadcast(&ws_cv);
+        }
+    }
+    pthread_mutex_unlock(&ws_mu);
+}
+
+/* lazily initializes the ack condvar (daemon mode calls ws_init first) */
+static void ws_cv_init_locked(void)
+{
+    if (ws_cv_ok)
+        return;
+    pthread_condattr_t attr;
+    pthread_condattr_init(&attr);
+    pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+    pthread_cond_init(&ws_cv, &attr);
+    pthread_condattr_destroy(&attr);
+    ws_cv_ok = 1;
+}
+
+/* pushes one text frame to every live client; purges dead ones, then
+ * waits up to WS_ACK_WINDOW for client ack frames. *acked = how many
+ * distinct clients ACKed, *total = how many clients received the frame. */
+void ws_broadcast(const char *id, int64_t epoch, const char *msg,
+                  int *acked, int *total)
 {
     buf_t line = {0};
     buf_printf(&line, "timer %s %lld %s", id, (long long)epoch, msg);
     pthread_mutex_lock(&ws_mu);
+    ws_cv_init_locked();
+    memset(&g_pending, 0, sizeof g_pending);
+    snprintf(g_pending.id, sizeof g_pending.id, "%s", id);
+    g_pending.epoch = epoch;
     wsclient_t **pp = &g_clients;
     while (*pp) {
         wsclient_t *c = *pp;
@@ -325,12 +409,49 @@ void ws_broadcast(const char *id, int64_t epoch, const char *msg)
             free(c);
             continue;
         }
+        g_pending.total++;
         pp = &c->next;
     }
+    if (g_pending.total == 0) {
+        g_pending.id[0] = 0;
+        pthread_mutex_unlock(&ws_mu);
+        buf_free(&line);
+        *acked = 0;
+        *total = 0;
+        return;
+    }
+    /* wait for acks: full window, or until every delivered client acked */
+    int64_t deadline = mono_ns() + WS_ACK_WINDOW_NS;
+    for (;;) {
+        if (g_pending.acked >= g_pending.total)
+            break;
+        int64_t now = mono_ns();
+        if (now >= deadline)
+            break;
+        int64_t wait_ns = deadline - now;
+        struct timespec ts;
+        ts.tv_sec = now / 1000000000L + wait_ns / 1000000000L;
+        ts.tv_nsec = now % 1000000000L + wait_ns % 1000000000L;
+        if (ts.tv_nsec >= 1000000000L) {
+            ts.tv_nsec -= 1000000000L;
+            ts.tv_sec++;
+        }
+        pthread_cond_timedwait(&ws_cv, &ws_mu, &ts);
+    }
+    int n_acked = g_pending.acked;
+    int n_total = g_pending.total;
+    free(g_pending.fds);
+    g_pending.fds = NULL;
+    g_pending.id[0] = 0;
     pthread_mutex_unlock(&ws_mu);
     buf_free(&line);
+    *acked = n_acked;
+    *total = n_total;
 }
 
 void ws_init(void)
 {
+    pthread_mutex_lock(&ws_mu);
+    ws_cv_init_locked();
+    pthread_mutex_unlock(&ws_mu);
 }

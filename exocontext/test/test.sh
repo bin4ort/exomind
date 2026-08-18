@@ -135,6 +135,74 @@ r=$(curl -s -m 3 -H 'Authorization: Bearer sekrit' "$XC_URL/context?agent=alice&
 check "right token works" "$(printf '%s' "$r" | grep -q 'agent:alice:state' && echo 0 || echo 1)" "$r"
 
 say ""
+say "=== exocontext: auto-compression (long sessions) ==="
+kill_port exocontext $XC_PORT
+sleep 0.3
+EXO_CTX_BUDGET=200 "$XC_BIN" --serve --port $XC_PORT --exomind "$XM_URL" \
+    > "$XC_LOG" 2>&1 &
+XC_PID=$!
+sleep 0.5
+check "compression daemon up" "$([ "$(curl -s -m 3 "$XC_URL/ping")" = pong ] && echo 0 || echo 1)"
+
+seed_carol() { # 10 log entries (~366 bytes) vs the 200-byte budget
+    local i v
+    for i in 0001 0002 0003 0004 0005 0006 0007 0008 0009 0010; do
+        case $i in
+        0001) v="state: sprint 1 shipped";; 0002) v="decided: ship v1";;
+        0003) v="state: docs green";; 0004) v="noise: plain log line";;
+        0005) v="state: budget spent";; 0006) v="decided: cut scope";;
+        0007) v="state: ui frozen";; 0008) v="decided: keep rpc";;
+        0009) v="state: tests passing";; 0010) v="decided: resume now";;
+        esac
+        curl -s -m 3 -X POST "$XM_URL/set?key=agent:carol:$i" -d "$v" > /dev/null
+    done
+}
+seed_carol
+r=$(curl -s -m 3 "$XC_URL/context?agent=carol") # GET triggers auto-compress
+S=$(curl -s -m 3 "$XM_URL/get?key=agent:carol:summary")
+check "big session compressed (summary exists)" "$(printf '%s' "$S" | grep -q '# summary 5 entries' && echo 0 || echo 1)" "$S"
+check "summary records compression timestamp" "$(printf '%s' "$S" | grep -qE 'compressed at [0-9]+' && echo 0 || echo 1)" "$S"
+check "summary counts folded entries" "$(printf '%s' "$S" | grep -q '(+5 entries compressed)' && echo 0 || echo 1)" "$S"
+check "summary carries decisions forward" "$(printf '%s' "$S" | grep -q 'decided: ship v1' && echo 0 || echo 1)" "$S"
+check "summary carries state forward" "$(printf '%s' "$S" | grep -q 'state: docs green' && echo 0 || echo 1)" "$S"
+check "summary drops plain log lines" "$(printf '%s' "$S" | grep -qv 'noise' && echo 0 || echo 1)" "$S"
+check "live tail trimmed (oldest gone)" "$([ "$(curl -s -m 3 "$XM_URL/get?key=agent:carol:0001")" = missing ] && echo 0 || echo 1)"
+check "live tail kept (newest stays)" "$(curl -s -m 3 "$XM_URL/get?key=agent:carol:0009" | grep -q 'state: tests passing' && echo 0 || echo 1)"
+check "compression marker recorded" "$(curl -s -m 3 "$XM_URL/get?key=ctx:summary:carol" | grep -qE '^[0-9]+$' && echo 0 || echo 1)"
+
+say ""
+say "=== exocontext: re-compression merges ==="
+for i in 0011 0012 0013; do
+    case $i in
+    0011) v="decided: ship v2";; 0012) v="state: smoke green";; 0013) v="decided: tag rc";;
+    esac
+    curl -s -m 3 -X POST "$XM_URL/set?key=agent:carol:$i" -d "$v" > /dev/null
+done
+curl -s -m 3 "$XC_URL/context?agent=carol" > /dev/null
+S=$(curl -s -m 3 "$XM_URL/get?key=agent:carol:summary")
+check "re-compression accumulates counts" "$(printf '%s' "$S" | grep -q '# summary 8 entries' && echo 0 || echo 1)" "$S"
+check "re-compression records increment" "$(printf '%s' "$S" | grep -q '(+3 entries compressed)' && echo 0 || echo 1)" "$S"
+
+say ""
+say "=== exocontext: re-expansion on resume ==="
+r=$(curl -s -m 3 "$XC_URL/context?agent=carol&budget=2000")
+check "resume re-expands summary" "$(printf '%s' "$r" | grep -q '# summary 8 entries' && echo 0 || echo 1)" "$r"
+check "resume shows folded decisions" "$(printf '%s' "$r" | grep -q 'decided: ship v1' && echo 0 || echo 1)" "$r"
+check "resume shows folded state" "$(printf '%s' "$r" | grep -q 'state: sprint 1 shipped' && echo 0 || echo 1)" "$r"
+check "resume shows live tail" "$(printf '%s' "$r" | grep -q 'decided: tag rc' && echo 0 || echo 1)" "$r"
+SN=$(printf '%s\n' "$r" | grep -n '## summary' | head -1 | cut -d: -f1)
+LN=$(printf '%s\n' "$r" | grep -n 'agent:carol:0013' | head -1 | cut -d: -f1)
+check "summary precedes live tail" "$([ -n "$SN" ] && [ -n "$LN" ] && [ "$SN" -lt "$LN" ] && echo 0 || echo 1)" "summary@$SN live@$LN"
+
+say ""
+say "=== exocontext: small sessions untouched ==="
+curl -s -m 3 -X POST "$XM_URL/set?key=agent:dave:plan" -d 'state: keep it small' > /dev/null
+r=$(curl -s -m 3 "$XC_URL/context?agent=dave")
+check "small session digest works" "$(printf '%s' "$r" | grep -q 'agent:dave:plan' && echo 0 || echo 1)" "$r"
+check "small session has no summary key" "$([ "$(curl -s -m 3 "$XM_URL/get?key=agent:dave:summary")" = missing ] && echo 0 || echo 1)"
+check "small session has no marker" "$([ "$(curl -s -m 3 "$XM_URL/get?key=ctx:summary:dave")" = missing ] && echo 0 || echo 1)"
+
+say ""
 say "=== exocontext: cleanup ==="
 kill "$XC_PID" 2>/dev/null
 kill "$XM_PID" 2>/dev/null

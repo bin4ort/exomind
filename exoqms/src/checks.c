@@ -1259,8 +1259,8 @@ out_notes:
     buf_free(&ev);
 }
 
-/* ---------- check: docs-coverage (every manifest component must carry
- * a README and a test command - the merge gate) ---------- */
+/* ---------- check: docs-coverage (every module must carry a README, a
+ * test suite and a standards reference - the merge gate) ---------- */
 static void check_issue_tracking(check_ctx_t *ctx, finding_t *f)
 {
     /* the detection registry (`issue:<check>` in exomind): every failed
@@ -1436,57 +1436,84 @@ static void check_kit_fidelity(check_ctx_t *ctx, finding_t *f)
     free(out);
 }
 
+/* a regular file or a directory inside a module dir */
+static int dir_has(const char *dir, const char *name, int want_dir)
+{
+    char p[4096];
+    snprintf(p, sizeof p, "%s/%s", dir, name);
+    struct stat st;
+    if (stat(p, &st) != 0)
+        return 0;
+    return want_dir ? S_ISDIR(st.st_mode) : S_ISREG(st.st_mode);
+}
+
 static void check_docs_coverage(check_ctx_t *ctx, finding_t *f)
 {
+    /* the merge gate: every module listed in docs/stack.tsv must ship a
+     * README, a runnable test suite at test/test.sh and a standards
+     * reference (standard.md or a docs/ directory). Without a manifest
+     * the repo root itself is the module (universal mode). */
     char manifest[2048];
     snprintf(manifest, sizeof manifest, "%s/docs/stack.tsv", ctx->cfg->repo);
     FILE *fp = fopen(manifest, "r");
-    if (!fp) {
-        set_finding(f, "docs-coverage", R_SKIP,
-                    "no docs/stack.tsv manifest (project mode?)");
-        return;
-    }
     buf_t ev = {0};
     int missing = 0, total = 0;
-    char line[4096];
-    while (fgets(line, sizeof line, fp)) {
-        trim_crlf(line);
-        if (!line[0] || line[0] == '#')
-            continue;
-        char *col[8];
-        int nc = tab_split(line, col, 8);
-        if (nc < 2 || !col[0][0] || !col[1][0])
-            continue;
-        total++;
-        char dir[2048];
-        if (col[1][0] == '/')
-            snprintf(dir, sizeof dir, "%s", col[1]);
-        else
-            snprintf(dir, sizeof dir, "%s/%s", ctx->cfg->repo, col[1]);
-        struct stat st;
-        char readme[4096];
-        snprintf(readme, sizeof readme, "%s/README.md", dir);
-        if (stat(readme, &st) != 0 || !S_ISREG(st.st_mode)) {
+    if (!fp) {
+        const char *dir = ctx->cfg->repo;
+        total = 1;
+        if (!dir_has(dir, "README.md", 0) && !dir_has(dir, "README", 0)) {
             missing++;
-            buf_printf(&ev, "%s: no README.md\n", col[0]);
+            buf_printf(&ev, "%s: no README\n", dir);
         }
-        /* 5th column = test command; `-` is the documented exception
-           (suite exceeds the 5s audit budget) */
-        if (nc < 5 || !col[4][0] || (col[4][0] == '-' && !col[4][1])) {
+        if (!dir_has(dir, "test/test.sh", 0)) {
             missing++;
-            buf_printf(&ev, "%s: no test command (5th column)\n", col[0]);
+            buf_printf(&ev, "%s: no test/test.sh\n", dir);
         }
+        if (!dir_has(dir, "standard.md", 0) && !dir_has(dir, "docs", 1)) {
+            missing++;
+            buf_printf(&ev, "%s: no standard.md or docs/\n", dir);
+        }
+    } else {
+        char line[4096];
+        while (fgets(line, sizeof line, fp)) {
+            trim_crlf(line);
+            if (!line[0] || line[0] == '#')
+                continue;
+            char *col[8];
+            int nc = tab_split(line, col, 8);
+            if (nc < 2 || !col[0][0] || !col[1][0])
+                continue;
+            total++;
+            char dir[2048];
+            if (col[1][0] == '/')
+                snprintf(dir, sizeof dir, "%s", col[1]);
+            else
+                snprintf(dir, sizeof dir, "%s/%s", ctx->cfg->repo, col[1]);
+            if (!dir_has(dir, "README.md", 0) && !dir_has(dir, "README", 0)) {
+                missing++;
+                buf_printf(&ev, "%s: no README\n", col[0]);
+            }
+            if (!dir_has(dir, "test/test.sh", 0)) {
+                missing++;
+                buf_printf(&ev, "%s: no test/test.sh\n", col[0]);
+            }
+            if (!dir_has(dir, "standard.md", 0) && !dir_has(dir, "docs", 1)) {
+                missing++;
+                buf_printf(&ev, "%s: no standard.md or docs/\n", col[0]);
+            }
+        }
+        fclose(fp);
     }
-    fclose(fp);
     if (total == 0) {
         set_finding(f, "docs-coverage", R_SKIP, "empty manifest");
     } else if (missing > 0) {
-        set_finding(f, "docs-coverage", R_FAIL, "%d/%d components missing "
-                    "README or test command:\n%s", missing, total,
-                    ev.p ? ev.p : "");
+        set_finding(f, "docs-coverage", R_FAIL, "%d/%d modules miss a "
+                    "README, test suite or standards reference:\n%s",
+                    missing, total, ev.p ? ev.p : "");
     } else {
-        set_finding(f, "docs-coverage", R_PASS, "%d/%d components carry "
-                    "README + test command", total, total);
+        set_finding(f, "docs-coverage", R_PASS, "%d/%d modules carry "
+                    "README + test/test.sh + standard.md (or docs/)",
+                    total, total);
     }
     buf_free(&ev);
 }

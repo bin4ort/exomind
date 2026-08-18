@@ -52,9 +52,11 @@ static void usage(const char *argv0)
            "       %s /operation [options]\n"
            "an operation (path starting with /) runs ONE API call in-process\n"
            "and prints the answer; no server and no socket is opened:\n"
-           "  /remind          schedule: body from --body or stdin (POST)\n"
-           "  /timers          list active timers (GET)\n"
-           "  /timer?id=<id>   cancel a timer (POST)\n"
+"  /remind          schedule: body from --body or stdin (POST)\n"
+            "  /timers          list active timers (GET)\n"
+            "  /timer?id=<id>   cancel a timer (POST)\n"
+            "  /delivery        delivery receipts stats (GET; ?detail=1 for\n"
+            "                   the per-timer receipt list)\n"
            "the daemon binds a port only with --serve (or an explicit\n"
            "--port); with no arguments the API guide is printed\n"
            "  --host <addr>      bind address (default 127.0.0.1)\n"
@@ -82,6 +84,7 @@ static void *reload_thread(void *arg)
         if (timers_reload(e) == 0)
             break;
     }
+    (void)delivery_load(e); /* exomind is back: load the durable counters */
     return NULL;
 }
 
@@ -129,6 +132,10 @@ static int console_run(const char *path, const char *body_arg, exo_t *e)
     http_dispatch(method, pathbuf, query, body, blen, &out, &status,
                   &ctype, e);
     if (status >= 400) {
+        /* /delivery only fails on bad params, and those are a usage
+         * error (exit 2), not an op failure (exit 1) */
+        if (!strcmp(pathbuf, "/delivery") && status == 400)
+            return 2;
         fprintf(stderr, "exosched: %s failed (%d)\n%s", pathbuf, status,
                 out.p ? out.p : "");
         buf_free(&out);
@@ -221,15 +228,17 @@ int main(int argc, char **argv)
                 fprintf(stderr, "exosched: %s\n", err);
                 return 1;
             }
-            if (token)
-                http_set_token(token);
-            timers_init();
-            /* best effort: without this the console process sees an empty
-             * registry; exomind stays the source of truth */
-            if (timers_reload(&exo) != 0)
-                fprintf(stderr,
-                        "exosched: exomind down; console op sees an empty "
-                        "registry\n");
+if (token)
+            http_set_token(token);
+        timers_init();
+        /* best effort: without this the console process sees an empty
+         * registry; exomind stays the source of truth */
+        if (timers_reload(&exo) != 0)
+            fprintf(stderr,
+                    "exosched: exomind down; console op sees an empty "
+                    "registry\n");
+        /* best effort: /delivery shows the durable counters */
+        (void)delivery_load(&exo);
             int rc = console_run(console_path, body_arg, &exo);
             timers_shutdown();
             return rc;
@@ -292,6 +301,10 @@ int main(int argc, char **argv)
         }
         sleep(1);
     }
+    if (delivery_load(&exo) != 0)
+        fprintf(stderr,
+                "exosched: delivery stats unavailable; counters start at "
+                "zero until loaded\n");
     if (!loaded) {
         fprintf(stderr,
                 "exosched: exomind down at startup; serving with an empty "

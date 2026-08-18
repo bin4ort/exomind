@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Minimal RFC 6455 client for exosched tests (stdlib only).
 
-Usage: wsclient.py <port> [expect-substring] [timeout] [close-test]
-Reads text frames, prints each. Exits 0 when a frame containing the
-expected substring arrives, or after a successful close round-trip
-(when expect-substring == CLOSE), else 1 on timeout/EOF.
+Usage: wsclient.py <port> [expect-substring] [timeout] [ack] [close-test]
+Reads text frames, prints each. When the 4th arg "ack" is given, replies
+to every pushed `timer <id> <epoch> <msg>` frame with a masked text frame
+`ack <id> <epoch>`. Exits 0 when a frame containing the expected substring
+arrives, or after a successful close round-trip (when expect-substring ==
+CLOSE), else 1 on timeout/EOF.
 """
 import base64
 import os
@@ -15,6 +17,7 @@ import time
 port = int(sys.argv[1])
 expect = sys.argv[2] if len(sys.argv) > 2 else None
 timeout = float(sys.argv[3]) if len(sys.argv) > 3 else 10.0
+ack_mode = len(sys.argv) > 4 and sys.argv[4] == "ack"
 close_test = expect == "CLOSE"
 
 key = base64.b64encode(os.urandom(16)).decode()
@@ -77,6 +80,14 @@ def recv_frame(sock):
     return opcode, payload
 
 
+def send_ack(sock, timer_id, epoch):
+    payload = ("ack %s %s" % (timer_id, epoch)).encode()
+    mask = os.urandom(4)
+    hdr = bytes([0x81, 0x80 | len(payload)])
+    masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+    sock.sendall(hdr + mask + masked)
+
+
 ok = False
 if close_test:
     s.sendall(bytes([0x88, 0x02, 0x03, 0xE8]))  # close(1000)
@@ -106,6 +117,10 @@ while time.time() < end:
     if opcode == 0x1:  # text
         line = payload.decode("utf-8", "replace")
         print(line, flush=True)
+        if ack_mode:
+            parts = line.split(" ", 3)
+            if len(parts) >= 3 and parts[0] == "timer":
+                send_ack(s, parts[1], parts[2])
         if expect and expect in line:
             ok = True
             break

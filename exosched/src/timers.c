@@ -200,16 +200,18 @@ long timer_ttl(int64_t fire)
     if (ttl > 315360000)
         ttl = 315360000;
     return ttl;
-}/* handles the fire bookkeeping for one timer. The ws push already happened.
+}/* handles the fire bookkeeping for one timer. The ws push (and its ack
+ * window) already happened; acked/total carry the delivery outcome.
  * returns 0 if the timer is done (one-shot fired, or last recurring fire),
  * 1 if it must be kept (recurring, bookkeeping done), 2 if exomind was
  * down and the bookkeeping must be retried (keep, retry later).
  * On success the timer's wall_fire/mono_fire are advanced in place. */
-static int fire_timer(exo_t *e, timer_rec_t *t)
+static int fire_timer(exo_t *e, timer_rec_t *t, int acked, int total)
 {
     char err[256];
     int last = t->repeat > 0 && t->until > 0 &&
                t->wall_fire + t->repeat > t->until;
+    int64_t now = now_epoch();
 
     buf_t note = {0};
     if (last)
@@ -223,6 +225,9 @@ static int fire_timer(exo_t *e, timer_rec_t *t)
     else
         buf_printf(&note, "fired timer %s: %s at %lld", t->id, t->msg,
                    (long long)t->wall_fire);
+    /* delivery receipt: did any WS client ack the push, and how many */
+    buf_printf(&note, " [delivery: acked %d/%d at %lld]", acked, total,
+               (long long)now);
     if (exo_note(e, note.p, err, sizeof err) != 0) {
         fprintf(stderr, "exosched: note failed for %s: %s (retrying)\n",
                 t->id, err);
@@ -233,18 +238,42 @@ static int fire_timer(exo_t *e, timer_rec_t *t)
 
     if (t->receipt) {
         /* delivery receipt: an agent can confirm the reminder actually
-         * fired by checking the receipt:<id> key exists in exomind */
+         * fired (and whether the push was acked) by checking the
+         * receipt:<id> key exists in exomind */
         char rkey[576];
-        char rval[1024];
+        char rval[1152];
         snprintf(rkey, sizeof rkey, "receipt:%s", t->id);
-        snprintf(rval, sizeof rval, "fired:%lld:%s",
-                 (long long)t->wall_fire, t->msg);
+        snprintf(rval, sizeof rval, "fired:%lld:%s;acked:%d:%d@%lld",
+                 (long long)t->wall_fire, t->msg, acked, total,
+                 (long long)now);
         if (exo_persist(e, rkey, rval, 3600 * 24, err, sizeof err) != 0) {
             fprintf(stderr,
                     "exosched: receipt failed for %s: %s (retrying)\n",
                     t->id, err);
             return 2;
         }
+    }
+
+    /* per-timer delivery receipt key (every fire): delivery:<id>:<epoch> */
+    char dkey[576];
+    char dval[128];
+    snprintf(dkey, sizeof dkey, "delivery:%s:%lld", t->id,
+             (long long)t->wall_fire);
+    snprintf(dval, sizeof dval, "acked %d/%d at %lld", acked, total,
+             (long long)now);
+    if (exo_persist(e, dkey, dval, 3600 * 24, err, sizeof err) != 0) {
+        fprintf(stderr,
+                "exosched: delivery key failed for %s: %s (retrying)\n",
+                t->id, err);
+        return 2;
+    }
+
+    /* cumulative delivery stats (fired / acked / unacked + timestamps) */
+    if (delivery_record(e, acked, total, err, sizeof err) != 0) {
+        fprintf(stderr,
+                "exosched: delivery stats failed for %s: %s (retrying)\n",
+                t->id, err);
+        return 2;
     }
 
     char key[512];
@@ -290,9 +319,10 @@ void *timer_loop(void *arg)
             g_head = t->next;
             t->next = NULL;
             pthread_mutex_unlock(&g_mu);
+            int acked = 0, total = 0;
             if (!t->retry_mono)
-                ws_broadcast(t->id, t->wall_fire, t->msg);
-            int keep = fire_timer(g_exo, t);
+                ws_broadcast(t->id, t->wall_fire, t->msg, &acked, &total);
+            int keep = fire_timer(g_exo, t, acked, total);
             pthread_mutex_lock(&g_mu);
             if (keep == 2) {
                 /* exomind was down: keep the timer, retry the note /

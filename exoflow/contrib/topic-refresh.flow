@@ -1,0 +1,5 @@
+topic refresh
+search	search every tracked topic (topic:index); store topic:<id>:results			600
+fetch	fetch top results per topic; build topic:<id>:snap.new	search		1800
+diffnote	diff snap.new vs topic:<id>:snap; append delta to topic:<id>:note	fetch		120
+loop	every 6h

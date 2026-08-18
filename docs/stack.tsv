@@ -2,8 +2,9 @@
 # port empty = batch tool (no live daemon). Format: exodoc/standard.md section 7.
 # 5th column test_cmd: the in-budget smoke used by the QMS component-tests
 # check (5s audit budget). `-` = documented exception (the full suite is
-# run by `make test-<name>` and exceeds the audit budget; the docs-coverage
-# check accepts `-`).
+# run by `make test-<name>` and exceeds the audit budget).
+# The QMS docs-coverage check gates on files, not the 5th column: every
+# module dir needs a README, test/test.sh and standard.md (or docs/).
 exomind	.	7654		./build/exomind --version
 exosched	exosched	7655		./build/exosched --version
 exoflow	exoflow	7656		./build/exoflow --version

@@ -235,6 +235,7 @@ WS_PID=$!
 wait "$WS_PID" 2>/dev/null
 check "restarted timer still fires + ws push" \
     "$( [ $? -eq 0 ] && grep -q "timer $idp $epochp survive-restart" "$WS_LOG" && echo 0 || echo 1)" "$(cat "$WS_LOG")"
+sleep 0.7 # the ack window closes before the fire note lands
 r=$(curl -s -m 3 "$XM_URL/notes?q=survive-restart")
 check "restarted fire logged in exomind" \
     "$(printf '%s' "$r" | grep -q "fired timer $idp" && echo 0 || echo 1)" "$r"
@@ -490,6 +491,113 @@ check "delivery receipt key exists after fire" \
     "$(printf '%s' "$r" | grep -q '^fired:' && echo 0 || echo 1)" "key=receipt:$rid val=$r"
 r=$(curl -s -m 3 "$XM_URL/get?key=receipt:no-such-timer")
 check "no receipt for never-created timer" "$([ "$r" = "missing" ] && echo 0 || echo 1)" "$r"
+
+# --- delivery receipts: ack tracking + /delivery stats ------------------------
+# quiet the 3 recurring every-2s timers still running from earlier sections
+# (cadence-check, recur-restart, catchup-check) so the cumulative counters
+# are stable while we measure deltas. A cancel can miss a timer that is
+# mid-fire (popped from the registry, reschedules after bookkeeping), so
+# retry until /timers no longer lists it, then drop any durable key that
+# was left behind so a later daemon restart cannot resurrect it.
+for tq in "$idr" "$idp2" "$idq"; do
+    for _ in $(seq 1 30); do
+        curl -s -m 3 -X DELETE "$XS_URL/timer?id=$tq" >/dev/null
+        sleep 0.15
+        n=$(curl -s -m 3 "$XS_URL/timers" | grep -c "^$tq[[:space:]]")
+        [ "$n" = 0 ] && break
+    done
+    curl -s -m 3 -X DELETE "$XM_URL/del?key=exosched:timer:$tq" >/dev/null
+done
+# wait for a fully quiescent counter baseline (no fire in flight)
+for _ in $(seq 1 10); do
+    b1=$(curl -s -m 3 "$XS_URL/delivery")
+    sleep 2
+    b2=$(curl -s -m 3 "$XS_URL/delivery")
+    [ "$b1" = "$b2" ] && break
+    sleep 1
+done
+statv() { curl -s -m 3 "$XS_URL/delivery" | awk -v k="$1" '$0 ~ "^"k": " {print $2}'; }
+df0=$(statv fired); da0=$(statv acked); du0=$(statv unacked)
+check "/delivery prints key: value stats" \
+    "$([ -n "$df0" ] && [ -n "$da0" ] && [ -n "$du0" ] && echo 0 || echo 1)" \
+    "fired='$df0' acked='$da0' unacked='$du0'"
+
+# (a) fired timer with an ACKed client -> fired/acked move, note carries receipt
+python3 wsclient.py $XS_PORT delivery-acked 8 ack >"$WS_LOG" 2>&1 &
+WS_PID=$!
+sleep 0.4
+r=$(curl -s -m 3 -X POST "$XS_URL/remind" -d 'in 1s "delivery-acked" receipt=1')
+ida=$(echo "$r" | awk '{print $2}')
+epda=$(echo "$r" | awk '{print $3}')
+wait "$WS_PID" 2>/dev/null
+sleep 0.6
+df1=$(statv fired); da1=$(statv acked); du1=$(statv unacked)
+check "ack'd fire: fired+1, acked+1, unacked unchanged" \
+    "$( [ $((df1 - df0)) -eq 1 ] && [ $((da1 - da0)) -eq 1 ] && [ $((du1 - du0)) -eq 0 ] && echo 0 || echo 1)" \
+    "fired $df0->$df1 acked $da0->$da1 unacked $du0->$du1"
+r=$(curl -s -m 3 "$XM_URL/notes?q=delivery-acked")
+check "ack'd fire: note carries 'delivery: acked 1/1'" \
+    "$(printf '%s' "$r" | grep -q "fired timer $ida" && printf '%s' "$r" | grep -q 'delivery: acked 1/1 at ' && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 "$XM_URL/get?key=delivery:$ida:$epda")
+check "per-fire delivery key written (acked 1/1)" \
+    "$(printf '%s' "$r" | grep -qE '^acked 1/1 at [0-9]+$' && echo 0 || echo 1)" \
+    "key=delivery:$ida:$epda val=$r"
+r=$(curl -s -m 3 "$XS_URL/delivery?detail=1")
+check "/delivery?detail=1 lists the per-timer receipt" \
+    "$(printf '%s' "$r" | grep -qE "timer $ida $epda acked 1/1 at [0-9]+$" && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 "$XM_URL/get?key=receipt:$ida")
+check "receipt=1 key carries the ack count" \
+    "$(printf '%s' "$r" | grep -qE '^fired:.*;acked:1:1@' && echo 0 || echo 1)" "$r"
+
+# (b) fired timer with NO client connected -> unacked counters move
+r=$(curl -s -m 3 -X POST "$XS_URL/remind" -d 'in 1s "delivery-unacked"')
+idu=$(echo "$r" | awk '{print $2}')
+epdu=$(echo "$r" | awk '{print $3}')
+sleep 2.5
+df2=$(statv fired); da2=$(statv acked); du2=$(statv unacked)
+check "unacked fire: fired+1, unacked+1, acked unchanged" \
+    "$( [ $((df2 - df1)) -eq 1 ] && [ $((du2 - du1)) -eq 1 ] && [ $((da2 - da1)) -eq 0 ] && echo 0 || echo 1)" \
+    "fired $df1->$df2 acked $da1->$da2 unacked $du1->$du2"
+r=$(curl -s -m 3 "$XM_URL/notes?q=delivery-unacked")
+check "unacked fire: note carries 'delivery: acked 0/0'" \
+    "$(printf '%s' "$r" | grep -q "fired timer $idu" && printf '%s' "$r" | grep -q 'delivery: acked 0/0 at ' && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 "$XM_URL/get?key=delivery:$idu:$epdu")
+check "per-fire delivery key written (acked 0/0)" \
+    "$(printf '%s' "$r" | grep -qE '^acked 0/0 at [0-9]+$' && echo 0 || echo 1)" \
+    "key=delivery:$idu:$epdu val=$r"
+r=$(curl -s -m 3 "$XS_URL/delivery")
+check "/delivery shows last_acked_ts and last_unacked_ts" \
+    "$(printf '%s' "$r" | grep -qE '^last_acked_ts: [0-9]+$' && printf '%s' "$r" | grep -qE '^last_unacked_ts: [0-9]+$' && echo 0 || echo 1)" "$r"
+
+# (c) restart -> stats survive
+dl1=$(curl -s -m 3 "$XS_URL/delivery")
+kill "$XS_PID" 2>/dev/null
+stop_port $XS_PORT
+sleep 0.3
+setsid nohup "$XS_BIN" --port $XS_PORT --exomind "$XM_URL" \
+    >"$XS_LOG" 2>&1 < /dev/null &
+XS_PID=$!
+sleep 1
+dl2=$(curl -s -m 3 "$XS_URL/delivery")
+check "delivery stats survive daemon restart" \
+    "$( [ "$(printf '%s\n' "$dl1" | awk '/^fired:/{print $2}')" = "$(printf '%s\n' "$dl2" | awk '/^fired:/{print $2}')" ] && [ "$(printf '%s\n' "$dl1" | awk '/^acked:/{print $2}')" = "$(printf '%s\n' "$dl2" | awk '/^acked:/{print $2}')" ] && [ "$(printf '%s\n' "$dl1" | awk '/^unacked:/{print $2}')" = "$(printf '%s\n' "$dl2" | awk '/^unacked:/{print $2}')" ] && echo 0 || echo 1)" \
+    "$(printf 'before:\n%s\nafter:\n%s' "$dl1" "$dl2")"
+r=$(curl -s -m 3 "$XS_URL/delivery?detail=1")
+check "per-timer receipts survive daemon restart (still listed)" \
+    "$(printf '%s' "$r" | grep -qE "timer $ida $epda acked 1/1" && echo 0 || echo 1)" "$r"
+
+# bad params
+"$XS_BIN" /delivery?foo=1 --exomind "$XM_URL" >/dev/null 2>&1
+rc=$?
+check "console /delivery?foo=1 exits 2 (bad params)" "$([ "$rc" = 2 ] && echo 0 || echo 1)" "rc=$rc"
+"$XS_BIN" /delivery?detail=2 --exomind "$XM_URL" >/dev/null 2>&1
+rc=$?
+check "console /delivery?detail=2 exits 2" "$([ "$rc" = 2 ] && echo 0 || echo 1)" "rc=$rc"
+r=$("$XS_BIN" /delivery --exomind "$XM_URL" 2>/dev/null)
+check "console /delivery prints stats and exits 0" \
+    "$([ "$?" = 0 ] && printf '%s' "$r" | grep -qE '^fired: [0-9]+$' && echo 0 || echo 1)" "$r"
+h=$(curl -s -m 3 -o /dev/null -w '%{http_code}' "$XS_URL/delivery?foo=1")
+check "daemon /delivery?foo=1 -> 400" "$([ "$h" = "400" ] && echo 0 || echo 1)" "h=$h"
 
 # --- auth -----------------------------------------------------------------------
 kill "$XS_PID" 2>/dev/null

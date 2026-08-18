@@ -13,7 +13,7 @@ their results are durable records in exomind.
 This standard applies to every component of the exomind stack (exomind,
 exosched, exoflow, exodoc, exoqms and any future component) and to every
 agent that builds, operates or audits them. Conformance is determined by
-the seven checks of the audit program (section 5); the results of each
+the checks of the audit program (section 5); the results of each
 audit are stored under `exoqms:audit:*` and published to the note feed.
 The standard is normative: "SHALL" is a requirement, "SHOULD" a
 recommendation, "MAY" a permission, in the vocabulary of ISO 9000 3.6.
@@ -73,8 +73,9 @@ closing audit. The dogfood check also measures swarm activity (clause
 ## 5. Audit program (ISO 19011:2018)
 
 5.1 An audit program is created with `POST /audit` (body
-`name<TAB>criteria`, criteria = comma-separated check ids, empty = all
-seven) and stored under `exoqms:audit:<id>`. Each audit records: the
+`name<TAB>criteria`, criteria = comma-separated check ids, empty = the
+full standard program below — `detect` is an alias for the same
+program) and stored under `exoqms:audit:<id>`. Each audit records: the
 criteria executed, the scheduled (run) time, one finding per check
 (check id, result `pass|fail|skip`, evidence line) and a score equal to
 `100 * pass / (pass + fail)` rounded to the nearest integer, where
@@ -99,6 +100,13 @@ hangs the daemon.
 | c6 | `code-safety` | the stack's own C source contains 0 **major** error-handling defects (unchecked returns of critical libc calls, missing error paths, null-deref paths); minor findings are reported but non-fatal | child process `<code> <srcdirs...> --json`; default srcdirs = the manifest dirs (column 2 of `docs/stack.tsv`) resolved against the repo root — the stack audits its own code; `?target=<dir>` overrides; the JSON findings array is parsed for severities; pass iff 0 major |
 | c7 | `asset-logic` | the stack's own SVG assets pass the shape rule-set with 0 **major** findings (minor findings reported but non-fatal) | child process `<svg> <target> --shape auto --json`; target = audit `?target=` or the repo root; the JSON findings array is parsed for severities; pass iff 0 major |
 | c8 | `agent-health` | no agent is silently frozen: every configured agent whose exosched reminder has fired has either activity notes AFTER the fire or an `agent:<id>:done` deliverable marker | exomind `GET /notes?limit=500&q=fired` (fired-timer notes, agent ids extracted from `agent:<id>` tokens) vs `GET /notes?limit=100&q=agent%3A<id>` (agent activity, fired notes excluded) + `GET /get agent:<id>:done`; fail lists the frozen agents with both timestamps — the orchestrator then redeploys the agent or takes the task over |
+| c9 | `debt` | `debt-*` findings from the rules scan do not exceed the `thresholds.debt` from `.exoqms.json` (default 10) | the shared `exoqms-code <repo> --rules <dir> --json` scan, findings partitioned by check-id prefix `debt-*`; `--code` and rule files required, else `skip` |
+| c10 | `hygiene` | 0 `hygiene-*` findings from the rules scan | same shared rules scan as c9, partitioned by `hygiene-*` |
+| c11 | `secrets` | 0 `secrets-*` findings from the rules scan | same shared rules scan, partitioned by `secrets-*`; matched lines are masked to `***` in the evidence; path substrings from `.exoqms.json` `secrets_allow` exclude findings |
+| c12 | `docs-coverage` | every module listed in `docs/stack.tsv` ships a README, a runnable test suite at `test/test.sh` and a standards reference (`standard.md` or a `docs/` directory) in its module dir | filesystem checks per manifest row (`name<TAB>dir`); without a manifest the repo root itself is the module (universal mode); fail names each missing file per module |
+| c13 | `kit-fidelity` | when the repo carries a `kit/`, the contract ledger audits green (every contract entry exemplified and verified) | child process `<kit> audit --kit <repo>/kit --json`; exit 0 = pass, major findings = fail; skipped without `--kit` or without a `kit/` directory |
+| c14 | `memory-awareness` | when exomind carries a `mandate` key, every configured agent has acknowledged it via `agent:<id>:ready` | exomind `GET /get mandate` + `GET /get agent:<id>:ready` per agent; skipped when no mandate is set; fail lists the agents that have not acknowledged |
+| c15 | `issue-tracking` | no issue in the detection registry is recurring: every `issue:<check>` record with status `open` must have `consec` < 2 | exomind `GET /list?prefix=issue:` then `GET /get` per key; the registry is written by every audit finding (`issue:<check>` upserted per audit); fail lists `RECURRING <check>` entries with their counters |
 
 5.4 Severity rule for the field-module checks (c4–c7 except c6's
 variant): the modules grade each finding `major` or `minor`. A check

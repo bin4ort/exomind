@@ -25,20 +25,30 @@ exomind keys (`todo:*`) as well — the memory is the source of truth.
 
 ## Priority 2 — the universal QMS
 
-- [ ] **More language adapters in exoqms-code**: Go (unchecked errors are
+- [x] **More language adapters in exoqms-code**: Go (unchecked errors are
       THE Go bug class — `err` ignored), Rust (unwrap/expect audit),
       JavaScript/TypeScript (promise rejection without catch), and a
-      Dockerfile/CI yaml hygiene rule set (best-effort, line-based).
-- [ ] **QMS check `docs-coverage`** — require every new module to carry
+      Dockerfile/CI yaml hygiene rule set (best-effort, line-based) —
+      DONE: `go_scan`/`rust_scan`/`js_scan`/`docker_scan` in
+      `exoqms/code/src/linemodes.c` (go-unchecked-err, rust-unwrap,
+      js-eval, docker-unpinned ...) + adapter fixtures in
+      `exoqms/code/test/test.sh`.
+- [x] **QMS check `docs-coverage`** — require every new module to carry
       README + tests + standard.md conformance before merge (partly done
-      by exodoc; wire it into the audit program as a hard gate).
+      by exodoc; wire it into the audit program as a hard gate) — DONE:
+      the check gates every manifest module (or the repo root) on
+      README + `test/test.sh` + `standard.md`/`docs/`, is part of the
+      default `audit` program (`/audit?criteria=detect`), and is tested
+      in `exoqms/test/test.sh` (145/0).
 - [x] **QMS check `agent-health`** — DONE (see Priority 1).
 - [ ] **Trends: iteration velocity** — track time-to-merge per feature
       and rework rate in `metric:*`; the QMS already computes the trend;
       add a "rework" derived metric (test-failure→fix cycles).
-- [ ] **Secrets check: allowlist per project** — `.exoqms.json` gains
+- [x] **Secrets check: allowlist per project** — `.exoqms.json` gains
       `secrets_allow` (pattern:path) so test fixtures with fake keys are
-      declared instead of ignored wholesale.
+      declared instead of ignored wholesale — DONE: `secrets_allow`
+      parsed in `exoqms/src/project.c` (line 139) and applied in the
+      `secrets` check (`exoqms/src/checks.c`).
 
 ## Priority 3 — stack robustness
 
@@ -49,13 +59,19 @@ exomind keys (`todo:*`) as well — the memory is the source of truth.
       pages that fool the boilerplate heuristics (sticky promos, cookie
       banners with unusual classes) as fixtures; extraction quality
       becomes a measured, testable number.
-- [ ] **exomind: prefix-index for /list and /search** — the hash index is
+- [x] **exomind: prefix-index for /list and /search** — the hash index is
       exact-key; a sorted key prefix index would make `prefix=` queries
-      O(log n + k) instead of full scans at 10k+ keys.
+      O(log n + k) instead of full scans at 10k+ keys — DONE: sorted
+      candidate index (`src/store.c`) with prefix range walks
+      (`list_keys`, `search_keys`) at ~line 492; benchmarked in
+      `test/test.sh`.
 - [ ] **exomind: replication** — follower nodes tail the log for HA; the
       log format already supports it (append-only + CRC).
-- [ ] **exosched: delivery receipts** — a fired timer's note should
-      record whether any WS client ACKed; expose `/delivery` stats.
+- [x] **exosched: delivery receipts** — a fired timer's note should
+      record whether any WS client ACKed; expose `/delivery` stats —
+      DONE: `delivery.c` tracks per-fire ack/none, fired note carries
+      `delivery:ack`/`delivery:none`, `GET /delivery` exposes stats;
+      tested in `exosched/test/test.sh` (lines 485+).
 - [x] **exoflow: timeout steps** — DONE: 5th column `timeout_s`; claim
       sets deadline = now + timeout; lazy sweep marks overdue; unclaim
       resets the clock; 109/109 tests.

@@ -32,6 +32,7 @@ FAIL=0
 XM_PID=""
 XS_PID=""
 XF_PID=""
+MOCK_PID=""
 
 say() { printf '%s\n' "$*"; }
 
@@ -60,6 +61,8 @@ cleanup() {
     [ -n "$XF_PID" ] && kill "$XF_PID" 2>/dev/null
     [ -n "$XS_PID" ] && kill "$XS_PID" 2>/dev/null
     [ -n "$XM_PID" ] && kill "$XM_PID" 2>/dev/null
+    [ -n "${MOCK_PID:-}" ] && kill "$MOCK_PID" 2>/dev/null
+    pkill -f 'mock_research[.]py' 2>/dev/null
     stop_port $XF_PORT
     stop_port $XS_PORT
     stop_port $XM_PORT
@@ -794,6 +797,131 @@ check "--serve --port binds and answers" \
     "$([ "$r" = "pong" ] && echo 0 || echo 1)" "$r"
 kill "$CSV" 2>/dev/null
 stop_port $CONSOLE_PORT
+
+# --- tracked-topic refresh: contrib flow + research-loop worker --------------
+# (exocrawl re-research: an exoflow loop re-runs search -> fetch -> diff-note
+# for tracked topics so stale knowledge self-refreshes; tested here against
+# the suite's private exomind/exoflow with mock_research.py as exocrawl)
+RESEARCH="$ROOT/exoflow/contrib/research-loop.sh"
+MPORT=$((18900 + RANDOM % 100))
+MR_URL="http://127.0.0.1:$MPORT"
+MR_STATE="$WORK/mr.state"
+rm -f "$MR_STATE"
+python3 mock_research.py "$MPORT" "$MR_STATE" >"$WORK/mr.log" 2>&1 &
+MOCK_PID=$!
+sleep 0.6
+r=$(curl -s -m 3 "$MR_URL/search?q=ping&n=1")
+check "mock exocrawl answers /search" \
+    "$(printf '%s' "$r" | grep -q 'Mock result 1 for ping' && echo 0 || echo 1)" "$r"
+
+# --- topic registry ops ------------------------------------------------------
+r=$("$RESEARCH" -m "$XM_URL" add tlunit 'unit topic query' 3 2>/dev/null)
+check "research-loop add tracks a topic" \
+    "$([ "$r" = "tracked tlunit" ] && echo 0 || echo 1)" "$r"
+r=$("$RESEARCH" -m "$XM_URL" list 2>/dev/null)
+check "research-loop list shows id + query" \
+    "$(printf '%s' "$r" | grep -q '^tlunit	unit topic query$' && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 "$XM_URL/get?key=topic:index")
+check "topic:index registry key maintained" \
+    "$(printf '%s' "$r" | grep -qw tlunit && echo 0 || echo 1)" "$r"
+"$RESEARCH" -m "$XM_URL" add 'bad id' 'q' >/dev/null 2>&1
+RC=$?
+check "bad topic id rejected (exit 1)" \
+    "$([ "$RC" = "1" ] && echo 0 || echo 1)" "$RC"
+
+# --- diff-note unit (no exocrawl needed) --------------------------------------
+"$RESEARCH" -m "$XM_URL" add dm 'diff unit' 1 >/dev/null 2>&1
+curl -s -m 3 -X POST "$XM_URL/set?key=topic:dm:snap" --data-binary $'alpha line\nbeta line' >/dev/null
+curl -s -m 3 -X POST "$XM_URL/set?key=topic:dm:snap.new" --data-binary $'beta line\ngamma line' >/dev/null
+"$RESEARCH" -m "$XM_URL" diffnote >/dev/null 2>&1
+N=$(curl -s -m 3 "$XM_URL/get?key=topic:dm:note")
+check "diff-note appends only the delta, timestamped" \
+    "$(printf '%s' "$N" | grep -q '^=== ' && printf '%s' "$N" | grep -q '^gamma line$' && ! printf '%s' "$N" | grep -q '^alpha line$' && ! printf '%s' "$N" | grep -q '^beta line$' && echo 0 || echo 1)" "$N"
+check "diff-note block header is one timestamped line" \
+    "$([ "$(printf '%s' "$N" | grep -c '^=== ')" = "1" ] && echo 0 || echo 1)" "$N"
+S=$(curl -s -m 3 "$XM_URL/get?key=topic:dm:snap")
+check "diff-note promotes the new snapshot" \
+    "$(printf '%s' "$S" | grep -q '^beta line$' && printf '%s' "$S" | grep -q '^gamma line$' && echo 0 || echo 1)" "$S"
+check "diff-note clears snap.new" \
+    "$(curl -s -m 3 "$XM_URL/get?key=topic:dm:snap.new" | grep -q missing && echo 0 || echo 1)"
+curl -s -m 3 -X POST "$XM_URL/set?key=topic:dm:snap.new" --data-binary $'beta line\ngamma line' >/dev/null
+"$RESEARCH" -m "$XM_URL" diffnote >/dev/null 2>&1
+NA=$(curl -s -m 3 "$XM_URL/get?key=topic:dm:note")
+check "diff-note: identical refresh -> silence (nothing appended)" \
+    "$([ "$N" = "$NA" ] && echo 0 || echo 1)" "$NA"
+
+# --- flow definition validity + fast-forwarded loop run -----------------------
+"$RESEARCH" -m "$XM_URL" add fl 'mock knowledge refresh' 3 >/dev/null 2>&1
+sed $'s/every 6h/every 1s\tmax 5/' "$ROOT/exoflow/contrib/topic-refresh.flow" \
+    > "$WORK/refresh-flow.txt"
+r=$(curl -s -m 3 -X POST "$XF_URL/flow" --data-binary @"$WORK/refresh-flow.txt")
+RLF=$(echo "$r" | awk '{print $2}')
+check "topic-refresh flow creates with 3 steps" \
+    "$([ -n "$RLF" ] && [ "$(echo "$r" | awk '{print $3}')" = "3" ] && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 "$XF_URL/flows")
+check "refresh flow listed by /flows" \
+    "$(printf '%s' "$r" | grep -q "$RLF" && echo 0 || echo 1)" "$r"
+r=$(curl -s -m 3 "$XF_URL/flow?id=$RLF")
+check "refresh flow spec: search/fetch/diffnote steps + loop" \
+    "$(printf '%s' "$r" | grep -q '^step	search	' && printf '%s' "$r" | grep -q '^step	fetch	' && printf '%s' "$r" | grep -q '^step	diffnote	' && printf '%s' "$r" | grep -q 'loop.*every 1s' && echo 0 || echo 1)" "$r"
+check "refresh loop listed by /loops" \
+    "$(curl -s -m 3 "$XF_URL/loops" | grep -q "$RLF" && echo 0 || echo 1)"
+r=$(curl -s -m 3 -X POST "$XF_URL/flow" --data-binary @"$ROOT/exoflow/contrib/topic-refresh.flow")
+PLF=$(echo "$r" | awk '{print $2}')
+check "production flow file (every 6h) is accepted" \
+    "$([ -n "$PLF" ] && curl -s -m 3 "$XF_URL/flow?id=$PLF" | grep -q 'every 21600s' && echo 0 || echo 1)" "$r"
+curl -s -m 3 -X DELETE "$XF_URL/flow?id=$PLF" >/dev/null
+
+DRV() { # drive the loop with the real worker (quiet)
+    timeout 90 "$RESEARCH" -q -u "$XF_URL" -f "$RLF" -w rworker -m "$XM_URL" \
+        -X "$MR_URL" >/dev/null 2>&1
+}
+# -M 3: stop after the current iteration's 3 steps so later iterations time
+# their spawns against the state-file change (see the poll loop below)
+timeout 90 "$RESEARCH" -q -u "$XF_URL" -f "$RLF" -w rworker -m "$XM_URL" \
+    -X "$MR_URL" -M 3 >/dev/null 2>&1
+N=$(curl -s -m 3 "$XM_URL/get?key=topic:fl:note")
+check "iteration 1 seeds the topic note (search+fetch+diff-note)" \
+    "$(printf '%s' "$N" | grep -q '^=== ' && printf '%s' "$N" | grep -q 'Paragraph alpha.' && printf '%s' "$N" | grep -q 'Paragraph beta.' && echo 0 || echo 1)" "$N"
+S=$(curl -s -m 3 "$XM_URL/get?key=topic:fl:snap")
+check "snapshot after refresh holds the fetched page" \
+    "$(printf '%s' "$S" | grep -q 'Paragraph beta.' && echo 0 || echo 1)" "$S"
+r=$(curl -s -m 3 "$XM_URL/get?key=topic:fl:results")
+check "search step cached topic:<id>:results" \
+    "$(printf '%s' "$r" | grep -qF $'http://research.test/p1\tMock result 1 for mock knowledge refresh\t' && echo 0 || echo 1)" "$r"
+
+# change the world, refresh again: only the new line may enter the note
+printf 'Flash news: mock world changed.\n' > "$MR_STATE"
+for i in $(seq 1 40); do
+    DRV
+    N=$(curl -s -m 3 "$XM_URL/get?key=topic:fl:note")
+    printf '%s' "$N" | grep -q 'Flash news: mock world changed.' && break
+    sleep 0.5
+done
+check "second iteration appends only the new line (2 blocks)" \
+    "$(printf '%s' "$N" | grep -q 'Flash news: mock world changed.' && [ "$(printf '%s' "$N" | grep -c '^=== ')" = "2" ] && echo 0 || echo 1)" "$N"
+
+# fast-forward the loop: every 1s x max 5 spawns exactly 5 records, all done
+for i in $(seq 1 60); do
+    DRV
+    iters_ge "$RLF" 5 && latest_done "$RLF" && break
+    sleep 0.5
+done
+check "loop fast-forwards to exactly max 5 iterations" \
+    "$([ "$(count_iters "$RLF")" = "5" ] && echo 0 || echo 1)" "$(count_iters "$RLF")"
+LAST=$(newest_iter "$RLF")
+r=$(curl -s -m 3 "$XF_URL/flow?id=$LAST")
+check "newest iteration: all steps done (search/fetch/diffnote)" \
+    "$(printf '%s' "$r" | awk -F '\t' '/^step/ { if ($3!="done") bad=1 } END { exit bad?1:0 }' && echo 0 || echo 1)" "$r"
+
+# stable world: further refreshes append nothing (silence is information)
+N1=$(curl -s -m 3 "$XM_URL/get?key=topic:fl:note")
+DRV
+sleep 1
+DRV
+N2=$(curl -s -m 3 "$XM_URL/get?key=topic:fl:note")
+check "stable world: note unchanged across further refreshes" \
+    "$([ "$N1" = "$N2" ] && echo 0 || echo 1)"
 
 say ""
 say "=== results: $PASS passed, $FAIL failed ==="

@@ -12,7 +12,7 @@ stack reference (this file has the complete exosched documentation).
 
 ```
 make exosched        # builds exosched/build/exosched (from the repo root)
-make test-exosched   # runs exosched/test/test.sh (66 checks, ~2.5min)
+make test-exosched   # runs exosched/test/test.sh (82 checks, ~3min)
 ```
 
 ## build
@@ -75,6 +75,7 @@ work as before.
 | GET    | /timers              | active timers (`json=1` for JSON)   |
 | DELETE | /timer?id=<id>       | cancel a timer: `ok` or `missing`   |
 | GET    | /ws                  | WebSocket push channel (RFC 6455)   |
+| GET    | /delivery            | delivery receipts stats (see below) |
 
 Errors are `error: <reason>` with HTTP 4xx/5xx.
 
@@ -119,8 +120,47 @@ timer to every connected client:
 timer <id> <epoch> <message>
 ```
 
-Clients send nothing; close frames are answered and the socket closed,
+Clients may ACK a push with a masked text frame `ack <id> <epoch>`; the
+server waits a short ack window (500ms) and records the outcome (see
+`/delivery` below). Close frames are answered and the socket closed,
 dead clients are purged on the next broadcast, pings get pongs.
+
+## delivery receipts
+
+Two kinds of delivery records, all durable in exomind (the only source
+of truth):
+
+- **Per-fire receipts.** When a timer fires, the note written to exomind
+  gains a delivery suffix
+
+      fired timer <id>: <msg> at <epoch> [delivery: acked 1/2 at <ts>]
+
+  and a 24h key `delivery:<id>:<epoch>` = `acked <n>/<total> at <ts>` is
+  written, so agents can prove a reminder fired, whether any WS client
+  ACKed the push, and how many (of the clients the frame reached).
+- **Cumulative stats.** The durable key `exosched:delivery` counts every
+  recorded fire: `fired`, `acked` (fires with >= 1 ACK), `unacked` (no
+  ACK, including no client connected), plus `last_acked_ts` and
+  `last_unacked_ts`. The counters survive daemon restarts.
+
+`GET /delivery` prints the counters as `key: value` lines (exit 0; bad
+params such as an unknown query key exit 2 in console mode / 400 over
+HTTP):
+
+```
+fired: 3
+acked: 2
+unacked: 1
+last_acked_ts: 1786740701
+last_unacked_ts: 1786740702
+```
+
+`?detail=1` appends the per-timer receipt list, one line per fired timer
+still inside its 24h window:
+
+```
+timer 1786740710:1a2b3c4d 1786740710 acked 1/1 at 1786740710
+```
 
 ## design
 
@@ -137,10 +177,12 @@ Add `receipt=1` to any reminder body to request a delivery receipt:
 
     in 10m "weekly backup" receipt=1
 
-When the timer fires, exomind receives `receipt:<id>` = `fired:<epoch>:<msg>`
-(24 h TTL) in addition to the note. Agents can therefore prove a reminder
-was actually fired (checking the key exists) instead of trusting a note
-that might have been dropped during an exomind outage.
+When the timer fires, exomind receives `receipt:<id>` =
+`fired:<epoch>:<msg>;acked:<n>:<total>@<ts>` (24 h TTL) in addition to
+the note. Agents can therefore prove a reminder was actually fired
+(checking the key exists) and whether any WS client ACKed the push,
+instead of trusting a note that might have been dropped during an
+exomind outage.
 
 ## limitations
 
@@ -177,6 +219,12 @@ The console surface is covered too: no-args prints the guide without
 binding, a one-shot `/remind` (body via `--body` and via a piped
 stdin) plus `/timers` listing it, API errors exit 1, the daemon binds
 with `--serve --port` and answers, and `--version` keeps working.
+Delivery receipts are covered end to end: an ACKed fire moves
+`fired`/`acked` and stamps `last_acked_ts` while the note carries
+`delivery: acked 1/1`, a fire with no client connected moves
+`unacked`, the counters and `delivery:*` keys survive a daemon
+restart, `?detail=1` lists the per-timer receipts, and bad `/delivery`
+params exit 2 (console) / 400 (daemon).
 
 ## License
 

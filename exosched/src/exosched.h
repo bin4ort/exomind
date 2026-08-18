@@ -91,9 +91,23 @@ long timer_ttl(int64_t fire);
 
 /* ---- ws.c : RFC 6455 push channel ---- */
 void ws_init(void);
-void ws_broadcast(const char *id, int64_t epoch, const char *msg);
+/* pushes one text frame per client and waits a short ack window for client
+ * `ack <id> <epoch>` text frames; *acked = distinct clients that ACKed,
+ * *total = clients the frame was delivered to */
+void ws_broadcast(const char *id, int64_t epoch, const char *msg,
+                  int *acked, int *total);
 void ws_handle_conn(int fd);
 int ws_make_accept(const char *key, char *accept, size_t cap);
+
+/* ---- delivery.c : delivery receipts + cumulative stats ----
+ * per-fire outcome lives in the fired note, the 24h key delivery:<id>:<epoch>
+ * and the durable `exosched:delivery` counter key (exomind = source of
+ * truth, same scheme as timers). */
+#define DELIVERY_KEY "exosched:delivery"
+int delivery_load(exo_t *e);   /* read counters from exomind (once) */
+int delivery_record(exo_t *e, int acked, int total, char *err, size_t errsz);
+void delivery_format(buf_t *out); /* "key: value" lines for /delivery */
+void delivery_detail(exo_t *e, buf_t *out); /* per-timer receipt lines */
 
 /* ---- http.c : exosched's own HTTP layer ---- */
 /* returns 1 if the connection was consumed (websocket upgrade: fd closed by

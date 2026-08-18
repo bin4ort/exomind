@@ -49,19 +49,25 @@ cc -O2 -std=c11 -Wall -Wextra -pthread -D_POSIX_C_SOURCE=200809L \
     -o "$TDIR/exomind"
 
 # ---------- fixtures --------------------------------------------------------
-mkdir -p "$TDIR/repo/docs" "$TDIR/repo/okc" "$TDIR/repo/kit" \
+mkdir -p "$TDIR/repo/docs" "$TDIR/repo/okc/test" "$TDIR/repo/kit" \
          "$TDIR/badrepo/docs" "$TDIR/badrepo/badcomp"
 
 cat > "$TDIR/repo/docs/stack.tsv" <<EOF
 # b1 exoqms fixture manifest: name<TAB>dir<TAB>port<TAB>build_cmd<TAB>test_cmd<TAB>version_flag
-okc	okc		make	bash test.sh	
+okc	okc		make	bash test/test.sh	
 EOF
-cat > "$TDIR/repo/okc/test.sh" <<'EOF'
+cat > "$TDIR/repo/okc/test/test.sh" <<'EOF'
 #!/bin/sh
 echo "okc: 17 passed, 0 failed"
 exit 0
 EOF
-chmod +x "$TDIR/repo/okc/test.sh"
+chmod +x "$TDIR/repo/okc/test/test.sh"
+cat > "$TDIR/repo/okc/standard.md" <<'EOF'
+# okc standard v1.0.0 — fixture standard
+
+The fixture component's conformance statement. This file exists so the
+docs-coverage check can find a standards reference.
+EOF
 cat > "$TDIR/repo/okc/README.md" <<EOF
 # okc — compliant fixture component
 
@@ -89,7 +95,7 @@ State is kept in exomind only.
 
 ## Tests
 
-bash test.sh
+bash test/test.sh
 
 ## Limitations
 
@@ -342,8 +348,8 @@ AUDID=$(printf '%s' "$AUD" | awk '{print $2}')
 t_contains "full audit runs, ok + score" "ok $AUDID 100%" "$AUD"
 REP=$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$AUDID")
 fcount() { printf '%s\n' "$REP" | awk -F'\t' -v c="$1" -v r="$2" '$1==c && $2==r {n++} END {print n+0}'; }
-t "audit report has 8 findings" 8 \
-    "$(printf '%s\n' "$REP" | awk -F'\t' '$1=="component-tests"||$1=="doc-compliance"||$1=="dogfood"||$1=="ui-audit"||$1=="metrics"||$1=="code-safety"||$1=="asset-logic"||$1=="kit-fidelity" {n++} END {print n+0}')"
+t "audit report has 9 findings" 9 \
+    "$(printf '%s\n' "$REP" | awk -F'\t' '$1=="component-tests"||$1=="doc-compliance"||$1=="dogfood"||$1=="ui-audit"||$1=="metrics"||$1=="code-safety"||$1=="asset-logic"||$1=="docs-coverage"||$1=="kit-fidelity" {n++} END {print n+0}')"
 t "kit-fidelity passed in default program" 1 "$(fcount kit-fidelity pass)"
 t "component-tests passed" 1 "$(fcount component-tests pass)"
 t "doc-compliance passed" 1 "$(fcount doc-compliance pass)"
@@ -352,10 +358,27 @@ t "ui-audit skipped (no target)" 1 "$(fcount ui-audit skip)"
 t "metrics passed" 1 "$(fcount metrics pass)"
 t "code-safety passed (manifest dirs, 0 major)" 1 "$(fcount code-safety pass)"
 t "asset-logic passed (repo root, 0 major)" 1 "$(fcount asset-logic pass)"
+t "docs-coverage passed in default program" 1 "$(fcount docs-coverage pass)"
 t_contains "doc evidence has exodoc score" "score" "$REP"
 t "audits list has 1 line" 1 "$(timeout 5 curl -s "$BASE:$QMS_A/audits" | grep -c .)"
 t_nc "unknown check id rejected" \
     "$(timeout 5 curl -s -d $'x\tnosuchcheck' $BASE:$QMS_A/audit)"
+
+# ---- docs-coverage (merge gate: README + test/test.sh + standard) ----------
+DC1=$(timeout 20 curl -s -d $'docs ok\tdocs-coverage' $BASE:$QMS_A/audit)
+DC1ID=$(printf '%s' "$DC1" | awk '{print $2}')
+t "docs-coverage passes when every module ships the files" 1 \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$DC1ID" | awk -F'\t' '$1=="docs-coverage" && $2=="pass" {n++} END {print n+0}')"
+t_contains "docs-coverage evidence counts the modules" "1/1 modules" \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$DC1ID")"
+
+DC2=$(timeout 20 curl -s -d $'docs bad\tdocs-coverage' $BASE:$QMS_C/audit)
+DC2ID=$(printf '%s' "$DC2" | awk '{print $2}')
+DC2REP=$(timeout 5 curl -s "$BASE:$QMS_C/audit?id=$DC2ID")
+t "docs-coverage fails on missing README/test/standard" 1 \
+    "$(printf '%s\n' "$DC2REP" | awk -F'\t' '$1=="docs-coverage" && $2=="fail" {n++} END {print n+0}')"
+t_contains "docs-coverage failure names the module" "badcomp" "$DC2REP"
+t_contains "docs-coverage failure names the missing files" "test/test.sh" "$DC2REP"
 
 # ---- agent-health (freeze detection) ---------------------------------------
 # simulate: a fired exosched reminder for a silent agent (exosched writes
@@ -622,7 +645,7 @@ t "garbage request tolerated" 1 \
     "$(printf '%s' "$GARB" | grep -cE 'HTTP/1.1 (400|404|200)')"
 t "daemon alive after fuzz" "pong" "$(timeout 5 curl -s $BASE:$QMS_A/ping)"
 t_contains "audit json parses" 1 \
-    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$AUDID&json=1" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(1 if d["score"]==100 and len(d["findings"])==8 else 0)')"
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$AUDID&json=1" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(1 if d["score"]==100 and len(d["findings"])==9 else 0)')"
 t_contains "audits json parses" 1 \
     "$(timeout 5 curl -s "$BASE:$QMS_A/audits?json=1" | python3 -c 'import sys,json;print(1 if len(json.load(sys.stdin))>=4 else 0)')"
 
@@ -640,6 +663,10 @@ CONA=$(timeout 20 ./build/exoqms /audit?criteria=metrics --exomind $EM \
 t "console: /audit?criteria= runs in-process, exit 0" 0 "$rc"
 t_contains "console: audit scores the metrics check" "ok " "$CONA"
 t_contains "console: audit verdict is a percentage" "100%" "$CONA"
+t_contains "console: criteria=detect aliases to the standard program" "ok " \
+    "$(timeout 40 ./build/exoqms /audit?criteria=detect --exomind $EM \
+      --repo "$TDIR/repo" --ui "$TDIR/stub-ui" --code "$TDIR/stub-code" \
+      --kit "$TDIR/stub-kit" --svg "$TDIR/stub-svg" 2>/dev/null)"
 t_contains "console: /report works in-process" "objectives_summary" \
     "$(timeout 5 ./build/exoqms /report --exomind $EM 2>/dev/null)"
 t_contains "console: /issues lists the registry" "code-safety" \

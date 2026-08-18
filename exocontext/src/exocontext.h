@@ -7,6 +7,11 @@
 #define EXOCONTEXT_VERSION "0.4.0-alpha.1"
 #define MAX_CONTEXT_BUDGET (256u * 1024u)
 
+/* ---- session auto-compression ---- */
+#define CTX_SUMMARY_SUFFIX ":summary"
+#define CTX_BUDGET_DEFAULT (16u * 1024u)
+#define CTX_SUMMARY_MAX_LINES 64
+
 /* ---- util.c ---- */
 void *xmalloc(size_t n);
 void *xcalloc(size_t n, size_t sz);
@@ -55,6 +60,7 @@ int exo_batch_get(exo_t *e, char **keys, size_t n, char ***vals,
 /* ---- context.c / main.c ---- */
 void ctx_build(exo_t *e, const char *agent, size_t budget, buf_t *out,
                char *err, size_t errsz);
+int ctx_compress(exo_t *e, const char *agent, char *err, size_t errsz);
 int http_handle_conn(int fd, exo_t *e);
 void http_set_token(const char *tok);
 

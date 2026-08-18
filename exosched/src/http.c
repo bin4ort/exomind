@@ -284,6 +284,7 @@ const char *http_spec_text(void)
         "| GET    | /timers              | active timers (json=1 for JSON)     |\n"
         "| DELETE | /timer?id=<id>       | cancel a timer: `ok` or `missing`   |\n"
         "| GET    | /ws                  | WebSocket push channel (RFC 6455)   |\n"
+        "| GET    | /delivery            | delivery receipts stats (see below) |\n"
         "\n"
         "## scheduling\n"
         "\n"
@@ -296,8 +297,10 @@ const char *http_spec_text(void)
         "    every 10m \"check the pipeline\"\n"
         "    every 30s \"nudge\" until 1786740704\n"
         "Add `receipt=1` to the body to get a delivery receipt: when the\n"
-        "timer fires, exomind gets `receipt:<id>` = `fired:<epoch>:<msg>`\n"
-        "(24h TTL), so agents can prove a reminder was actually fired.\n"
+        "timer fires, exomind gets `receipt:<id>` =\n"
+        "`fired:<epoch>:<msg>;acked:<n>:<total>@<ts>` (24h TTL), so agents\n"
+        "can prove a reminder was actually fired and whether any WS client\n"
+        "ACKed the push.\n"
         "\n"
         "Units: s, m, h, d. `every <n><unit> \"msg\"` schedules a RECURRING\n"
         "timer that fires every <n><unit>; the optional `until <epoch>` suffix\n"
@@ -321,8 +324,36 @@ const char *http_spec_text(void)
         "\n"
         "    timer <id> <epoch> <message>\n"
         "\n"
-        "to every connected client. No client input is required; close and\n"
+        "to every connected client. Clients may ACK a push with the text\n"
+        "frame `ack <id> <epoch>`; the server waits a short ack window and\n"
+        "records whether any client acknowledged (see /delivery). Close and\n"
         "ping frames are handled.\n"
+        "\n"
+        "## delivery receipts\n"
+        "\n"
+        "Every fire records its delivery outcome - whether at least one WS\n"
+        "client ACKed the push, and how many. Three durable records, all in\n"
+        "exomind:\n"
+        "\n"
+        "    fired note:     ... [delivery: acked <n>/<total> at <ts>]\n"
+        "    key 24h TTL:    delivery:<id>:<epoch> = acked <n>/<total> at <ts>\n"
+        "    counters (10y): exosched:delivery = fired/acked/unacked + ts\n"
+        "\n"
+        "GET /delivery prints the cumulative counters, one `key: value` per\n"
+        "line:\n"
+        "\n"
+        "    fired: 3\n"
+        "    acked: 2\n"
+        "    unacked: 1\n"
+        "    last_acked_ts: 1786740701\n"
+        "    last_unacked_ts: 1786740702\n"
+        "\n"
+        "`fired` counts every recorded fire, `acked` the fires where at least\n"
+        "one client ACKed, `unacked` the rest (including fires with no\n"
+        "client connected). Add `?detail=1` to append the per-timer receipt\n"
+        "list, one `timer <id> <epoch> acked <n>/<total> at <ts>` per fired\n"
+        "timer still inside its 24h window. The counters survive restarts\n"
+        "(reloaded from exomind at startup).\n"
         "\n"
         "## durability\n"
         "\n"
@@ -353,6 +384,7 @@ const char *http_spec_text(void)
         "    exosched /remind --body 'in 5m \"water the plants\"'\n"
         "    exosched /timers\n"
         "    exosched /timer?id=<id>\n"
+        "    exosched /delivery\n"
         "\n"
         "exit status: 0 on success, 1 on an API error (>= 400), 2 = usage.\n"
         "\n"
@@ -417,6 +449,23 @@ static int make_timer_id(char *id, size_t cap)
     return -1;
 }
 
+/* /delivery accepts no params except the documented `detail=1` */
+static int delivery_params_ok(const char *qs, int *detail)
+{
+    *detail = 0;
+    const char *p = qs;
+    while (p && *p) {
+        const char *amp = strchr(p, '&');
+        size_t seglen = amp ? (size_t)(amp - p) : strlen(p);
+        if (seglen == 8 && strncmp(p, "detail=1", 8) == 0)
+            *detail = 1;
+        else
+            return 0;
+        p = amp ? amp + 1 : NULL;
+    }
+    return 1;
+}
+
 static void route(req_t *r, exo_t *e, buf_t *out, int *status,
                   const char **ctype)
 {
@@ -431,6 +480,24 @@ static void route(req_t *r, exo_t *e, buf_t *out, int *status,
     }
     if (!strcmp(path, "/ping")) {
         buf_puts(out, "pong");
+        return;
+    }
+
+    if (!strcmp(path, "/delivery")) {
+        if (strcmp(r->method, "GET")) {
+            *status = 405;
+            buf_puts(out, "error: use GET");
+            return;
+        }
+        int detail = 0;
+        if (!delivery_params_ok(r->query, &detail)) {
+            *status = 400;
+            buf_puts(out, "error: bad params (only ?detail=1 is accepted)");
+            return;
+        }
+        delivery_format(out);
+        if (detail)
+            delivery_detail(e, out);
         return;
     }
 

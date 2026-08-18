@@ -200,9 +200,10 @@ evidence; **ISO 9004** sustained success → the trend verdict and
 stagnation flag; **ISO 19011** audit programs → `POST /audit` with
 named programs, criteria and durable records.
 
-The audit program has **seven checks** (see `exoqms/standard.md` §5):
+The audit program's default (and `detect`) criteria run nine checks
+(see `exoqms/standard.md` §5 for the full fifteen-check normative set):
 `component-tests`, `doc-compliance`, `dogfood`, `ui-audit`, `metrics`,
-plus the iteration-6 field checks `code-safety` and `asset-logic`.
+`code-safety`, `asset-logic`, `docs-coverage` and `kit-fidelity`.
 
 **Field modules.** The QMS's batch analysis engines live as sibling
 components under `exoqms/`, each a zero-dependency C11 binary with

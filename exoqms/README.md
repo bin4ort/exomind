@@ -9,8 +9,9 @@ exomind's note feed. Its durable state lives entirely inside
 [exomind](../README.md) under `exoqms:*` keys, so the QMS itself is
 auditable and survives restarts like every other layer.
 
-The audit program runs the seven checks defined in
-[`standard.md`](standard.md), invoking [`exodoc`](../exodoc/README.md)
+The audit program runs the fifteen checks defined in
+[`standard.md`](standard.md) (the default `detect` criteria run nine of
+them), invoking [`exodoc`](../exodoc/README.md)
 (the documentation auditor), [`exoqms-ui`](ui/README.md) (the UI
 quality auditor), [`exoqms-code`](code/README.md) (the code-safety
 analyzer) and [`exoqms-svg`](svg/README.md) (the asset-logic analyzer)
