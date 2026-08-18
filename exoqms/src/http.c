@@ -303,8 +303,9 @@ const char *http_spec_text(void)
         "## audit programs (ISO 19011)\n"
         "\n"
         "POST /audit body: `name<TAB>criteria` where criteria is a\n"
-        "comma-separated list of check ids (empty = all seven), plus an\n"
-        "optional third field `agents` for the dogfood check. Query\n"
+        "comma-separated list of check ids (empty = all seven, and\n"
+        "`detect` is an alias for the same standard detection program),\n"
+        "plus an optional third field `agents` for the dogfood check.\n"
         "`?target=<path>` feeds the ui-audit check (and overrides the\n"
         "scan target of code-safety and asset-logic). Each check runs\n"
         "with a 5s timeout; child processes that overrun are SIGKILLed.\n"
@@ -839,7 +840,7 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
         /* validate criteria */
         char *ids[16];
         int nids = 0;
-        if (!criteria[0]) {
+        if (!criteria[0] || !strcmp(criteria, "detect")) {
             ids[nids++] = (char *)"component-tests";
             ids[nids++] = (char *)"doc-compliance";
             ids[nids++] = (char *)"dogfood";

@@ -1,10 +1,23 @@
 # exomind v0.4.0-alpha.1 — the AI-native software stack
 
 A software stack designed for, built by, and used by AI agents — with
-humans welcome as reviewers and operators. Six components, zero
+humans welcome as reviewers and operators. Eight components, zero
 dependencies, plain-text machine-first APIs, and a development loop that
 uses the stack to build the stack: every component is developed while the
 others run, audited by the quality system, and dogfooded in the process.
+
+The interface is **console operations**, not flags or daemons by default:
+
+```sh
+exomind /set?key=project:alpha:deadline --body '2026-09-01'
+exosched /remind --body 'in 90s "water the plants"'
+exoflow /next?flow=<id>&worker=w1
+exoqms /report
+exocrawl /search?q=bitcask&n=5
+```
+
+Each `exo<module> <path-and-query>` runs ONE API operation in-process and
+exits. No module binds a port unless it is explicitly told to serve.
 
 **License: GPL-3.0-only** (see [LICENSE](LICENSE)).
 **Status: Early Alpha** — the first packaged release is `v0.4.0-alpha.1`
@@ -12,20 +25,30 @@ others run, audited by the quality system, and dogfooded in the process.
 
 ## The stack
 
-| port | component | role | README |
-|------|-----------|------|--------|
-| 7654 | **exomind** | durable long-term memory: key/value, notes, ranked search, TTLs, snapshots, scoped tokens, vector recall | this file |
-| 7655 | **exosched** | the alarm clock: scheduled reminders (`in 90s` / `at` / `every`), WebSocket push, state persisted in exomind | [exosched/](exosched/README.md) |
-| 7656 | **exoflow** | swarm orchestrator: dependency-graph flows, claims, deadlines, claim timeouts, self-looping flows | [exoflow/](exoflow/README.md) |
-| — | **exodoc** | documentation auditor: ISO 9001 §7.5-flavored standard, live API conformance | [exodoc/](exodoc/README.md) |
-| 7657 | **exoqms** | universal Quality Management System: objectives, NCs, audit programs, trends, field modules for any language | [exoqms/](exoqms/README.md) |
-| 7658 | **exocrawl** | AI-native research: independent private metasearch, token-efficient HTML→text extraction, concurrent scraping | [exocrawl/](exocrawl/README.md) |
-| 7659 | **exocontext** | context continuity: bounded recency-ranked digest of an agent's state and notes | [exocontext/](exocontext/README.md) |
-| — | **exokit** | behavioral development kit: every software carries its own contract + ledger + runner shims; translate by regenerating from the contract | [exokit/](exokit/README.md) |
+| component | role | server-mode port | README |
+|-----------|------|------------------|--------|
+| **exomind** | durable long-term memory: key/value, notes, ranked search, TTLs, snapshots, scoped tokens, vector recall | 7654 | this file |
+| **exosched** | the alarm clock: scheduled reminders (`in 90s` / `at` / `every`), WebSocket push, state persisted in exomind | 7655 | [exosched/](exosched/README.md) |
+| **exoflow** | swarm orchestrator: dependency-graph flows, claims, deadlines, claim timeouts, self-looping flows | 7656 | [exoflow/](exoflow/README.md) |
+| **exoqms** | universal Quality Management System: objectives, NCs, audit programs, trends, field modules for any language | 7657 | [exoqms/](exoqms/README.md) |
+| **exocrawl** | AI-native research: independent private metasearch, token-efficient HTML→text extraction, concurrent scraping | 7658 | this file |
+| **exocontext** | context continuity: bounded recency-ranked digest of an agent's state and notes | 7659 | this file |
+| **exodoc** | documentation auditor: ISO 9001 §7.5-flavored standard, live API conformance — **batch** (no port) | — | this file |
+| **exokit** | behavioral development kit: every software carries its own contract + ledger + runner shims; translate by regenerating from the contract — **batch** (no port) | — | this file |
+
+Four modules are **batch**: they run one operation and exit — `exodoc`,
+`exokit`, and the two QMS field analyzers plus their sibling `exoqms-ui`
+(three batch helpers under `exoqms/`: `exoqms-code`, `exoqms-ui`,
+`exoqms-svg`, see the exoqms section).
 
 All components: C11, POSIX, zero compile dependencies (TLS in exocrawl
 uses the ubiquitous `curl` binary). Every API is plain text and
-self-describing (`GET /` prints the full spec).
+self-describing (`GET /` prints the full spec). The "server-mode port"
+column is the port a module binds **when told to serve** (`--serve` or an
+explicit `--port`); nothing binds by default. Ports are metadata
+(`docs/stack.tsv`), not a discovery mechanism: services reach each other
+by **name** — fork/exec of sibling binaries — never by probing HTTP
+ports.
 
 ## Build
 
@@ -46,6 +69,11 @@ make                    # all modules
 make test test-exosched test-exoflow test-exodoc test-exoqms test-exocrawl test-exocontext test-exokit
 make install PREFIX=~/.local   # default /usr/local
 ```
+
+`make install` lays down each module as `exo<name>` (console binary) plus
+an `<name>-server` symlink. The `exomind-server` symlink is the stack-wide
+MCP server (see below); sibling `-server` symlinks exist for naming
+parity.
 
 Packaged (Early Alpha `v0.4.0-alpha.1`, built by `packaging/release.sh`):
 
@@ -81,34 +109,189 @@ the internal prefix does not matter). Verify integrity before installing:
 
 ## Usage: console or MCP server
 
-Every module runs two ways:
+Every module is a console binary first and a daemon only on demand:
 
 ```sh
-# 1) from the console: $ exo<module> <options>
-exomind --port 7654 --data exomind.dat --backup ~/exomind-backups --mandate "read memory first"
-exosched --exomind http://127.0.0.1:7654
-exokit verify
+# 1) from the console: one operation, one process, no port bound
+exo<module> /op?key=value... [--body <text>]
 
-# 2) as an MCP server (for AI agents): $ <module>-server <options>
-exomind-server            # stdio MCP: initialize / tools/list / tools/call
-exocrawl-server --proxy http://proxy:8080
+exomind /set?key=greeting --body 'hello world'      # store a value
+exosched /remind --body 'in 5m "stand up"'          # schedule a reminder
+exoflow /flows                                      # list flows
+exoqms /report                                      # quality picture
+exocrawl /search?q=bitcask                          # metasearch
+exocontext /context?agent=b2                        # agent digest
+exodoc /audit?live=1                                # doc gate
+exokit /verify?kit=proj/kit                         # run the ledger
 
-# whole-stack help, titled by module name, on ANY module:
-exomind --help modules
+# 2) as a server, when you actually want one (opt-in):
+exomind --serve --port 7654 --data exomind.dat --mandate "read memory first"
+exosched --serve --exomind http://127.0.0.1:7654
+
+# 3) as an MCP server (for AI agents), stdio JSON-RPC:
+exomind --mcp                   # single module: exomind's own tools
+exomind-server                  # the whole stack as one MCP server
+```
+
+### The console contract
+
+The first argument is a **path-and-query**, exactly like a request line
+without the method:
+
+```
+exo<module> /operation?key=value&flag=1 [--body <text>]
+```
+
+- A path starting with `/` runs that one API operation in-process, prints
+  the response body on stdout, and exits. No socket is ever opened.
+- The HTTP verb is implied by the operation (`/set`, `/remind`, `/step`,
+  `/scrape`, `/nc`, `/objectives`, `/audit` are writes; `/get`, `/list`,
+  `/timers`, `/flows`, `/report` are reads; `/del`, `/timer`, `/flow`
+  accept DELETE).
+- **Bodies**: `--body <text>` supplies the payload; otherwise it is read
+  from stdin — but only for non-GET operations AND only when stdin is not
+  a terminal (a TTY would block forever waiting for EOF):
+
+```sh
+exomind /set?key=greeting --body 'hello world'
+echo 'hello world' | exomind /set?key=greeting     # same thing
+exosched /remind --body 'in 90s "water the plants"'
+exoflow /step?flow=F&id=s1 --body 'done cli'
+printf 'url1\nurl2\n' | exocrawl /scrape
+```
+
+- **The guide**: running `exo<module>` with NO arguments prints the
+  module's full spec (the same text the daemon serves at `GET /`) and
+  exits 0. The software describes itself; `GET /` on a serving module
+  does the same.
+- **Exit codes** (the stack-wide contract):
+  - `0` — the operation succeeded
+  - `1` — the operation failed (an API error, HTTP >= 400)
+  - `2` — usage error or unknown operation
+- Every module also accepts the `/exo<module>` prefix on paths
+  (`/exoexomind/ping`, `/exoexosched/timers`), matching the server-mode
+  mount points.
+
+### Server mode is opt-in
+
+No module binds a port unless you ask for it:
+
+- `--serve` runs the HTTP daemon.
+- An explicit `--port <n>` implies server mode too.
+- Otherwise the binary is a console op or a guide printer. exomind listens
+  on 7654 by default **in server mode only**; the other modules' defaults
+  are the ports in the stack table above.
+
+```sh
+exomind --serve                       # HTTP on 127.0.0.1:7654
+exosched --serve --port 7675          # HTTP on 127.0.0.1:7675
+exoflow --serve --exomind http://127.0.0.1:7654 \
+        --exosched http://127.0.0.1:7655
+```
+
+While serving, each daemon answers at both `/` and `/exo<module>` on the
+bound address, plain text, one record per line, lowercase `ok` /
+`error: <reason>` — the same contract as the console ops, so anything you
+can do over the socket you can do as a one-shot op.
+
+### Whole-stack help
+
+```sh
+exomind --help modules    # every module's guide, titled by module name
 exomind --help exosched   # one module's guide
+```
 
-# keys (auth) file management, console subcommands:
+### Shared options
+
+`--body <text>`, `--serve`, `--port <n>`, `--token <t>` (or env
+`EXO<MODULE>_TOKEN`), `--keys <file>`, `--rate-limit <n>/s` (429 when
+exhausted), `--log-level error|warn|info|debug`, `--help [modules]`,
+`--version`. `--host <addr>` (default 127.0.0.1) exists on the modules
+that support a bind address. Tokens require
+`Authorization: Bearer <token>` on every request.
+
+### keys (auth) file management
+
+exomind manages the shared key file:
+
+```sh
 exomind keys add alpha:ro:scope=logs/* --keys ~/.config/exo/keys
 exomind keys list --keys ~/.config/exo/keys
 exomind keys remove alpha --keys ~/.config/exo/keys
 ```
 
-Shared options: `--host <ip>`, `--port <n>`, `--keys <file>`, `--token`,
-`--log-level error|warn|info|debug`, `--rate-limit <n>/s`, `--help
-[modules]`, `--version`. On the bound address each daemon serves its API
-at both `/` (base usage) and `/exo<module>` (e.g. `GET
-127.0.0.1:7654/exoexomind/ping`). Proxy applies where it makes sense
-(exocrawl).
+Key-file lines are `name` or `name:ro` or `name:ro:scope=prefix/*` — the
+same format `--tokens <file>` loads.
+
+### Service discovery is by name, not by port
+
+Daemons and tools never probe each other's ports. When exomind-server
+needs exosched, it looks up the **`exosched` binary on PATH** and runs it
+as a one-shot console op. When exoqms runs its audit checks it shells out
+to `exodoc`, `exoqms-ui`, `exoqms-code`, `exoqms-svg` by name. The stack
+manifest `docs/stack.tsv` carries ports as metadata (packaging, doc gate)
+— nothing binds them unless a server is started explicitly.
+
+### MCP: the Model Context Protocol server
+
+- `exo<module> --mcp` serves **that module's** tools as an MCP server over
+  stdio (`initialize` / `tools/list` / `tools/call`, protocol version
+  `2024-11-05`).
+- `exomind-server` — exomind invoked with an argv[0] ending in `-server`
+  (the installed symlink does this; `exec -a exomind-server ./build/exomind`
+  also works) — is the **stack-wide MCP router**: it registers ONE tool
+  per sibling module plus exomind's own thirteen, and routes each
+  `tools/call` for a sibling through the sibling's console contract
+  (`<binary> <path> [--body <body>]`, fork/exec, stdout captured). The
+  sibling daemons do NOT need to be running: a routed call runs the
+  operation in the sibling process.
+- Sibling tools take `path` (the console op, e.g. `"/timers"`) and an
+  optional `body`. Exomind's own tools take their natural arguments
+  (`key`, `value`, `q`, ...).
+
+Own tools (in-process): `ping`, `set`, `get`, `append`, `del`, `list`,
+`search`, `note`, `notes`, `batch`, `stats`, `snapshot`, `sim`.
+
+Routed tools: `exosched`, `exoflow`, `exoqms`, `exocrawl`,
+`exocontext`, `exodoc`, `exokit` — one per sibling module.
+
+```sh
+# a single-module MCP server (exomind's tools only)
+exomind --mcp
+
+# the stack-wide MCP router
+exomind-server
+```
+
+### MCP over stdio, concretely
+
+```sh
+$ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+    | exomind-server
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"exomind-server","version":"0.4.0-alpha.1"}}}
+```
+
+`tools/list` returns the 20 tools (13 own + 7 siblings). A call to an
+own tool:
+
+```sh
+$ printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"set","arguments":{"key":"greeting","value":"hello"}}}' \
+    | exomind-server
+{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"ok"}],"isError":false}}
+```
+
+A call routed to a sibling — no exosched daemon needed, the console op
+runs in a forked process:
+
+```sh
+$ printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"exosched","arguments":{"path":"/remind","body":"in 5m \"stand up\""}}}' \
+    | exomind-server
+{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"ok 1786899721384:0000fdad 1786899724384"}],"isError":false}}
+```
+
+Failures come back as `isError: true` with the sibling's stderr/exit
+status mapped onto the operation result; the router never binds a port
+and never keeps state.
 
 ## Memory model (exomind)
 
@@ -122,21 +305,29 @@ Two stores instead of one pile:
   runs from elsewhere. Keys with the `p:` prefix and any request with
   `proj=1` operate on it; `/search` and `/recall` cover both stores.
 
-**Backups** (`--backup <dir>`, `POST /backup`): timestamped copies of the
-main memory file, newest 24 kept — redundancy against a failing host.
+**Backups** (`--backup <dir>`, or `/backup` as a console op): timestamped
+copies of the main memory file, newest 24 kept — redundancy against a
+failing host.
 
-**Associations** — memories are never silently deleted:
-`POST /outdate?key=k&reason=...` keeps the value, records
-`history:<k>` and marks `outdated:<k>` (view with `/outdated`, clear
-with `/revive`); `POST /link?from=a&to=b&rel=...` cross-references
-memories (`/assoc` lists both directions). When an old error recurs you
-can see the fix, why it was tried, and what superseded it.
-`GET /recall?q=` bundles search + outdated + history + associations.
+**Associations** — memories are never silently deleted: `/outdate` keeps
+the value, records `history:<k>` and marks `outdated:<k>` (view with
+`/outdated`, clear with `/revive`); `/link` cross-references memories
+(`/assoc` lists both directions). When an old error recurs you can see
+the fix, why it was tried, and what superseded it. `/recall?q=` bundles
+search + outdated + history + associations.
 
-**Mandate** (`--mandate "..."` or `--mandate-file`, `POST /mandate`) —
-the memory module is not optional: agents must read `/mandate` and
-acknowledge with `agent:<id>:ready`. The QMS `memory-awareness` check
-fails any configured agent that has not acknowledged.
+**Mandate** (`--mandate "..."` or `--mandate-file`, or `/mandate` as a
+console op) — the memory module is not optional: agents must read
+`/mandate` and acknowledge with `agent:<id>:ready`. The QMS
+`memory-awareness` check fails any configured agent that has not
+acknowledged.
+
+```sh
+exomind /set?key=project:alpha:deadline --body '2026-09-01'
+exomind /outdate?key=iter10:plan&reason=replaced --body 'iter11 plan superseded it'
+exomind /link?from=iter11:plan&to=iter10:plan&rel=replaces
+exomind /recall?q=parser
+```
 
 ## API (exomind)
 
@@ -154,15 +345,15 @@ record per line, tab-separated. An agent learns the whole API from
 | DELETE | `/del?key=k` | delete |
 | GET | `/list` | keys (`prefix=`, `limit=`, `offset=`, `sort=desc`) |
 | GET | `/search?q=t` | ranked substring search over keys and values |
+| GET | `/embed?key=k` | read a stored vector (`dim 256 i:v ...`) |
+| POST | `/embed?key=k` | embed raw body, store as `vec:<k>` (TTL works) |
+| DELETE | `/embed?key=k` | remove a vector |
+| POST | `/sim?k=10` | rank keys by vector similarity to the body text |
 | POST | `/note` | store body as a timestamped note, answers `ok <key>` |
 | GET | `/notes` | notes newest-first (`q=`, `limit=`, `offset=`) |
 | POST | `/batch` | JSON array of ops; one result line per op |
-| POST | `/embed?key=k` | store a vector embedding for a key |
-| GET | `/embed?key=k` | read a stored embedding |
-| DELETE | `/embed?key=k` | remove an embedding |
-| POST | `/sim` | rank keys by embedding similarity to the body text |
-| GET | `/snapshot`, POST `/restore` | full dump / atomic restore |
 | GET | `/stats` | counters and health |
+| GET | `/snapshot`, POST `/restore` | full dump / atomic restore |
 | POST | `/backup` | write a timestamped backup copy |
 | GET | `/project` | project store location |
 | POST | `/outdate?key=k&reason=...` | mark a memory outdated (kept in history) |
@@ -173,26 +364,28 @@ record per line, tab-separated. An agent learns the whole API from
 | GET | `/recall?q=` | search + outdated + history + associations |
 | GET | `/mandate` | the mandatory briefing (ack: `agent:<id>:ready`) |
 
-Any listing endpoint accepts `json=1` for machine-readable JSON.
+Any listing endpoint accepts `json=1` for machine-readable JSON. Query
+values (reasons, values with spaces) must be URL-encoded (`%20` for
+spaces) or the request is rejected.
+
+The same API, three ways:
 
 ```sh
-# remember a fact forever
+# console ops (one-shot, no daemon):
+exomind /set?key=project:alpha:deadline --body '2026-09-01'
+exomind /set?key=tmp:build:status&ttl=3600 --body building
+exomind /append?key=log:session:42 --body 'step 3 done'
+exomind /batch --body '[{"set":"a","value":"1"},{"get":"a"},{"del":"a"}]'
+exomind /note --body 'remember to revisit the parser edge case'
+exomind /search?q=parser
+exomind /notes?q=deadline
+
+# over HTTP to a serving daemon (identical semantics):
 curl -X POST 'localhost:7654/set?key=project:alpha:deadline' -d '2026-09-01'
-
-# remember it only for an hour
-curl -X POST 'localhost:7654/set?key=tmp:build:status&ttl=3600' -d 'building'
-
-# accumulate a work log
-curl -X POST 'localhost:7654/append?key=log:session:42' -d 'step 3 done'
-
-# many operations, one round trip
-curl -X POST localhost:7654/batch -d '[["set","a","1"],["get","a"],["del","a"]]'
-
-# leave a note to your future self
-curl -X POST localhost:7654/note -d 'remember to revisit the parser edge case'
-
-# find everything that mentions "parser"
 curl 'localhost:7654/search?q=parser'
+
+# as MCP tools:
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"set","arguments":{"key":"k","value":"v"}}}
 ```
 
 ## Internals
@@ -210,6 +403,12 @@ curl 'localhost:7654/search?q=parser'
   records are rewritten atomically via rename.
 - **Snapshot/restore** — `GET /snapshot` emits a length-prefixed plain
   dump; `POST /restore` rebuilds through temp file + fsync + rename.
+- **Vectors (exovec)** — `POST /embed` hashes the body into a fixed
+  256-dimension count vector (lowercased, word character-trigrams,
+  FNV-1a mod 256, clamped counts), stored as an ordinary `vec:<k>` key —
+  local and deterministic, no model, no network. `/sim` answers the top-k
+  by cosine similarity. An in-memory index makes the scan cover only
+  vectors.
 - **Auth scopes** — `--tokens` file tokens can be read-only and/or
   prefix-scoped; every endpoint enforces the scope.
 - **TTLs** — lazy expiry on read/query; expired keys never leak back
@@ -220,10 +419,23 @@ curl 'localhost:7654/search?q=parser'
 
 ## Tests
 
-`make test` covers every endpoint, persistence across restarts,
-tombstone survival, TTL expiry, bearer + scoped auth, SIGKILL crash
-recovery, concurrent writers, snapshot round-trips, and vector recall.
-The QMS gate runs `./build/exomind --version` (in-budget smoke).
+Every module carries its own hermetic suite at `<module>/test/test.sh`
+(`bash test/test.sh` from the module directory), runnable from the repo
+root as `make test-<module>`:
+
+```sh
+make test              # exomind: every endpoint, persistence across
+                       # restarts, tombstones, TTL expiry, bearer + scoped
+                       # auth, SIGKILL crash recovery, concurrent writers,
+                       # snapshot round-trips, vector recall
+make test-exosched test-exoflow test-exodoc test-exoqms test-exocrawl \
+     test-exocontext test-exokit
+```
+
+The suites spawn their own private daemons and temp data and never touch
+shared instances. The QMS gate runs `./build/exomind --version` as the
+in-budget smoke command (5s audit budget; the full suites are too slow
+for it and run via `make test-<module>`).
 
 ## Limitations
 
@@ -232,7 +444,7 @@ The QMS gate runs `./build/exomind --version` (in-budget smoke).
   (10k keys ≈ 30 ms); only prefix listing is indexed.
 - The GUI-free, machine-first design assumes an agent or CLI operator.
 
-## exosched — the alarm clock (port 7655)
+## exosched — the alarm clock
 
 A scheduled-reminders + WebSocket-push daemon (C11, zero dependencies:
 libc + pthread only). Durable state lives entirely inside exomind under
@@ -242,20 +454,17 @@ fired timers expire on their own, and every fire grows exomind's
 searchable note feed.
 
 Build: `make exosched` produces `exosched/build/exosched`; test with
-`make test-exosched` (54 checks, ~2.5 min).
+`make test-exosched`.
 
-### Usage
+### Console operations
 
 ```sh
-./build/exosched --port 7655 --exomind http://127.0.0.1:7654 [--token secret]
+exosched /remind --body 'in 90s "water the plants"'   # POST; body = schedule
+exosched /timers                                      # active timers
+exosched /timer?id=<id>                               # cancel: `ok` / `missing`
+exosched /ping                                        # pong
+exosched                                              # the full spec
 ```
-
-`--exomind` defaults to `http://127.0.0.1:7654`, `--port` to 7655.
-Set `--token` (or env `EXOSCHED_TOKEN`) to require
-`Authorization: Bearer <token>` on every request, including the
-WebSocket upgrade.
-
-### Endpoints
 
 | method | path | purpose |
 |--------|------|---------|
@@ -264,9 +473,14 @@ WebSocket upgrade.
 | POST | `/remind` | schedule a reminder (see below) |
 | GET | `/timers` | active timers (`json=1` for JSON) |
 | DELETE | `/timer?id=<id>` | cancel a timer: `ok` or `missing` |
-| GET | `/ws` | WebSocket push channel (RFC 6455) |
+| GET | `/ws` | WebSocket push channel (RFC 6455; server mode only) |
 
-Errors are `error: <reason>` with HTTP 4xx/5xx.
+Errors are `error: <reason>`.
+
+`--exomind` defaults to `http://127.0.0.1:7654`; server mode binds 7655
+by default (`--serve` or `--port`). Set `--token` (or env
+`EXOSCHED_TOKEN`) to require `Authorization: Bearer <token>` on every
+request, including the WebSocket upgrade.
 
 ### Scheduling
 
@@ -278,11 +492,16 @@ in 5m "stand up and stretch"
 in 2h "push the branch"
 in 3d "renew the certificate"
 at 1786740704 "fire at this unix epoch"
+every 10m "check the pipeline"
+every 30s "nudge" until 1786740704
 ```
 
-Units: `s m h d`. The message may be quoted (`\"` and `\\` escapes) or
-unquoted to the end of the body. The answer is
-`ok <id> <when-epoch>` with an id of the form `<epoch>:<8-hex>`.
+Units: `s m h d`. `every <n><unit> "msg"` schedules a RECURRING timer;
+the optional `until <epoch>` suffix (quoted messages only) stops it after
+the fire at or before that epoch. `at` in the past is rejected. The
+message may be quoted (`\"` and `\\` escapes) or unquoted to the end of
+the body. The answer is `ok <id> <when-epoch>` with an id of the form
+`<epoch>:<8-hex>`.
 
 ### Durability (dogfooding exomind)
 
@@ -337,7 +556,7 @@ that might have been dropped during an exomind outage.
 - exosched is a *timer* daemon, not a durable message broker: fired timers
   are pushed over WebSocket and logged to the exomind note feed, but there
   is no replay queue — an agent that was disconnected at fire time must
-  catch up via `GET /notes`.
+  catch up via `exomind /notes`.
 - `at`-style reminders are rejected in the past; there is no timezone
   support (all epochs are Unix time).
 - A timer whose fire is retried during an exomind outage is kept and
@@ -345,91 +564,98 @@ that might have been dropped during an exomind outage.
 
 ### Tests
 
-`bash test/test.sh` runs its own private exomind (port 7660, data in
-/tmp/exosched_test) and exosched (port 7661); it never touches a shared
-exomind. Needs `curl`, `python3` (the WebSocket client) and `ss`.
+`bash exosched/test/test.sh` runs its own private exomind and exosched on
+private ports (temp data under /tmp); it never touches a shared exomind.
+Needs `curl`, `python3` (the WebSocket client) and `ss`. Coverage
+includes one-shot and recurring timers, `every` cadence (measured from
+note epochs), persistence across SIGKILL restarts, `until` semantics,
+cancel of a recurring timer, the 6-column `/timers` TSV and `json=1`
+fields, reload catch-up of overdue timers, and the reload/cancel race: a
+timer cancelled while a degraded-startup background reload is in flight
+is never resurrected by the stale snapshot.
 
-Coverage includes the 0.2.0 recurring-timer surface: `every` cadence
-(measured from note epochs), persistence across SIGKILL restarts, `until`
-semantics (stops after the last fire, past `until` rejected, past `at`
-rejected), DELETE of a recurring timer, the 6-column `/timers` TSV and
-`json=1` `repeat_s`/`until` fields, reload catch-up of overdue recurring
-timers, 0.1.0 one-shot wire values (`fire\tmsg`) loading and firing, and
-the reload/cancel race: a timer cancelled while a degraded-startup
-background reload is in flight is never resurrected by the stale snapshot.
+## exoflow — the swarm orchestrator
 
-## exoflow — the swarm orchestrator (port 7656)
-
-`exoflow` v0.2.0 is a dependency-graph task orchestrator for AI-agent swarms. A flow
-is a DAG of steps; an arbitrary number of agents pull work from it with
-`GET /next`, execute, and report back with `POST /step`. exoflow guarantees
-that every step is claimed by exactly one worker and only becomes runnable
+A dependency-graph task orchestrator for AI-agent swarms. A flow is a
+DAG of steps; an arbitrary number of agents pull work from it with
+`/next`, execute, and report back with `/step`. exoflow guarantees that
+every step is claimed by exactly one worker and only becomes runnable
 once all of its dependencies are done. Durable state lives in exomind
 (external long-term memory); step deadlines are enforced through exosched
-scheduled reminders; every claim, completion and deadline is audited as an
-exomind note. Since 0.2.0 a flow can be a **loop**: when its last
+scheduled reminders; every claim, completion and deadline is audited as
+an exomind note. Since 0.2.0 a flow can be a **loop**: when its last
 iteration reaches a terminal state, exoflow lazily spawns the next one
 (`iter <n+1>`), repeating with a fixed interval up to `max` / `until`
 limits.
 
 ```
-exomind (state)   <-+-  exoflow   <-+-- GET /next?flow=F&worker=W   (workers)
-exosched (alarms) <-+      |       +-- POST /step?flow=F&id=s done
+exomind (state)   <-+-  exoflow   <-+-- /next?flow=F&worker=W   (workers)
+exosched (alarms) <-+      |       +-- /step?flow=F&id=s done
                       (audit notes into exomind)
 ```
 
-### Quickstart
+### Console operations
 
-Run the trio (each daemon answers plain-text on its port) — shared
-instances already run on 7654/7655 in the exomind swarm, so use your own
-ports for testing, e.g. 7674/7675/7676:
-
-```
-build/exomind --port 7654 --data /tmp/xm.dat &
-exosched/build/exosched --port 7655 --exomind http://127.0.0.1:7654 &
-exoflow/build/exoflow --port 7676 --exomind http://127.0.0.1:7654 \
-    --exosched http://127.0.0.1:7655 &
-```
-
-Check it is alive — `GET /` is self-describing: `curl -s localhost:7676/`.
-
-### A full diamond flow, by hand
-
-Create a 5-step diamond where `s4` joins `s2` and `s3`, with a deadline on
-`s4` (`now + 120s`):
-
-```
-curl -s -X POST localhost:7676/flow --data-binary "ship
+```sh
+# create a flow (POST; body on --body or stdin)
+exoflow /flow --body "ship
 s1<TAB>build<TAB>
 s2<TAB>test<TAB>s1
 s3<TAB>lint<TAB>s1
 s4<TAB>package<TAB>s2,s3<TAB>$(date +%s --date '+120s')
 s5<TAB>publish<TAB>s4"
 # -> ok <flow-id> 5
+
+# drive it
+exoflow /next?flow=<flow-id>&worker=cli     # ok s1  (auto-claims)
+exoflow /step?flow=<flow-id>&id=s1 --body 'done cli'
+exoflow /flow?id=<flow-id>                  # TSV state
+exoflow /flows                              # all flows
+exoflow /loops                              # loop iterations
+exoflow /flow?id=<flow-id>&action=cancel    # cancel non-terminal steps
+exoflow /flow?id=<flow-id>&action=stop-loop # halt future loop iterations
+exoflow /ping
 ```
 
-Then drive it with the contrib worker (see below):
+| method | path | purpose |
+|--------|------|---------|
+| GET | `/` | full spec |
+| GET | `/ping` | liveness: `pong` |
+| POST | `/flow` | create a flow (body: name, then `id<TAB>desc<TAB>deps` lines) |
+| GET | `/flow?id=<f>` | one flow, TSV or `json=1` |
+| DELETE | `/flow?id=<f>` | remove a flow and its keys |
+| POST | `/flow?id=<f>&action=cancel` | cancel non-terminal steps |
+| POST | `/flow?id=<f>&action=stop-loop` | halt future iterations of a loop |
+| GET | `/flows` | flow list (`status=`, `limit=`, `offset=`) |
+| GET | `/loops` | loop iterations list |
+| GET | `/next?flow=<f>&worker=<w>` | claim the next ready step: `ok <stepid>` or `none` |
+| POST | `/step?flow=<f>&id=<s>` | body `done [note]` / `failed [note]` / `unclaim` |
 
-```
-exoflow/contrib/worker.sh -u http://127.0.0.1:7676 -f <flow-id> -w w1
+Console ops run in-process but the flow state lives in exomind, so
+`/flow`, `/next` and `/step` need a serving exomind; `/ping` and the
+guide work without one. To run the contrib worker (which drives a
+serving daemon over HTTP), start a server:
+
+```sh
+build/exomind --serve --port 7654 --data /tmp/xm.dat &
+exosched/build/exosched --serve --port 7655 --exomind http://127.0.0.1:7654 &
+exoflow/build/exoflow --serve --port 7676 --exomind http://127.0.0.1:7654 \
+    --exosched http://127.0.0.1:7655 &
 ```
 
-...or claim and finish steps by hand:
-
-```
-curl -s "localhost:7676/next?flow=<flow-id>&worker=cli"   # ok s1  (auto-claims)
-curl -s -X POST "localhost:7676/step?flow=<flow-id>&id=s1" -d "done cli"
-curl -s "localhost:7676/flow?id=<flow-id>"                # TSV state
-curl -s localhost:7676/flows                              # all flows
-```
+`--exomind` defaults to `http://127.0.0.1:7654`, `--exosched` to
+`http://127.0.0.1:7655`, server port to 7656. `--token` (or env
+`EXOFLOW_TOKEN`) requires `Authorization: Bearer <secret>` on every
+request.
 
 ### The worker loop (`exoflow/contrib/worker.sh`)
 
 A simulated agent that runs the orchestration loop against any compliant
-exoflow: repeatedly `GET /next?flow=F&worker=ME` (which auto-claims one
-runnable step), "executes" it (a short sleep; if the step description starts
-with `fail:` the step is failed on purpose), then reports back with
-`POST /step`. `none` means no runnable work remains and the worker exits 0.
+serving exoflow: repeatedly `GET /next?flow=F&worker=ME` (which
+auto-claims one runnable step), "executes" it (a short sleep; if the step
+description starts with `fail:` the step is failed on purpose), then
+reports back with `POST /step`. `none` means no runnable work remains and
+the worker exits 0.
 
 ```
 worker.sh -u URL -f FLOW -w NAME [-m MAX] [-s SLEEP] [-r PARK] [-e EXOMIND] [-q]
@@ -451,10 +677,10 @@ exit: 0 = no work left, 1 = protocol/driver error, 2 = step failed
 ```
 
 Every action is logged on stdout as `worker <name>: claimed s2` /
-`worker <name>: done s2` / `worker <name>: no work left`. Run two of them in
-parallel against one flow to see claim exclusivity in action — each step is
-claimed by exactly one worker (park the workers with `-r` so they contend at
-every level of the graph):
+`worker <name>: done s2` / `worker <name>: no work left`. Run two of them
+in parallel against one flow to see claim exclusivity in action — each
+step is claimed by exactly one worker (park the workers with `-r` so they
+contend at every level of the graph):
 
 ```
 exoflow/contrib/worker.sh -u http://127.0.0.1:7676 -f <flow-id> -w w1 -r 10 > w1.log &
@@ -476,12 +702,14 @@ wait
   deterministically, and the freeze detector (`agent-health` in exoqms)
   catches silent workers on top.
 - **Deadlines via exosched.** A step with a `deadline_epoch` registers a
-  scheduled reminder with exosched; when it fires (or on the next read, via
-  the lazy deadline sweep) exoflow marks the step `overdue` and writes an
-  audit note. `GET /flow?id=` reflects the overdue state.
-- **Audit via notes.** Claims, step completions/failures, cancellations and
-  deadline misses are written as timestamped exomind notes, which gives you
-  an append-only ledger you can query with `GET /notes?q=<flow-id>`.
+  scheduled reminder with exosched; when it fires (or on the next read,
+  via the lazy deadline sweep) exoflow marks the step `overdue` and
+  writes an audit note. `GET /flow?id=` reflects the overdue state.
+  Registration is best-effort: a down exosched never breaks flow
+  creation, and the lazy sweep is authoritative.
+- **Audit via notes.** Claims, step completions/failures, cancellations
+  and deadline misses are written as timestamped exomind notes, which
+  gives you an append-only ledger you can query with `exomind /notes?q=<flow-id>`.
 - **Loops are lazy.** A loop spawns its next iteration on the next read
   (`/flows`, `/flow?id=`, `/loops`, `/next`) or startup reload after the
   newest iteration is terminal and `next_run` has arrived — no background
@@ -504,10 +732,10 @@ not parse is rejected with `error: bad loop spec`; any other last line is
 a plain step, so old bodies keep working byte for byte.
 
 Scheduling is **lazy**, exactly like deadlines: no background thread, no
-timer-driven spawn. On every `GET /flows`, `GET /flow?id=`, `GET /loops`,
-`GET /next` and every startup reload, exoflow checks whether the NEWEST
-iteration of a loop is terminal (all done / all failed / cancelled) and
-its `next_run` has arrived; if so it spawns the next iteration:
+timer-driven spawn. On every `/flows`, `/flow?id=`, `/loops`, `/next`
+and every startup reload, exoflow checks whether the NEWEST iteration of
+a loop is terminal (all done / all failed / cancelled) and its `next_run`
+has arrived; if so it spawns the next iteration:
 
 - same steps, all pending;
 - flow name `iter <n+1>`;
@@ -541,49 +769,50 @@ Version-1 records load as non-looping flows (both formats are read).
 
 ### API reference
 
-| method | path                     | body / params            | reply |
-|--------|--------------------------|--------------------------|-------|
-| GET    | `/`                      | —                        | self-describing text |
-| GET    | `/ping`                  | —                        | `pong` |
-| POST   | `/flow`                  | line 1 = flow name; then `id<TAB>desc<TAB>deps` lines, deps comma-separated (empty allowed); optional 4th field `deadline_epoch`, optional 5th field `timeout_s`; optional LAST line `loop<TAB>every <n><s|m|h><TAB>[max <n>] [until <epoch>]` | `ok <flow-id> <nsteps>` |
-| GET    | `/flow?id=`              | —                        | TSV state (one line per step; `loop` line for loops) |
-| GET    | `/flows`                 | —                        | flow list |
-| GET    | `/loops`                 | —                        | loop iterations list |
-| GET    | `/next?flow=&worker=`    | —                        | `ok <stepid>` (auto-claims) or `none` |
-| POST   | `/step?flow=&id=`        | `done [note]` / `failed [note]` / `unclaim` | `ok` |
-| POST   | `/flow?id=&action=cancel`| —                        | `ok` |
-| POST   | `/flow?id=&action=stop-loop` | —                    | `ok` |
-| DELETE | `/flow?id=`              | —                        | `ok` |
+| method | path | body / params | reply |
+|--------|------|---------------|-------|
+| GET | `/` | — | self-describing text |
+| GET | `/ping` | — | `pong` |
+| POST | `/flow` | line 1 = flow name; then `id<TAB>desc<TAB>deps` lines, deps comma-separated (empty allowed); optional 4th field `deadline_epoch`, optional 5th field `timeout_s`; optional LAST line `loop<TAB>every <n><s|m|h><TAB>[max <n>] [until <epoch>]` | `ok <flow-id> <nsteps>` |
+| GET | `/flow?id=` | — | TSV state (one line per step; `loop` line for loops) |
+| GET | `/flows` | — | flow list |
+| GET | `/loops` | — | loop iterations list |
+| GET | `/next?flow=&worker=` | — | `ok <stepid>` (auto-claims) or `none` |
+| POST | `/step?flow=&id=` | `done [note]` / `failed [note]` / `unclaim` | `ok` |
+| POST | `/flow?id=&action=cancel` | — | `ok` |
+| POST | `/flow?id=&action=stop-loop` | — | `ok` |
+| DELETE | `/flow?id=` | — | `ok` |
 
-Auth: start exoflow with `--token <secret>`; every endpoint then requires
-`Authorization: Bearer <secret>` and answers `401` without it.
+Step ids and worker names are restricted to `[A-Za-z0-9._-]` (they travel
+inside URLs, TSV columns and the deps column). Rejects: duplicate ids,
+unknown deps, cyclic deps.
 
 ### Limitations
 
-- exoflow is a *pull* orchestrator: workers must call `GET /next`; there is
-  no push of new work to idle workers.
+- exoflow is a *pull* orchestrator: workers must call `GET /next`; there
+  is no push of new work to idle workers.
 - A step claimed by a worker that dies is released only via an explicit
   `unclaim` (or the deadline sweep marking it `overdue`); there is no
   lease timeout / requeue-on-heartbeat.
-- Deadline enforcement is best-effort lazy: the authoritative sweep runs on
-  reads (`/flow`, `/next`) and startup reload, so an overdue step is
+- Deadline enforcement is best-effort lazy: the authoritative sweep runs
+  on reads (`/flow`, `/next`) and startup reload, so an overdue step is
   reflected at the next read, not at the exact deadline instant.
-- Loop scheduling is lazy too: the next iteration spawns at the first read
-  after the newest iteration is terminal and `next_run` has arrived (the
-  exosched reminder `exoflow:loop:<id>` only surfaces the due moment in
-  the note feed). There is no timer-driven push.
+- Loop scheduling is lazy too: the next iteration spawns at the first
+  read after the newest iteration is terminal and `next_run` has arrived
+  (the exosched reminder `exoflow:loop:<id>` only surfaces the due moment
+  in the note feed). There is no timer-driven push.
 
 ### Integration tests
 
-`exoflow/test/test-integration.sh` spawns a private stack — exomind on
-**7674**, exosched on **7675**, exoflow on **7676**, temp data under
-`/tmp/b2-exoflow-int` — and proves the loop end-to-end:
+`exoflow/test/test-integration.sh` spawns a private stack — exomind,
+exosched, exoflow on private ports, temp data under /tmp — and proves
+the loop end-to-end:
 
-1. creates the 5-step diamond (`s1 → s2,s3 → s4 → s5`) with a deadline on
-   `s4`, runs **two `contrib/worker.sh` workers in parallel**, and asserts
-   every step is done, no step was claimed by both workers, and `s4` was
-   claimed only after both `s2` and `s3` were done (compared via note
-   timestamps in the private exomind);
+1. creates the 5-step diamond (`s1 → s2,s3 → s4 → s5`) with a deadline
+   on `s4`, runs **two `contrib/worker.sh` workers in parallel**, and
+   asserts every step is done, no step was claimed by both workers, and
+   `s4` was claimed only after both `s2` and `s3` were done (compared via
+   note timestamps in the private exomind);
 2. creates a flow whose step deadline is `now+2s`, waits, and asserts
    `/flow` marks it overdue and an audit note exists;
 3. SIGKILLs exoflow mid-flow, restarts it on the same ports/backend, and
@@ -593,51 +822,45 @@ Auth: start exoflow with `--token <secret>`; every endpoint then requires
 5. kills all three daemons, removes temp data, prints
    `=== results: N passed, 0 failed ===`.
 
-Run it (builds exoflow first if needed; if `exoflow/` is missing from your
-clone it fetches and merges `feat/exoflow` from origin):
+Run it: `make test-exoflow` (unit tests + this integration suite), or
+standalone `timeout 300 bash exoflow/test/test-integration.sh`.
+Environment hooks: `EXOFLOW_BIN` and `EXOFLOW_ARGS` override defaults.
+The suite never touches shared swarm instances and only uses its own
+ports.
 
-```
-make test-exoflow     # B1 unit tests + this integration suite
-# or, standalone:
-timeout 300 bash exoflow/test/test-integration.sh
-```
-
-Environment hooks: `EXOFLOW_BIN` (binary path) and `EXOFLOW_ARGS` (extra
-daemon flags, e.g. `--token` in production-style runs) override the
-defaults. The suite never touches shared swarm instances (7654/7655) and
-only uses its own ports.
-
-## exodoc — the documentation auditor (batch, no port)
+## exodoc — the documentation auditor (batch)
 
 `exodoc` v0.1.0 is a batch command-line auditor (C11, zero dependencies:
 libc only) that checks component documentation against the ISO 9001
 §7.5-flavored standard in `exodoc/standard.md` — the stack's quality
-gate. It reads the stack manifest `docs/stack.tsv` (one component per line:
-`name<TAB>dir<TAB>port<TAB>...`), then for each component verifies that its
-`README.md` satisfies the standard's clauses: identification (purpose
-heading, version token), required sections (build, run, API, state, tests,
-honesty), and — with `--live` — that the documented API and version agree
-with the running daemon's self-describing `GET /` spec. It never crashes on
-malformed input: documents and manifests are capped, control bytes are
-stripped, and unreachable daemons are reported as `SKIP` (never fatal).
+gate. It reads the stack manifest `docs/stack.tsv` (one component per
+line: `name<TAB>dir<TAB>port<TAB>...`; empty port = batch tool), then
+for each component verifies that its `README.md` satisfies the standard's
+clauses: identification (purpose heading, version token), required
+sections (build, run, API, state, tests, honesty), and — with `live=1` —
+that the documented API and version agree with the running daemon's
+self-describing `GET /` spec. It never crashes on malformed input:
+documents and manifests are capped, control bytes are stripped, and
+unreachable daemons are reported as `SKIP` (never fatal).
 
 ### Usage
 
 ```
-./exodoc/build/exodoc audit [--stack <manifest>] [--base <dir>]
-                            [--exomind http://127.0.0.1:7654]
-                            [--out <file>] [--live] [--json]
+exodoc /audit?live=1&stack=docs/stack.tsv&base=.&exomind=http://127.0.0.1:7654&out=/tmp/audit.txt&json=1
+exodoc /audit?live=1                          # defaults: stack, base, no exomind
+exodoc audit --live --stack docs/stack.tsv --base .   # legacy subcommand form
 ```
 
-- `--stack` — manifest path (default `docs/stack.tsv`)
-- `--base` — base dir for component dirs (default `.`)
-- `--exomind` — persist `exodoc:audit:*` scores + a summary note to exomind
-- `--out` — also write the report to a file
-- `--live` — crawl daemons; verify version + API conformance against `GET /`
-- `--json` — machine-readable report (for the future QMS component)
+The `/audit` op takes the same parameters as the subcommand's flags:
+`stack` (manifest path, default `docs/stack.tsv`), `base` (base dir for
+component dirs, default `.`), `exomind` (persist `exodoc:audit:*` scores
++ a summary note to exomind), `out` (also write the report to a file),
+`live` (crawl daemons; verify version + API conformance against `GET /`),
+`json` (machine-readable report). Flag parameters accept off values
+`0/false/no/off`.
 
 Exit status is 0 for a completed run regardless of failures; the gate is
-the report line `=== audit: N pass, M fail (score X%) ===` — integration
+the report line `=== audit: N pass, M fail (score X%) ===` — the build
 wiring greps that line for `0 fail`.
 
 ### Checks (implemented from `exodoc/standard.md`)
@@ -651,7 +874,7 @@ wiring greps that line for `0 fail`.
 | c5 state | §3 | Durability/architecture/design section |
 | c6 tests | §3 | Tests section |
 | c7 honesty | §3 | Limitations/roadmap section |
-| c8 version | §2/§4 | version token present; matches daemon with `--live` |
+| c8 version | §2/§4 | version token present; matches daemon with `live=1` |
 | c9 api-conformance | §5 | documented endpoints == live `GET /` endpoints |
 
 ### Design
@@ -660,59 +883,53 @@ wiring greps that line for `0 fail`.
   (headings indexed first, sections ranged to the next same-or-higher
   heading, endpoints normalized and deduplicated, version token scanned
   per the §4 rules).
-- Live ground truth comes from `GET /` on the component's port (and the
-  local `build/<name> --version` binary when present) — self-description
-  is authoritative.
+- Live ground truth comes from `GET /` on the component's server-mode
+  port (and the local `build/<name> --version` binary when present) —
+  self-description is authoritative.
 - Every check is independently `PASS` / `FAIL` / `SKIP`; `SKIP` never
   counts against a component's score, so a missing daemon degrades the
   report instead of breaking it.
-- Stateful dogfooding: with `--exomind`, each component's score is stored
-  as `exodoc:audit:<ts>:<component>` and a summary line lands in the note
-  feed, so doc-debt history is itself queryable.
+- Stateful dogfooding: with `exomind=`, each component's score is stored
+  as `exodoc:audit:<ts>:<component>` and a summary line lands in the
+  note feed, so doc-debt history is itself queryable.
 
 ### Tests
 
 The suite runs a live audit against its own fake daemons (PASS/FAIL/SKIP
 math), JSON validity, `--out` file writing, down-daemon SKIP behavior,
-version mismatch detection via binary and via spec, API mismatch detection,
-and garbage-doc robustness (NUL bytes, oversized lines) — `exodoc` must
-never crash on them. Needs `curl` and `python3` (the fake daemons);
-`bash exodoc/test/test.sh` runs standalone in its own temp dir.
+version mismatch detection via binary and via spec, API mismatch
+detection, and garbage-doc robustness (NUL bytes, oversized lines) —
+`exodoc` must never crash on them. Needs `curl` and `python3` (the fake
+daemons); `bash exodoc/test/test.sh` runs standalone in its own temp dir.
 
 ### Limitations
 
-- `--live` verifies version and endpoint sets only; it does not exercise
+- `live=1` verifies version and endpoint sets only; it does not exercise
   every endpoint's behavior — behavioral conformance is the job of each
   component's own test suite.
 - The manifest format, section synonyms and endpoint normalization are
-  fixed by `standard.md` v0.1.0; a doc that uses exotic heading wording
-  outside the synonym table will be flagged even if a human finds it
-  adequate.
-- A component's README version token is the FIRST `X.Y.Z` in the document;
-  docs must therefore state the version before any incidental numeric
-  collocation.
+  fixed by `standard.md`; a doc that uses exotic heading wording outside
+  the synonym table will be flagged even if a human finds it adequate.
+- A component's README version token is the FIRST `X.Y.Z` in the
+  document; docs must therefore state the version before any incidental
+  numeric collocation.
 
-### Roadmap
-
-- Iteration 5: the Quality Management component consumes `--json` output
-  and turns doc-debt history into trend reports.
-
-## exoqms — the Quality Management System (port 7657)
+## exoqms — the Quality Management System
 
 `exoqms` v0.2.0 is a QMS daemon (C11, zero dependencies: libc + pthread
 only) that turns the ISO 9000 family into running code for the exomind
 stack. It holds quality objectives, runs ISO 19011 audit programs
-against the live stack, records non-conformities (NCs) with a
-full corrective-action lifecycle, and publishes every milestone into
-exomind's note feed. Its durable state lives entirely inside exomind
-under `exoqms:*` keys, so the QMS itself is auditable and survives
-restarts like every other layer.
+against the live stack, records non-conformities (NCs) with a full
+corrective-action lifecycle, and publishes every milestone into exomind's
+note feed. Its durable state lives entirely inside exomind under
+`exoqms:*` keys, so the QMS itself is auditable and survives restarts
+like every other layer.
 
-The audit program runs the seven checks defined in
-`exoqms/standard.md`, invoking `exodoc` (the documentation auditor),
-`exoqms-ui` (the UI quality auditor), `exoqms-code` (the code-safety
-analyzer) and `exoqms-svg` (the asset-logic analyzer) as child
-processes under a hard 5-second timeout each.
+The audit program runs the checks defined in `exoqms/standard.md`,
+invoking `exodoc` (the documentation auditor), `exoqms-ui` (the UI
+quality auditor), `exoqms-code` (the code-safety analyzer) and
+`exoqms-svg` (the asset-logic analyzer) as child processes under a hard
+5-second timeout each.
 
 ### ISO mapping
 
@@ -720,118 +937,94 @@ processes under a hard 5-second timeout each.
 |--------------|-----------|----------------|
 | ISO 9000:2015 | concepts and vocabulary: quality is conformance to stated requirements | the checks in `standard.md` section 5 define the stated requirements, machine-executable |
 | ISO 9001:2015 §5.2 | quality policy — commitment to quality | the quality policy statement in `standard.md` section 2 |
-| ISO 9001:2015 §6.2 | quality objectives | `POST /objectives` — measurable objectives with metric keys and targets |
+| ISO 9001:2015 §6.2 | quality objectives | `/objectives` — measurable objectives with metric keys and targets |
 | ISO 9001:2015 §7.5 | documented information | `doc-compliance` check runs `exodoc audit --live` on every audit |
-| ISO 9001:2015 §8.7 | control of non-conforming outputs | `POST /nc` — NCs with severity (`major`/`minor`) and source |
+| ISO 9001:2015 §8.7 | control of non-conforming outputs | `/nc` — NCs with severity (`major`/`minor`) and source |
 | ISO 9001:2015 §9.1 | monitoring, measurement, analysis and evaluation | `metrics` check — the `metric:iterN:tests_passing` trend |
 | ISO 9001:2015 §10.2 | corrective action | the NC lifecycle `open → analysis → corrective → verify → closed` with mandatory evidence |
-| ISO 9004:2018 | sustained success over the long term | the trend verdict (`up`/`flat`/`down`) and the stagnation flag in `GET /trends` and `GET /report` |
-| ISO 19011:2018 | audit programs: planning, criteria, evidence, records | `POST /audit` — named audit programs, check criteria, per-check findings with evidence, durable records |
+| ISO 9004:2018 | sustained success over the long term | the trend verdict (`up`/`flat`/`down`) and the stagnation flag in `/trends` and `/report` |
+| ISO 19011:2018 | audit programs: planning, criteria, evidence, records | `/audit` — named audit programs, check criteria, per-check findings with evidence, durable records |
 
-### Quickstart
+### Console operations
 
-Build: `make exoqms` builds `exoqms/build/exoqms` AND
-`exoqms/ui/build/exoqms-ui` (or `make qms-modules` for just code + svg).
-
-Run against the shared swarm (the QMS stores its state in the shared
-exomind so audits and NCs are visible to every agent):
-
+```sh
+exoqms /objectives --body "tests-green	metric:iter1:tests_passing	100"
+exoqms /nc --body "broken docs	major	README drifted from the binary"
+exoqms /audit --body "audit-stack	component-tests,doc-compliance,dogfood,ui-audit,metrics,code-safety,asset-logic	a,b,b1,b2,b3,e"
+exoqms /audit?criteria=metrics              # criteria in the query instead of a body
+exoqms /audit?id=<audit-id>                 # findings
+exoqms /objectives                          # list
+exoqms /nc?status=open                      # open NCs
+exoqms /issues                              # detection registry
+exoqms /report                              # consolidated quality picture
+exoqms /trends                              # metric trend + verdict
+exoqms /ping
 ```
-./exoqms/build/exoqms --port 7691 \
-    --exomind http://127.0.0.1:7654 \
-    --exosched http://127.0.0.1:7655 \
-    --exodoc ./exodoc/build/exodoc \
-    --ui ./exoqms/ui/build/exoqms-ui \
-    --code ./exoqms/code/build/exoqms-code \
-    --svg ./exoqms/svg/build/exoqms-svg \
-    --repo . --agents a,b,b1,b2,b3,e &
-```
-
-Then run an audit program:
-
-```
-curl -s -X POST "http://127.0.0.1:7691/audit?target=exoqms/ui/fixtures/good.html" \
-  --data-binary $'stack audit\tcomponent-tests,doc-compliance,dogfood,ui-audit,metrics,code-safety,asset-logic\ta,b,b1,b2,b3,e'
-# ok <audit-id> <score>%
-```
-
-### Usage
-
-```
-./build/exoqms [--host <addr>] [--port <n>] [--exomind <url>]
-               [--exosched <url>] [--exodoc <path>] [--ui <path>]
-               [--code <path>] [--svg <path>] [--repo <dir>]
-               [--agents <a,b,c>] [--notes24h <n>] [--token <t>]
-```
-
-Defaults: port 7657, exomind `http://127.0.0.1:7654`, exosched
-`http://127.0.0.1:7655`, exodoc on `PATH`, repo `.`, agents
-`a,b,b1,b2,b3`, notes24h 5. Set `--token` (or env `EXOQMS_TOKEN`) to
-require `Authorization: Bearer <token>` on every request. `--ui`
-points at the exoqms-ui binary and enables the `ui-audit` check;
-`--code` enables `code-safety`; `--svg` enables `asset-logic`;
-without a module's binary that check reports `skip`.
-
-### Endpoints
 
 | method | path | purpose |
 |--------|------|---------|
-| GET | / | full spec (self-describing) |
-| GET | /ping | liveness: `pong` |
-| POST | /objectives | add objective (body below) |
-| GET | /objectives | list objectives |
-| POST | /nc | raise non-conformity (body below) |
-| GET | /nc?id=<id> | NC detail |
-| GET | /nc?status=<st> | list NCs, filtered |
-| POST | /nc?id=<id>&action=<a> | NC lifecycle transition |
-| POST | /audit | run an audit program (body below) |
-| GET | /audit?id=<id> | audit report with findings |
-| GET | /audits | audit program list |
-| GET | /report | consolidated quality picture |
-| GET | /trends | metric trend + verdict |
+| GET | `/` | full spec (self-describing) |
+| GET | `/ping` | liveness: `pong` |
+| POST | `/objectives` | add objective (body below) |
+| GET | `/objectives` | list objectives |
+| POST | `/nc` | raise non-conformity (body below) |
+| GET | `/nc?id=<id>` | NC detail |
+| GET | `/nc?status=<st>` | list NCs, filtered |
+| POST | `/nc?id=<id>&action=<a>` | NC lifecycle transition |
+| POST | `/audit` | run an audit program (body below) |
+| GET | `/audit?id=<id>` | audit report with findings |
+| GET | `/audits` | audit program list |
+| GET | `/issues` | detection registry (`issue:<check>` records) |
+| GET | `/report` | consolidated quality picture |
+| GET | `/trends` | metric trend + verdict |
 
-Add `json=1` to listing endpoints for JSON. Errors are
-`error: <reason>` with HTTP 4xx/5xx; request bodies are tab-separated
-fields.
+A body selects POST on `/objectives`, `/nc`, `/audit`; a body-less op
+falls back to GET (list / detail). Console ops need a serving exomind
+(the QMS state lives there). Server mode binds 7657 by default and takes
+`--exomind` (default `http://127.0.0.1:7654`), `--exosched` (default
+`http://127.0.0.1:7655`), `--exodoc` (default `exodoc` on PATH),
+`--ui`, `--code`, `--svg` (paths to the field-module binaries; without
+them the corresponding check reports `skip`), `--rules` (rule files for
+the universal checks), `--repo` (default `.`), `--agents` (default
+`a,b,b1,b2,b3`), `--notes24h` (default 5), `--token` (or env
+`EXOQMS_TOKEN`). Add `json=1` to listings; request bodies are
+tab-separated fields.
 
 ### Objectives (ISO 9001 §6.2)
 
-`POST /objectives` body: `title<TAB>metric_key<TAB>target`, with an
-optional fourth field `period` (default `iter`). `met` means
-`value >= target` for numeric targets, equality for string targets; a
-missing metric key yields `no-data`. Answer: `ok <id>`.
+`/objectives` body: `title<TAB>metric_key<TAB>target`, with an optional
+fourth field `period` (default `iter`). `met` means `value >= target`
+for numeric targets, equality for string targets; a missing metric key
+yields `no-data`. Answer: `ok <id>`.
 
 ### Non-conformities and corrective action (ISO 9001 §8.7, §10.2)
 
-`POST /nc` body: `title<TAB>severity<TAB>description`, severity is
-`major` (breach of a normative clause or regression) or `minor`.
-Answer: `ok <id>`; the NC starts `open`.
-
-Lifecycle:
+`/nc` body: `title<TAB>severity<TAB>description`, severity is `major`
+(breach of a normative clause or regression) or `minor`. Answer:
+`ok <id>`; the NC starts `open`.
 
 ```
 open --analyse--> analysis --correct--> corrective --verify--> verify --close--> closed
 ```
 
-`POST /nc?id=<id>&action=analyse|correct|verify|close` advances the
-NC; every transition is written to the exomind note feed as an
-audit-trail entry (`nc <id> transition: <from> -> <to> (<body>)`).
-Invalid transitions are rejected with 400 naming the expected status.
-Closure from any status requires a body of
-`corrective_action<TAB>evidence` (a third field is appended as a note,
-a fourth sets `closed_by`, default `api`); from `verify` a note alone
-is enough. Closed NCs drop out of the open count in `GET /report`.
+`/nc?id=<id>&action=analyse|correct|verify|close` advances the NC; every
+transition is written to the exomind note feed as an audit-trail entry
+(`nc <id> transition: <from> -> <to> (<body>)`). Invalid transitions are
+rejected naming the expected status. `close` is the escape hatch: it is
+allowed from ANY status when the body carries
+`corrective_action<TAB>evidence` (a third field is appended as a note, a
+fourth sets `closed_by`, default `api`); from `verify` a note alone is
+enough. Closed NCs drop out of the open count in `/report`.
 
 ### Audit programs (ISO 19011)
 
-`POST /audit` body: `name<TAB>criteria` — criteria is a comma-separated
-list of check ids (`component-tests,doc-compliance,dogfood,ui-audit,metrics,code-safety,asset-logic`;
-empty = all seven), with an optional third field `agents` for the
-dogfood check. Query `?target=<path>` feeds the `ui-audit` check (and
-overrides the scan target of `code-safety` and `asset-logic`).
-Answer: `ok <audit-id> <score>%`; `GET /audit?id=` prints the record
-plus one findings line per check: `check<TAB>result<TAB>evidence`.
-The score is `100 * pass / (pass + fail)` rounded, `skip` not counted.
+`/audit` body: `name<TAB>criteria` — criteria is a comma-separated list
+of check ids (empty = all), with an optional third field `agents` for
+the dogfood check. Query `?target=<path>` feeds the `ui-audit` check
+(and overrides the scan target of `code-safety` and `asset-logic`).
+Answer: `ok <audit-id> <score>%`; `/audit?id=` prints the record plus
+one findings line per check: `check<TAB>result<TAB>evidence`. The score
+is `100 * pass / (pass + fail)` rounded, `skip` not counted.
 
 | check | passes when |
 |-------|-------------|
@@ -842,11 +1035,19 @@ The score is `100 * pass / (pass + fail)` rounded, `skip` not counted.
 | metrics | the `metric:iterN:tests_passing` trend is not `down` |
 | code-safety | `exoqms-code` reports 0 **major** findings on the stack's own C source (default target: the manifest source dirs; minor findings non-fatal) |
 | asset-logic | `exoqms-svg --shape auto` reports 0 **major** findings on the stack's own SVG assets (default target: the repo root; minor findings non-fatal) |
+| debt | `debt-*` findings ≤ `thresholds.debt` (default 10) |
+| hygiene | 0 `hygiene-*` findings |
+| secrets | 0 `secrets-*` findings (matched lines masked to `***`) |
+| agent-health | every configured agent has responded since its last scheduled reminder (freeze detection) |
+| docs-coverage | every manifest component ships the required docs files |
+| kit-fidelity | the stack's `kit/` audits pass (exokit) |
+| memory-awareness | every configured agent acknowledged the exomind mandate |
+| issue-tracking | failed checks leave `issue:<check>` detection records |
 
 Each check runs under a hard 5s timeout; children that overrun are
 SIGKILLed and the check fails with `timed out`.
 
-### The universal project config (iter7, v0.2.0)
+### The universal project config
 
 Any project — inside the stack or foreign — can be audited via a
 `.exoqms.json` at the repo root. The daemon loads it on startup (the
@@ -865,407 +1066,50 @@ Any project — inside the stack or foreign — can be audited via a
 
 All keys optional; malformed JSON degrades to defaults with a stderr
 warning. `languages` pins the code-safety analyzer (`auto` = detect),
-`rules` toggles the new checks, `thresholds.debt` is the maximum number
-of `debt-*` findings that still passes, `test` runs whole-project test
-commands (5s budget each, from the repo root) when there is no stack
-manifest, `docs` names the required files for `doc-compliance` in that
-mode, and `ignore` globs are handed to the analyzer scans.
+`rules` toggles the universal checks, `thresholds.debt` is the maximum
+number of `debt-*` findings that still passes, `test` runs whole-project
+test commands (5s budget each, from the repo root) when there is no
+stack manifest, `docs` names the required files for `doc-compliance` in
+that mode, and `ignore` globs are handed to the analyzer scans.
 
-The three universal checks share one `exoqms-code --rules` scan per
-audit (memoized), partitioned by check-id prefix:
-
-| check | passes when |
-|-------|-------------|
-| debt | `debt-*` findings ≤ `thresholds.debt` (default 10) |
-| hygiene | 0 `hygiene-*` findings |
-| secrets | 0 `secrets-*` findings (matched lines masked to `***`) |
-
-The rule files live in the `--rules` directory, else `rules/` next to
-the `--code` binary, else `<repo>/exoqms/code/rules`; without them the
-checks report `skip` so a half-wired deployment degrades honestly.
+The universal checks share one `exoqms-code --rules` scan per audit
+(memoized), partitioned by check-id prefix. The rule files live in the
+`--rules` directory, else `rules/` next to the `--code` binary, else
+`<repo>/exoqms/code/rules`; without them the checks report `skip` so a
+half-wired deployment degrades honestly.
 
 ### The field modules
 
 Three sibling quality-audit engines live under `exoqms/`, each a
-zero-dependency C11 batch binary with its own fixtures and test suite:
+zero-dependency C11 batch binary with its own fixtures and test suite
+(see each module's README for the full contract):
 
-- [`exoqms/ui`](exoqms/ui/README.md) — the UI quality auditor (7 defect
-  classes: emoji icons, overlapping controls, misaligned siblings,
-  corner mismatches, missing backgrounds, unstyled sdk-default
-  controls, WCAG AA contrast). Permanent fixtures `good.html` (0
-  findings) and `bad.html` (12 intentional findings).
-- [`exoqms/code`](exoqms/code/README.md) — the code-safety analyzer:
-  error-handling defects in C source (unchecked returns of critical
-  libc calls, missing error paths, null-deref paths). This is the
-  deployment loop's fix step applied to code: the audit program runs
-  it against the stack's own source, findings become NCs, and the
-  fixes are verified by re-auditing.
-- [`exoqms/svg`](exoqms/svg/README.md) — the asset-logic analyzer: generated
-  SVG shape rules (tree rule-set: stem, crown, proportions, symmetry,
-  degeneracy). Fixtures: `tree-good.svg` (clean) and six deliberately
-  broken trees.
+- [`exoqms/ui`](exoqms/ui/README.md) — the **UI quality auditor**: 7
+  defect classes (emoji icons, overlapping controls, misaligned
+  siblings, corner mismatches, missing backgrounds, unstyled
+  sdk-default controls, WCAG AA contrast) over an HTML subset + a
+  static layout model. `exoqms-ui <target> [--json] [--no-emoji]
+  [--emoji-allowlist <chars>]`; exit 0 = clean, 1 = findings, 2 =
+  usage/IO error. Fixtures `good.html` (0 findings) and `bad.html` (12
+  findings) pin the counts.
+- [`exoqms/code`](exoqms/code/README.md) — the **code-safety analyzer**:
+  error-handling defects in C/C++ source plus shell/python line-based
+  adapters and a text-rule engine for any language (missing-error-path,
+  unchecked-deref-alloc, unchecked-return, uninitialized-use,
+  swallowed-error, empty-error-branch). `exoqms-code <file-or-dir>...
+  [--json] [--ignore <glob>]`; the daemon's `code-safety` check passes
+  iff 0 major findings. The analyzer's own source is self-audit clean.
+- [`exoqms/svg`](exoqms/svg/README.md) — the **asset-logic analyzer**:
+  geometry checks on generated SVG (tree rule-set: stem taper, stem
+  missing, crown roundness, proportions, symmetry, degeneracy,
+  fragmentation, out-of-bounds). `exoqms-svg <target> [--shape
+  tree|auto] [--json]`; `auto` skips files without a `data-shape="tree"`
+  hint. Fixtures include `tree-good.svg` (0 findings) and deliberately
+  broken trees with pinned counts.
 
 The daemon invokes them through the `ui-audit`, `code-safety` and
-`asset-logic` checks. Build all of them with `make exoqms` from the
-repo root (or `make qms-modules` for just code + svg).
-
-#### exoqms-ui — the UI quality auditor
-
-A zero-dependency C11 static analyzer (ISO honesty: it is an
-*approximate* static analysis, not a browser — see below). It reads an
-HTML file (or a directory of `.html` files plus their linked `.css`
-files) and detects seven classes of UI defects, so the QMS can enforce
-visual quality without a human looking at a screen.
-
-```
-exoqms-ui <target> [--json] [--no-emoji] [--emoji-allowlist <chars>]
-exoqms-ui --help | --version
-```
-
-`<target>` is an HTML file, or a directory — a directory audit walks it
-recursively for `.html` files and pulls in each page's `<link
-rel="stylesheet">` files (relative paths resolved, remote URLs skipped
-with a note) and inline `<style>` blocks.
-
-Plain output is one finding per line, then an exact summary line:
-
-```
-major emoji-icon html > body > header.topbar > button.cart-btn emoji 🛒 in visible UI text where an icon belongs (use an SVG <use> or <img> icon instead)
-=== findings: 12 (10 major) ===
-```
-
-`--json` prints a JSON array of findings (one object per line) and no
-summary line. Exit codes: `0` no findings, `1` findings, `2` usage/IO
-error.
-
-The seven checks:
-
-| id | severity | flags | how |
-|----|----------|-------|-----|
-| `emoji-icon` | major | emoji characters in the visible text of interactive elements (button/a/label/summary/option) or icon-ish contexts (class/id containing `icon`, `ico`, `btn`) | UTF-8 scan of own text nodes against the emoji codepoint ranges (U+2600–27BF, U+2B00–2BFF, U+1F000–1FAFF, FE0F/20E3); `--no-emoji` disables, `--emoji-allowlist` admits characters |
-| `overlap` | major | intersecting bounding boxes of interactive elements that are not nested (button/a/input/select/textarea/label/summary/option) | simplified layout boxes; intersection must exceed 2px in both axes; reports both selectors and the intersection size; geometry checks never fire on elements whose size cannot be determined |
-| `misalign` | minor | siblings that should align but don't: same tag + shared class + same width and height, but different left edges (stacked layout) or different top edges (flex-row) | compares computed x (block flow) or y (flex row) of the sibling pair; tolerance 2px |
-| `corner-mismatch` | minor | two adjacent siblings sharing an edge where one corner is rounded and the matching corner on the other element is square (rounded corner does not connect to a straight line) | border-radius per corner (shorthand 1-4 values, `%` resolved against min(w,h)); vertical and horizontal adjacency within 1px and 4px of shared edge |
-| `background` | major | interactive elements with no background (no affordance) on the page background; background equal to the page background; hardcoded background colors that are neither the theme palette nor the page background | effective background via ancestor walk (background does NOT inherit; alpha composited over the page bg); page bg = body/html bg or white; bordered elements (any side ≥ 1px) are exempt as ghost buttons; palette = resolved `--color*` custom properties; elements using `var()` are exempt from the palette check |
-| `sdk-default` | major | interactive elements (button/a/input/select/textarea) with zero CSS rules targeting them anywhere in the stylesheet | selector matching during cascade: element, `.class`, `#id`, `*`, descendant, `>`; pseudo-classes stripped; inline `style=` does not count as a rule |
-| `contrast` | major | text vs effective background below WCAG AA: 4.5:1, or 3:1 for large text (font-size ≥ 24px) | sRGB relative luminance (WCAG formula) from hex/rgb/rgba/hsl/named colors; skipped when opacity < 1, background images are present, or any color is unresolvable |
-
-Supported input subset: **HTML** — tags, attributes
-(class/id/style/src/href/...), text nodes, nesting, self-closing tags
-(`/>` and void elements), comments, doctype, common entity decoding.
-Not a full HTML5 spec parser: no implied end-tags, unclosed tags stay
-open until the document ends, error recovery is "pop until matching
-tag". **CSS** — selectors `element`, `.class`, `#id`, `*`, descendant
-and `>` combinators, comma lists; pseudo-classes are stripped (`:hover`
-rules still count for `sdk-default`); custom properties on `:root`
-resolved via `var()` (with fallbacks); declarations for color,
-background(-color/-image), border-radius, width/height, min/max,
-margin/padding (all shorthands), position/offsets, display, float,
-flex basics (flex-direction/justify-content/align-items/align-self/
-flex-wrap/flex-grow/shrink/basis), box-sizing, font-size, line-height,
-opacity, visibility, border widths/colors. `@media/@import/@keyframes/
-@font-face` blocks and `[attr]`/`+`/`~` selectors are skipped and
-counted (a note is printed to stderr).
-
-Layout model limitations — a static approximation of the CSS box model
-on a fixed 1024×768 viewport:
-
-- Static block flow only; floats are approximated as block placement;
-  `float` wrapping of subsequent text is not modeled.
-- Flex is simplified: row/column direction, top-aligned items,
-  `justify-content`/`align-items` ignored (except direction); auto
-  widths of flex items are estimated from text.
-- Inline layout is a one-line flow with wrapping; `inline-block` boxes
-  are placed on the line like inline elements.
-- No text wrapping/measurement: intrinsic widths are estimated as
-  0.5em per ASCII glyph (0.8em for non-ASCII); line-height defaults to
-  `normal` (1.4).
-- No transforms, no overflow clipping, no z-index, no `position:
-  sticky`, no tables (block-approximated), no `calc()`, no `vw/vh`,
-  no background images (elements with images are skipped for
-  color-dependent checks).
-- No margin collapsing between siblings.
-- When a dimension cannot be determined at all, the box is marked
-  unknown and geometry checks emit **nothing** for that element. When a
-  dimension is only estimated (text-sized, percentage, content-derived
-  height), the finding reason says "(approx geometry)".
-- Default UA styles approximated: body margin 8px, font-size 16px;
-  inline vs block display defaults follow common tags (a/span/label
-  inline, button/input/img inline-block, everything else block).
-
-False negatives are preferred over false positives: if the model cannot
-decide, it stays silent.
-
-Fixtures (permanent QA artifact): `fixtures/bad.html` + `bad.css` —
-deliberately defective, contains all seven defect classes: emoji icons
-(🛒 ⚙), overlapping buttons (relative `top: -30px`), misaligned
-siblings (`margin-left: 30px`), rounded card above square card,
-white-on-white CTA, transparent raw button, an off-palette hardcoded
-`#ff00ff`, an unstyled `<button>`, low-contrast text. Expected:
-**12 findings (10 major)**, every check fires. `fixtures/good.html` +
-`good.css` — clean page: SVG `<use>` icons, aligned flex rows and card
-grid, consistent corner radii, every interactive element styled from
-the `:root` palette, WCAG AA contrast everywhere. Expected: **0
-findings**.
-
-Test suite (`make -C exoqms/ui test`, 28 checks): audits both fixtures
-with pinned finding counts and the exact summary line, validates
-`--json` with python3, exercises `--no-emoji` and `--emoji-allowlist`,
-feeds garbage (NUL bytes, unclosed tags, a 10MB single line) and
-asserts no crash, checks exit codes 0/1/2, `--version`/`--help`, and
-directory mode with per-file headers.
-
-`exoqms-ui` is the batch auditor of the QMS loop: the daemon shells out
-to it and the pipeline collects its findings. It writes no state of its
-own; findings are plain text or JSON, one per line.
-
-#### exoqms-code — the code-safety analyzer
-
-Multi-language QMS code-safety module (v0.2.0): C/C++ analysis, shell
-and python line-based adapters, and a generic text-rule engine — audits
-any project in any language. The premise (production experience): when
-error paths are missing, a simple var-rename or a dropped `fopen`
-result silently corrupts output and costs hours to find. With proper
-"if not / else" error branches, the error points at the exact function,
-and debugging covers only what leads up to it. This analyzer finds the
-places where that structure is missing.
-
-```
-exoqms-code <file-or-dir>... [--json] [--ignore <glob>] [--version]
-```
-
-Findings, one per line:
-
-```
-<severity> <check-id> <file:line:col> <reason>
-=== findings: N (M major) ===
-```
-
-Exit 0 = clean, 1 = findings, 2 = usage error. `--json` emits a JSON
-array `{check,severity,file,line,col,reason}` for the QMS daemon.
-
-Checks:
-
-| id | severity | what it flags |
-|----|----------|---------------|
-| `missing-error-path` | major | value of an error-returning call (fopen, read, strdup, in-file pointer-returning fn) used later without an intervening if-not/else branch — the var-rename-class bug |
-| `unchecked-deref-alloc` | major | malloc/calloc/realloc result dereferenced before any NULL check |
-| `unchecked-return` | minor | statement `errfn(...);` with the result dropped (`(void)` disclaims) |
-| `uninitialized-use` | minor | local read before assignment (in an expression or condition) |
-| `swallowed-error` | minor | `if (errfn() != 0) { }` — failure checked with an empty branch |
-| `empty-error-branch` | minor | `if (x != 0) { }` — error-style condition with an empty branch |
-
-Error-function model:
-
-- Known libc/POSIX list (fopen, read, write, malloc family, pread, socket
-  family, ...). `snprintf`/`pthread_mutex_*` are deliberately excluded: their
-  failure is a programming error, and checking them is not the norm; including
-  them would drown real findings.
-- In-file functions count as error sources only when they return a pointer
-  (can be NULL); int/status-returning helpers are chaining patterns.
-- Abort-on-fail allocators (`xmalloc`, `xrealloc`, `xcalloc`, `xstrdup`,
-  `xstrndup`) are exempt: they never return NULL.
-- A function whose contract guarantees non-NULL can be documented with a
-  `/* @nonnull */` comment above its definition to clear it.
-
-Parser scope and honest limitations — lexical analysis, no full parse.
-The checker stays silent when a pattern is undeterminable (false
-positives are the enemy):
-
-- No control-flow analysis: `p = f(); if (!p) ...; use(p)` is recognized, but
-  a use in a sibling branch of an `if/else` is reported conservatively (the
-  `util.c:363` style finding is a known single false positive).
-- No cross-file analysis: typedefs from included headers are not collected
-  (header typedefs in pointer contexts are treated as types by heuristic).
-- No macro expansion; preprocessor lines are skipped.
-- `(void)` casts, `free()`, `sizeof x`, `&x` output params, and
-  `x && use(x)` / `x ? ... : ...` truthiness guards are all respected.
-
-Test suite (`make -C exoqms/code test`, 24 checks): `fixtures/bad.c`
-fires every check id with pinned counts, `fixtures/good.c` is clean,
-JSON validity, `--ignore`, directory mode, NUL-byte / 10 MB inputs
-never crash.
-
-Real-run results (iteration 6, the stack's own C code): after
-calibration, over all 7 components (~20k lines C) — **majors: 99 -> 1**
-(the documented branch-blindness false positive); minors: 312 -> 101,
-all `unchecked-return` on `close()`/`fclose()`/`setsockopt()`/
-`clock_gettime()` in error paths and cleanup (deliberate drops; the
-error is already in flight — triage items, not defects); one real
-defect found and fixed in the module's own tokenizer (fread short-read
-silently truncated; now returns an error); the module's own source is
-self-audit clean.
-
-Notes: `@nonnull` annotations are also a documentation contract —
-`exodoc`-style readers see at a glance which functions cannot return
-NULL. Severity rule for the QMS daemon's `code-safety` check: **pass
-iff 0 major**; minor findings are reported but non-fatal (see
-`exoqms/standard.md` §5.3 c6).
-
-#### exoqms-svg — the asset-logic analyzer
-
-A zero-dependency C11 static analyzer (ISO honesty: an *approximate*
-geometry analysis, not a renderer — see below). It reads an SVG file
-(or a directory of `.svg` files) and checks the **logic** of the shapes
-with geometry, not taste: "an AI made tree SVG, unless it's as simple
-as a tapered stem and a round crown, is almost certainly anything but
-an actual tree." Generated graphics look plausible but are structurally
-wrong; this module catches that. v0.1.0 ships the **tree** rule-set;
-shape kinds are pluggable rule-sets behind the same `audit_run` entry
-point.
-
-```
-exoqms-svg <target> [--shape tree|auto] [--json]
-exoqms-svg --help | --version
-```
-
-`<target>` is one `.svg` file, or a directory — a directory audit walks
-it recursively for `.svg` files. `--shape` selects the rule-set:
-`tree` forces it, `auto` (the default) detects it from the root `<svg>`
-`data-shape` attribute (e.g. `<svg data-shape="tree">`) or, failing
-that, from a filename containing "tree" (case-insensitive). If `auto`
-finds no hint the file is **skipped**: plain mode prints one line
-`skip unknown-shape <path>: no tree hint (no data-shape="tree" on root
-<svg>, filename has no "tree")`, it does not count as a finding and the
-exit code stays 0. This is the documented behavior for `house.svg` in
-the fixtures: with `--shape auto` it is skipped; with `--shape tree`
-the tree rules run anyway and flag it (2 major + 1 minor, pinned in the
-tests).
-
-Plain output is one finding per line — `<severity> <check-id>
-<reason>` — then an exact summary line:
-
-```
-minor symmetry crown leans 4830/12841 (left/right area about trunk axis x=156.0, balance ratio 0.38, want ≥ 0.6)
-=== findings: 1 (0 major) ===
-```
-
-`--json` prints a JSON array of finding objects (`file`, `shape`,
-`severity`, `check`, `reason`; one object per line) and no summary
-line. Exit codes: `0` no findings, `1` findings, `2` usage/IO error.
-Skipped files never produce findings in `--json` mode.
-
-The tree rule-set (one line per check, with the math):
-
-| id | severity | flags | how |
-|----|----------|-------|-----|
-| `stem-taper` | major | trunk is a parallel-sided box (ratio > 0.9) or a spike (< 0.15) | trunk = the elements whose bbox center lies below the crown split; stem width = the horizontal extent of the trunk segments crossing a horizontal line (cross-section), measured at 10% (top slice) and 90% (bottom slice) of the trunk bbox height; a tapered stem is narrower at top: `ratio = width_top / width_bottom` must lie in [0.15, 0.9] |
-| `stem-missing` | major | nothing below the crown region at all | trunk element count == 0; reported even on degenerate input |
-| `crown-roundness` | major | crown bbox aspect outside [0.75, 1.5]; or convexity < 0.8; or a box-shaped crown | crown = elements in the upper region (see region split); aspect = `crown_w / crown_h`; convexity = `union area / convex hull area`, hull by monotone chain (Andrew) over all sampled crown points, areas by shoelace, clamped to 1.0; union area = sum of the crown element areas (overlaps counted twice — see Limitations). A single crown element filling ≥ 85% of its own bbox is a box-shaped crown (a square has convexity 1.0, so convexity alone cannot flag it — documented extension) |
-| `proportions` | minor | `trunk_h / crown_h` outside [0.15, 0.6], or `crown_w / total_h` outside [0.4, 1.6] | measured on the trunk/crown/total bounding boxes |
-| `symmetry` | minor | crown left/right area balance ratio < 0.6 about the trunk axis | axis = trunk bbox center x; each crown element's area is split left/right by the fraction of its bbox on each side of the axis; `ratio = min(left,right) / max(left,right)`; skipped when the stem is missing |
-| `empty-shape` | major | total painted area < 0.5% of the total bbox area (a single line, a stick, an empty `<svg>`) | degenerate input: the crown/trunk shape checks are then skipped (geometry is meaningless); `stem-missing` is still reported |
-| `fragmented` | minor | more than 8 disconnected stroke groups | connected components (union-find) over path/polygon/polyline/line elements, two elements linked when any two of their points are within 2% of the bbox diagonal; computed on ≤ 4000 points (beyond that the check stays silent) |
-| `out-of-bounds` | minor | element entirely outside the svg `viewBox` | element bbox vs `viewBox x y w h`; no viewBox → check skipped |
-
-**Region split heuristic (documented):** crown = the top 65% of the
-total bbox height; an element belongs to the crown when its bbox center
-lies at or above the split line, otherwise it is trunk material. When
-the resulting crown bbox extends below the top 70% of the total height
-(the 65% line cut through the canopy), trunk elements that still sit
-inside the crown's horizontal span and do not extend below the crown
-bottom are reclassified as crown.
-
-API (CLI surface):
-
-| method | signature | purpose |
-|--------|-----------|---------|
-| batch | `exoqms-svg <file.svg>` | audit one file, tree rule-set via auto-detection |
-| batch | `exoqms-svg <dir>` | audit every `.svg` under the directory, per-file headers + totals |
-| batch | `--shape tree` | force the tree rule-set |
-| batch | `--shape auto` | detect via `data-shape` attribute or filename (default) |
-| batch | `--json` | JSON array output instead of plain text |
-| batch | `--version` / `--help` | version / usage |
-
-The audit engine is a library of one entry point, `audit_run()` (see
-`src/svg.h`): shape kinds are pluggable rule-sets behind it, so a new
-shape kind (e.g. `house`) is a new detection string + one rule function,
-not a CLI change. The module is a batch auditor; it writes no state of
-its own — findings are plain text or JSON, one finding per line, ready
-for the QMS daemon and pipeline to consume like `exoqms-ui`'s.
-
-Design: five files, no dependencies beyond libc + `-lm`: `main.c`
-(CLI), `util.c` (memory/strings/file/dir walk), `svgparse.c` (the SVG
-subset parser: XML-lite tokenizer + path-data sampler + affine
-transforms), `geom.c` (shoelace, monotone-chain convex hull) and
-`checks.c` (the tree rule-set + shape detection). Elements are sampled
-to world-coord points/segments once at parse time; every check runs on
-those points — no second parser, no state between audits. Sampling:
-`C/S` → 8 points, `Q/T` → 4, `A` → 8 (center parameterization),
-circles/ellipses → 16 perimeter points (their bbox corners are included
-in the samples), `rect` → 4 corners, `polygon`/`polyline`/`line` →
-their vertices. Paths are treated as filled: open subpaths are closed
-implicitly for area and cross-section, matching SVG fill semantics.
-
-Supported input subset (honest): **Elements** — `svg`, `g` (nested,
-flattened), `path`, `circle`, `ellipse`, `rect`, `line`, `polygon`,
-`polyline`. **Attributes** — `id`, `d`, `cx/cy/r`, `rx/ry`, `x/y`,
-`x1/y1/x2/y2`, `width/height`, `points`, `transform`, `viewBox`,
-`data-shape`. **Transforms** — `translate`, `scale` and `rotate` (with
-optional center) are composed and applied; `matrix`, `skewX`, `skewY`
-are **skipped with a note** on stderr. **Path commands** — `M/m L/l
-H/h V/v C/c S/s Q/q T/t A/a Z/z` with implicit repetition; relative
-coordinates supported; exponents (`1e2`) supported. **Not supported** —
-`<use>`, `<defs>` contents (their subtrees are ignored entirely — they
-are not rendered), `<text>`, gradients/markers/clips,
-`style`/`fill`/`stroke` (colors are ignored; `fill="none"` is not
-honored — all paths are treated as filled), rounded-rect `rx/ry`,
-viewBox `preserveAspectRatio`. `garbage/no-d` input skips the element
-with no finding; files are truncated at 16 MiB, element/point counts
-are capped (20000 elements, 200000 points per element) so pathological
-input never exhausts memory.
-
-Layout model limitations (honest list):
-
-- Union area = **sum of element areas**: overlapping crown elements are
-  double-counted (convexity is clamped to 1.0, so this only errs toward
-  "round enough"). The convexity check applies to the union only when
-  the crown has ≥ 3 sampled points; with fewer, crown geometry checks
-  stay silent.
-- Convexity uses the sampled boundary (16-gon ≈ circle), so a disc
-  measures ≈ 1.0; a 4-corner-only approximation would measure π/4 and
-  falsely fail — documented choice.
-- Stem width is a segment cross-section of the sampled boundary, so
-  curves are measured via their samples (chords, slightly narrower than
-  the true arc).
-- Crown/trunk classification is by bbox center against the 65% split:
-  foliage scatter far below the canopy midline can be counted as trunk
-  material (see the region-split heuristic above).
-- The taper check needs the trunk to be at least 1px tall and to have
-  measurable width at both slices; otherwise it stays silent.
-- Out-of-bounds flags only elements entirely outside the viewBox;
-  partial overflows are common and not flagged.
-- False negatives are preferred over false positives: when the model
-  cannot decide, it stays silent.
-
-Fixtures (permanent QA artifact):
-
-| fixture | geometry | expected findings |
-|---------|----------|-------------------|
-| `tree-good.svg` | tapered stem path (12px top / 32px bottom, 95px tall) + round crown (r=85 circle + 2 symmetric foliage dots) | **0 findings** — the standard every generated tree must meet |
-| `tree-stick.svg` | single vertical line | `empty-shape` major + `stem-missing` major |
-| `tree-square-crown.svg` | square rect crown over a tapered stem | `crown-roundness` major only |
-| `tree-box-stem.svg` | round crown over a 20px-wide parallel-sided trunk | `stem-taper` major only |
-| `tree-too-lean.svg` | huge crown (r=90) on a 22px trunk stub | `proportions` minor only |
-| `tree-asym.svg` | crown shifted right of the trunk axis (center x=190 vs axis x=156) | `symmetry` minor only |
-| `house.svg` | rect body + triangle roof, no tree hint | `--shape auto`: skipped (exit 0); `--shape tree`: `stem-taper` + `crown-roundness` major, `proportions` minor |
-
-Test suite (`make -C exoqms/svg test`, 54 checks): pins the finding
-counts and severities of every fixture, the exact summary line and exit
-codes, validates `--json` with python3 (fields and ids), exercises
-`--shape auto` skipping (filename, `data-shape` attribute, unknown
-hint), transforms (translate/scale keep 0 findings; translate+rotate
-doesn't crash), the strange-geometry extras (out-of-bounds, fragmented,
-empty-shape), feeds garbage (NUL bytes, garbage `d` data, unclosed
-tags, a 10MB single line, an `r`-less circle) and asserts no crash,
-checks `--version`/`--help`, unknown options, and directory mode with
-per-file headers and the exact summary.
-
-`exoqms-svg` is the asset-logic auditor of the QMS loop: like
-`exoqms-ui` it is a batch tool the exoqms daemon shells out to; its
-findings are one per line in the same `severity check-id reason`
-vocabulary, so the pipeline can collect them identically. It writes no
-state of its own.
+`asset-logic` checks. Build all of them with `make exoqms` from the repo
+root (or `make qms-modules` for just code + svg).
 
 ### Durability (dogfooding exomind)
 
@@ -1284,30 +1128,29 @@ state of its own.
 ### Tests
 
 `make test-exoqms` from the repo root runs the exoqms suite + module
-suites. `make -C exoqms test` runs the daemon's suite
-(`exoqms/test/test.sh`, ~60s — too slow for the 5s audit budget, so the
-stack manifest declares `./build/exoqms --version` as the in-budget
-smoke command instead and `make test-exoqms` remains the full-suite
-gate); the module suites are `make -C exoqms/ui test` (28 checks),
-`make -C exoqms/code test` and `make -C exoqms/svg test` (54 checks).
+suites (`exoqms/test/test.sh` for the daemon, `exoqms/ui/test`,
+`exoqms/code/test`, `exoqms/svg/test`). The daemon suite is too slow for
+the 5s audit budget, so the stack manifest declares
+`./build/exoqms --version` as the in-budget smoke command instead and
+`make test-exoqms` remains the full-suite gate.
 
 ### Limitations
 
-- The check budget is 5s per check (normative, `standard.md` §5.2):
-  only test commands that fit the budget may be declared in
-  `docs/stack.tsv`; the full suites are run by `make test-exoqms`.
+- The check budget is 5s per check (normative): only test commands that
+  fit the budget may be declared in `docs/stack.tsv`; the full suites
+  are run by `make test-exoqms`.
 - The `ui-audit`, `code-safety` and `asset-logic` checks are static
-  analyzers, not a browser / a compiler / a rendering engine: they
-  catch defect classes, not semantics (see each module's README for
-  the honest limitations).
+  analyzers, not a browser / a compiler / a rendering engine: they catch
+  defect classes, not semantics (see each module's README for the honest
+  limitations).
 - The `metrics` check needs at least two iterations of
   `metric:iterN:tests_passing`; with fewer it reports `skip`.
 - Severity is assigned by the author of the NC; the daemon checks the
   vocabulary (`major`/`minor`), not the judgment.
-- `GET /report` is a one-shot picture, not a historical chart; history
-  lives in the note feed and the `exoqms:*` keys.
+- `/report` is a one-shot picture, not a historical chart; history lives
+  in the note feed and the `exoqms:*` keys.
 
-## exocrawl — the research daemon (port 7658)
+## exocrawl — the research daemon
 
 **AI-native web research daemon — token-efficient, private, concurrent.**
 
@@ -1318,50 +1161,53 @@ SearXNG-style private metasearch layer (no accounts, no cookies, no
 tracking) and high-concurrency fetching with per-host pacing and identity
 rotation.
 
-### Why it exists
-
-- **Token efficiency** — `/fetch` strips nav/ads/footers/cookie banners;
-  headings become `# `, lists `- `, code stays verbatim. A 50 KB HTML page
-  becomes a few hundred tokens.
-- **Independent private search** — five engines fetched directly and parsed
-  by our own adapters: DuckDuckGo HTML, Mojeek, Marginalia, Bing, and the
-  Wikipedia opensearch API. No third-party aggregator (no SearXNG), no API
-  keys, no accounts, no cookies; sponsored results filtered per engine.
-- **Broad scraping** — `/scrape` fetches many URLs concurrently (worker
-  pool) with per-host pacing (default 150 ms) and rotating identities;
-  403/429 gets bounded retries with a different identity.
-- **200% privacy** — stateless requests, no JS, no referrer, no persistent
-  state unless you opt into the exomind cache (`--cache exomind`, keys
-  `exocrawl:cache:*`, 24 h TTL).
-- **TLS via curl** — the one runtime dependency: the ubiquitous `curl`
-  binary provides HTTPS transport; everything else is native C.
-
-### Build & run
+### Console operations
 
 ```sh
-make exocrawl          # exocrawl v0.1.0/build/exocrawl (zero compile deps)
-make test-exocrawl     # hermetic suite (local mock web, 26 checks)
-./exocrawl/build/exocrawl --port 7658 --cache exomind
+exocrawl /search?q=bitcask&n=10                          # metasearch
+exocrawl /fetch?url=https://example.com&max=8000         # HTML -> clean text
+exocrawl /scrape --body "https://a.example/
+https://b.example/	4000"                               # concurrent fetch-all
+printf 'url1\nurl2\n' | exocrawl /scrape                 # body via stdin
+exocrawl /stats                                          # counters
+exocrawl /ping
+exocrawl --extract page.html                             # legacy offline extraction
 ```
-
-Flags: `--port` (7658), `--token`, `--concurrency` (16), `--pace-ms`
-(150), `--cache exomind`, `--proxy http://...`.
-
-### API
-
-Self-describing: `GET /` prints the full spec (the `/` endpoint itself
-is the documentation; this file is the human view).
 
 | method | path | purpose |
 |--------|------|---------|
+| GET | `/` | the spec |
 | GET | `/search?q=...&n=10&engines=ddg,mojeek,marginalia,bing,wikipedia\|all&json=1` | independent metasearch → `rank<TAB>title<TAB>url<TAB>snippet` |
 | GET | `/fetch?url=...&max=8000&links=1&images=1` | HTML → clean plain text (+ `## links` / `## images` sections) |
 | POST | `/scrape` | one URL per line `[TAB max]`, concurrent fetch-all |
 | GET | `/stats` | counters (fetches, errors, cache_hits, bytes) |
 | GET | `/ping` | `pong` |
 
-All endpoints answer plain text, lowercase `ok`/`error:` style; `--token`
-enforces Bearer auth.
+Server mode (`--serve` or `--port`, default 7658) serves the same
+contract over HTTP; flags: `--token` / `--keys` (Bearer auth),
+`--rate-limit`, `--log-level`, `--concurrency` (16), `--pace-ms` (200),
+`--cache <exomind-url>` (durable cache: extracted text stored under
+`exocrawl:cache:*` keys with a 24 h TTL, served on repeat fetches),
+`--robots`, `--proxy http://...`. Exit codes follow the console
+contract: 0 ok, 1 operation failed, 2 unknown operation.
+
+### Why it exists
+
+- **Token efficiency** — `/fetch` strips nav/ads/footers/cookie banners;
+  headings become `# `, lists `- `, code stays verbatim. A 50 KB HTML
+  page becomes a few hundred tokens.
+- **Independent private search** — five engines fetched directly and
+  parsed by our own adapters: DuckDuckGo HTML, Mojeek, Marginalia, Bing,
+  and the Wikipedia opensearch API. No third-party aggregator (no
+  SearXNG), no API keys, no accounts, no cookies; sponsored results
+  filtered per engine.
+- **Broad scraping** — `/scrape` fetches many URLs concurrently (worker
+  pool) with per-host pacing (default 200 ms) and rotating identities;
+  403/429 gets bounded retries with a different identity.
+- **200% privacy** — stateless requests, no JS, no referrer, no
+  persistent state unless you opt into the exomind cache.
+- **TLS via curl** — the one runtime dependency: the ubiquitous `curl`
+  binary provides HTTPS transport; everything else is native C.
 
 ### Extraction rules
 
@@ -1379,20 +1225,22 @@ enforces Bearer auth.
   native C: request building, UA rotation, bounded retries, per-host
   pacing (a worker pool fans out `/scrape`), HTML→text extraction, and
   the per-engine parsers.
-- **Cache** — with `--cache exomind`, extracted text is stored under
-  `exocrawl:cache:*` keys (24 h TTL) and served on repeat fetches.
+- **Cache** — with `--cache <exomind-url>`, extracted text is stored
+  under `exocrawl:cache:*` keys (24 h TTL) and served on repeat
+  fetches.
 - **Identity** — stateless requests with rotating user agents; no
   cookies, no referrer, no JS.
 
 ### Honest limitations
 
-- No JavaScript execution — single-page apps yield their static content only.
+- No JavaScript execution — single-page apps yield their static content
+  only.
 - No browser-grade CSS/layout: extraction is content-order based.
 - Engines can be rate-limited or captcha-gated (Bing especially); UA
   rotation and bounded retries mitigate this, and the engine list is
   configurable (edit the table in `src/search.c`).
-- `robots.txt` is not consulted by default (research mode); rate limits and
-  pacing are the politeness mechanism.
+- `robots.txt` is not consulted by default (research mode); `--robots`
+  opts in, and rate limits and pacing are the politeness mechanism.
 
 ### Tests
 
@@ -1402,31 +1250,32 @@ headings, links, images, entities, pre verbatim), every engine's parser,
 ad filtering, redirect decoding, /fetch caps, /scrape concurrency, 403
 retry, stats counters, auth. ASAN-clean.
 
-## exocontext — context continuity (port 7659)
+## exocontext — context continuity
 
 A tiny daemon that compresses an agent's durable state into a bounded,
 recency-ranked digest: everything under `agent:<id>:*` plus the notes
 mentioning the agent, capped at a character budget. An agent that
 restarts (or opens a fresh context window) reconstructs its working
-state from a single `GET /context?agent=<id>` — no more re-reading a
-hundred keys by hand.
+state from a single `/context?agent=<id>` — no more re-reading a hundred
+keys by hand.
 
 Build: `make` produces `exocontext/build/exocontext`; `make test` runs
-24 hermetic tests (it spins its own exomind). Zero dependencies: C11,
-POSIX, threads. The only backend is exomind.
+the hermetic suite (it spins its own exomind). Zero dependencies: C11,
+POSIX, threads. The only backend is exomind — a serving exomind is
+required for `/context` (the digest is computed live from it).
 
-### Run
+### Console operations
 
 ```sh
-./exocontext/build/exocontext --port 7659 \
-    --exomind http://127.0.0.1:7654 &
+exocontext /context?agent=b2&budget=2000    # the digest
+exocontext /ping                            # pong
+exocontext                                  # the spec
+# => # context for b2 (budget 2000 chars)
+#    ## notes (newest first)
+#    note:1786899721384:0000fdad  agent:b2 milestone: ...
+#    ## state (agent:<id>:* keys)
+#    agent:b2:plan  1) fix doc gate 2) commit 3) exocontext done
 ```
-
-`--token <secret>` enables Bearer auth. `GET /` prints the full spec.
-
-### API
-
-Plain text, lowercase answers. Every endpoint is self-describing.
 
 | method | path | purpose |
 |--------|------|---------|
@@ -1435,26 +1284,19 @@ Plain text, lowercase answers. Every endpoint is self-describing.
 | GET | `/context?agent=<id>[&budget=<n>]` | the digest |
 | POST | `/context` | same, body `agent=<id>&budget=<n>` |
 
-```sh
-# reconstruct an agent's working state (notes + keys, newest first)
-curl 'localhost:7659/context?agent=b2&budget=2000'
-# => # context for b2 (budget 2000 chars)
-#    ## notes (newest first)
-#    note:1786899721384:0000fdad  agent:b2 milestone: ...
-#    ## state (agent:<id>:* keys)
-#    agent:b2:plan  1) fix doc gate 2) commit 3) exocontext done
-```
-
 `budget` is capped at 256 KB; values inside the digest are truncated to
 400 chars each. `json=1` is accepted and ignored by design (token
-efficiency: the plain form is the canonical one).
+efficiency: the plain form is the canonical one). Server mode binds 7659
+by default; `--token <secret>` (or env) enables Bearer auth. `--exomind
+<url>` is required (no default).
 
 ### Internals
 
-- **Composition** — one exomind round trip for notes (`/notes?q=agent:…`,
-  already newest-first), one for keys (`/list?prefix=agent:<id>:`), one
-  batch read for values (`/batch`-style multi-get). A seen-set dedupes
-  entries across the two sections.
+- **Composition** — one exomind round trip for notes
+  (`/notes?q=agent:…`, already newest-first), one for keys
+  (`/list?prefix=agent:<id>:`), one batch read for values
+  (`/batch`-style multi-get). A seen-set dedupes entries across the two
+  sections.
 - **Budget** — lines are emitted until the budget is consumed; the
   crossing line is kept, then emission stops. Values are cut at 400
   chars so a single runaway key cannot eat the whole budget.
@@ -1477,7 +1319,7 @@ excluded), budget capping, POST bodies, error paths, and bearer auth.
   truncation, not by meaning.
 - One agent namespace per request; cross-agent digests are out of scope.
 
-## exokit — the behavioral development kit (batch, no port)
+## exokit — the behavioral development kit (batch)
 
 Every software carries its own development kit: a `kit/` directory that
 is the software's SDK-for-itself. Not a library, not a framework — a
@@ -1490,28 +1332,33 @@ but not *logical* ones. A port (Rust+SvelteKit → C++ + vanilla JS/CSS)
 can compile cleanly and still be a different program. exokit attacks
 that at the root: the **contract is the truth, not the code**.
 
-Build: `make` produces `exokit/build/exokit`; `make test` runs 39
-hermetic tests. Zero dependencies: C11, POSIX, no daemon, no server
+Build: `make` produces `exokit/build/exokit`; `make test` runs the
+hermetic suite. Zero dependencies: C11, POSIX, no daemon, no server
 (batch tool).
 
-### Run
+### Console operations
 
 ```sh
 # scaffold a kit into <dir>/kit (contract + examples + runner shims)
-exokit init <dir>
+exokit /init?dir=<dir>
 
 # best-effort function inventory from C/C++ sources
-exokit extract <src-dir> --out kit/contract.tsv
+exokit /extract?src=<src-dir>&out=kit/contract.tsv
 
 # run the behavioral ledger through your implementation's runner
-exokit verify            # in the project root
+exokit /verify?kit=<kit-dir>[&runner=<cmd>&fn=<name>]
 
 # compare two inventories (translation completeness)
-exokit diff contract.a.tsv contract.b.tsv --exact
+exokit /diff?a=contract.a.tsv&b=contract.b.tsv&exact=1
 
 # QMS-facing audit: completeness + ledger fidelity, JSON findings
-exokit audit
+exokit /audit?kit=<kit-dir>
 ```
+
+The legacy subcommand forms (`exokit init <dir>`, `exokit extract
+<src-dir> --out kit/contract.tsv`, `exokit verify`, `exokit diff a b
+--exact`, `exokit audit`) still work and share the same exit codes:
+0 pass, 1 findings/failure, 2 usage.
 
 ### API (the kit files)
 
@@ -1531,12 +1378,11 @@ lines in any language; the kit scaffolds C, C++-ready, Rust, JS and
 Python shims.
 
 ```sh
-# the classic workflow
-exokit extract src --out kit/contract.tsv   # 1. inventory
+exokit /extract?src=src&out=kit/contract.tsv   # 1. inventory
 #   2. write examples for every entry (incl. error cases)
 #   3. implement a runner for YOUR language
-exokit verify                                # 4. ledger green?
-exokit audit                                 # 5. gate
+exokit /verify?kit=kit                          # 4. ledger green?
+exokit /audit?kit=kit                           # 5. gate
 ```
 
 ### Internals
@@ -1553,8 +1399,7 @@ exokit audit                                 # 5. gate
   caught — this is the anti-drift mechanism for translations.
 - **Audit** — `audit` enforces the rules: every contract entry needs ≥ 1
   example (R1/R2), every example must pass (R6). Findings are JSON with
-  `severity: major`, the same contract as the QMS field modules, so
-  `exoqms --kit` gates the whole stack on it.
+  `severity: major`, the same contract as the QMS field modules.
 - **Diff** — inventories are compared on the `fn` column; `missing`
   always fails, `extra` fails only with `--exact` (translation mode).
 
@@ -1626,9 +1471,11 @@ make test-exoqms     # QMS suite: code-safety, debt, hygiene, secrets
 make audit-stack     # full exoqms audit program against the live stack
 ```
 
-Documentation debt is CI-checked: `exodoc audit --live` compares every
-component README against its live `GET /` spec and fails the build on
-any drift.
+Documentation debt is CI-checked: `exodoc /audit?live=1` compares every
+component README against its live `GET /` spec and the build fails on
+any drift — the gate line is `=== audit: N pass, 0 fail ===`, currently
+**70 pass / 0 fail** (score 100%) across the stack. Commits must keep
+both the module test suites and this audit gate green.
 
 ## Process & records
 

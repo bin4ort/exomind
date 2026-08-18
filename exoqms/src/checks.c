@@ -1285,8 +1285,8 @@ static void check_issue_tracking(check_ctx_t *ctx, finding_t *f)
         char *copy = xstrdup(v);
         char *save = NULL;
         char *st = strtok_r(copy, "\t", &save);
-        char *consec = strtok_r(NULL, "\t", &save);
         char *fails = strtok_r(NULL, "\t", &save);
+        char *consec = strtok_r(NULL, "\t", &save);
         long c = consec ? atol(consec) : 0;
         long fn = fails ? atol(fails) : 0;
         if (st && !strcmp(st, "open")) {

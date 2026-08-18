@@ -43,9 +43,9 @@ if ! command -v "$EXODOC_BIN" >/dev/null 2>&1 && [ "$EXODOC_BIN" = exodoc ]; the
 fi
 cc -O2 -std=c11 -Wall -Wextra -pthread -D_POSIX_C_SOURCE=200809L \
     ../src/main.c ../src/http.c ../src/store.c ../src/util.c \
-    ../common/exo.c -o "$TDIR/exomind" 2>/dev/null \
+    ../src/router.c ../common/exo.c -o "$TDIR/exomind" 2>/dev/null \
  || cc -O2 -std=c11 -Wall -Wextra -pthread -D_POSIX_C_SOURCE=200809L \
-    src/main.c src/http.c src/store.c src/util.c \
+    src/main.c src/http.c src/store.c src/util.c src/router.c \
     -o "$TDIR/exomind"
 
 # ---------- fixtures --------------------------------------------------------
@@ -435,6 +435,10 @@ t "memory-awareness passes after ack" 1 \
 
 
 # ---- detection registry + issue-tracking (recurrence) ----------------------
+# earlier sections already ran failing code-safety audits (code-safety CS3),
+# so issue:code-safety may carry prior counts; reset it so this section owns
+# the record and the expected counters (consec=1, consec=2, fails=2) are exact
+timeout 5 curl -s -X POST "$EM/del?key=issue:code-safety" > /dev/null
 if [ ! -f "$TDIR/code-major" ]; then touch "$TDIR/code-major"; fi
 DR1=$(timeout 20 curl -s -d $'detect 1\tcode-safety' $BASE:$QMS_A/audit)
 DR1ID=$(printf '%s' "$DR1" | awk '{print $2}')
