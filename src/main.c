@@ -1,4 +1,5 @@
 #include "http.h"
+#include "router.h"
 #include "store.h"
 #include "util.h"
 #include "version.h"
@@ -249,6 +250,17 @@ static const exo_mcp_tool_t MCP_TOOLS[] = {
      "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}"},
 };
 
+/* exomind-server dispatcher: exomind's own tools run in-process, the
+ * prefixed sibling tools go through the console-op router */
+static int stack_call(const char *tool, const char *args, char *out,
+                      size_t cap)
+{
+    for (size_t i = 0; i < sizeof MCP_TOOLS / sizeof MCP_TOOLS[0]; i++)
+        if (!strcmp(tool, MCP_TOOLS[i].name))
+            return mcp_call(tool, args, out, cap);
+    return exo_router_call(tool, args, out, cap);
+}
+
 /* returns nonzero when the binary is invoked as <module>-server */
 static int invoked_as_server(const char *argv0)
 {
@@ -451,12 +463,27 @@ int main(int argc, char **argv)
             return 1;
         }
     }
-    if (invoked_as_server(argv[0]))
+    if (invoked_as_server(argv[0])) {
+        /* exomind-server: the stack-wide MCP router */
         mcp_mode = 1;
+    }
     if (mcp_mode) {
         g_store = store_open(data);
-        exo_mcp_register(MCP_TOOLS, sizeof MCP_TOOLS / sizeof MCP_TOOLS[0],
-                         "exomind", EXOMIND_VERSION, mcp_call);
+        if (invoked_as_server(argv[0]) &&
+            !getenv("EXOMIND_SERVER_LOCAL")) {
+            /* register exomind's own tools then the sibling modules;
+             * both go through the shared dispatcher */
+            exo_mcp_register(MCP_TOOLS, sizeof MCP_TOOLS /
+                                            sizeof MCP_TOOLS[0],
+                             "exomind-server", EXOMIND_VERSION,
+                             stack_call);
+            exo_router_register("exomind-server", EXOMIND_VERSION,
+                                stack_call);
+        } else {
+            exo_mcp_register(MCP_TOOLS, sizeof MCP_TOOLS /
+                                            sizeof MCP_TOOLS[0],
+                             "exomind", EXOMIND_VERSION, mcp_call);
+        }
         return exo_mcp_stdio();
     }
 

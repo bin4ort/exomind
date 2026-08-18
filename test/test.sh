@@ -595,6 +595,28 @@ assert_contains "mcp tools/list" '"name":"search"' "$MCPOUT"
 assert_contains "mcp set ok" '"text":"ok"' "$MCPOUT"
 assert_contains "mcp get value" '"text":"mcpv"' "$MCPOUT"
 
+# ---- console surface: exomind-server stack-wide router -----------------------
+RPATH=$(cd "$(dirname "$BIN")/.." && pwd)
+RTBIN=$DATA/rbins
+mkdir -p "$RTBIN"
+for m in exosched exoflow exoqms exocrawl exocontext exodoc exokit; do
+    ln -sf "$RPATH/$m/build/$m" "$RTBIN/$m"
+done
+ln -sf "$BIN" "$RTBIN/exomind-server"
+RTOUT=$(printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"exoqms","arguments":{"path":"/ping"}}}' \
+  '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"exocontext","arguments":{"path":"/ping"}}}' \
+  '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"exokit","arguments":{"path":"/init?dir='$DATA'/rtkit"}}}' \
+  | PATH="$RTBIN:$PATH" "$RTBIN/exomind-server" --data "$DATA/router.dat")
+assert_contains "server name is exomind-server" '"serverInfo":{"name":"exomind-server"' "$RTOUT"
+assert_contains "router tools/list has siblings" '"name":"exoqms"' "$RTOUT"
+assert_contains "router exoqms /ping" '"text":"pong"]' "$RTOUT"
+assert_contains "router exocontext /ping" '"text":"pong\n"' "$RTOUT"
+assert_contains "router exokit /init" '"exokit: kit initialized' "$RTOUT"
+assert_contains "router exokit isError false" '"isError":false' "$RTOUT"
+
 # ---- console surface: one-shot operations (no server) ------------------------
 C="$BIN --data $DATA/console.dat"
 rm -f "$DATA/console.dat"
