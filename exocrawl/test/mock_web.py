@@ -33,12 +33,23 @@ DDG = """<html><body>
 <div class="result"><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fad.example%2Fsponsored&amp;rut=y">Sponsored Ad</a><a class="result__snippet" href="x">buy now</a></div>
 </body></html>"""
 
+ROBOTS = b"User-agent: *\nDisallow: /private\nCrawl-delay: 2\n"
+
+PRIVATE_PAGE = """<!DOCTYPE html><html><head><title>Private Page</title></head>
+<body><main><h1>Private Page Heading</h1>
+<p>PRIVATE PAGE CONTENT should be visible without robots mode.</p></main></body></html>"""
+
+
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
     def do_GET(self):
-        if self.path.startswith("/ddg/"):
+        if self.path == "/robots.txt":
+            body = ROBOTS
+        elif self.path.startswith("/private"):
+            body = PRIVATE_PAGE.encode()
+        elif self.path.startswith("/ddg/"):
             body = DDG.encode()
         elif "/html/" in self.path:
             body = PAGE.encode()

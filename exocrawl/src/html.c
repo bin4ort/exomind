@@ -495,7 +495,7 @@ size_t page_extract(const char *html, size_t hlen, const char *base,
         return 0;
 
     buf_t b;
-    buf_init(&b, max ? max : 8192);
+    memset(&b, 0, sizeof b);
     ctx_t c;
     memset(&c, 0, sizeof c);
     c.page = p;

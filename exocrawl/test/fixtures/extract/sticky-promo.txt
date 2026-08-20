@@ -1,0 +1,5 @@
+# Sticky Promo Page
+
+# Sticky Promo Article
+This is the actual article about deferred rendering pipelines.
+It has two paragraphs of real content worth reading.

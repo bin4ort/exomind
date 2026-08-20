@@ -1,0 +1,4 @@
+# Paywall Modal Page
+
+# Paywall Modal Article
+The first paragraph is free but the gate must not appear in clean text.

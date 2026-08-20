@@ -141,6 +141,43 @@ check "console: unknown op exit 2" "$([ $? -eq 2 ] && echo 0 || echo 1)" ""
 CS=$(printf "$WEB/html/\n$WEB/deny\n" | timeout 60 "$BIN" /scrape)
 check "console: /scrape stdin body" "$(echo "$CS" | head -1 | grep -q '^ok 2$' && echo 0 || echo 1)" "$CS"
 
+# =============== robots.txt politeness (--robots [dir]) =================
+# mock serves robots.txt with "Disallow: /private" + "Crawl-delay: 2"
+RDF=$(timeout 30 "$BIN" "/fetch?url=$WEB/private/x")
+check "robots: default mode ignores robots.txt" "$(echo "$RDF" | grep -q 'PRIVATE PAGE CONTENT' && echo 0 || echo 1)" "$RDF"
+RDIR="$TDIR/robots-cache"
+mkdir -p "$RDIR"
+RB=$(timeout 30 "$BIN" --robots "$RDIR" "/fetch?url=$WEB/private/x" 2>&1)
+check "robots: disallowed path skipped" "$(echo "$RB" | grep -q 'robots.txt disallows' && echo 0 || echo 1)" "$RB"
+check "robots: skip is an error exit 1" "$(timeout 30 "$BIN" --robots "$RDIR" "/fetch?url=$WEB/private/x" >/dev/null 2>&1; [ $? -eq 1 ] && echo 0 || echo 1)" ""
+check "robots: robots.txt cached in dir" "$([ -s "$RDIR/127.0.0.1:$PORT.txt" ] && echo 0 || echo 1)" ""
+check "robots: allowed path fetched" "$(timeout 30 "$BIN" "/fetch?url=$WEB/html/" --robots "$RDIR" | grep -q 'Main Heading Here' && echo 0 || echo 1)" ""
+RBE=$(EXO_CRAWL_ROBOTS="$RDIR" timeout 30 "$BIN" "/fetch?url=$WEB/private/x" 2>&1)
+check "robots: env EXO_CRAWL_ROBOTS enables mode" "$(echo "$RBE" | grep -q 'robots.txt disallows' && echo 0 || echo 1)" "$RBE"
+RDIR2="$TDIR/robots-cache2"
+mkdir -p "$RDIR2"
+T0=$(date +%s.%N)
+RSC=$(printf "$WEB/html/\n$WEB/html/&x=1\n" | timeout 60 "$BIN" --robots "$RDIR2" /scrape)
+T1=$(date +%s.%N)
+check "robots: crawl-delay spaces same-host fetches" "$(awk -v s="$T0" -v e="$T1" 'BEGIN { exit (e - s < 3.5) }' && echo 0 || echo 1)" "$T1 - $T0"
+check "robots: crawl-delay scrape both fetched" "$([ "$(echo "$RSC" | grep -c ' ok$')" -eq 2 ] && echo 0 || echo 1)" "$RSC"
+RDIR3="$TDIR/robots-cache3"
+mkdir -p "$RDIR3"
+printf 'User-agent: *\nDisallow: /private\n' > "$RDIR3/127.0.0.1:$PORT.txt"
+printf '1500\n' > "$RDIR3/127.0.0.1:$PORT.pace"
+T2=$(date +%s.%N)
+RSP=$(printf "$WEB/html/\n$WEB/html/&x=1\n" | timeout 60 "$BIN" --robots "$RDIR3" /scrape)
+T3=$(date +%s.%N)
+check "robots: per-host pace override spaced fetches" "$(awk -v s="$T2" -v e="$T3" 'BEGIN { exit (e - s < 1.1) }' && echo 0 || echo 1)" "$T3 - $T2"
+
+# =============== extraction quality (/extract-quality) ==================
+EQDIR="$(pwd)/test/fixtures/extract"
+EQ=$(timeout 30 "$BIN" "/extract-quality?dir=$EQDIR")
+check "extract-quality: per-fixture fooled lines" "$([ "$(echo "$EQ" | grep -c '^fixture .*fooled=yes')" -eq 4 ] && echo 0 || echo 1)" "$EQ"
+check "extract-quality: overall f1 printed" "$(echo "$EQ" | grep -q '^overall: fixtures=4 .*f1=0\.8' && echo 0 || echo 1)" "$EQ"
+check "extract-quality: exit 0" "$(timeout 30 "$BIN" "/extract-quality?dir=$EQDIR" >/dev/null 2>&1 && echo 0 || echo 1)" ""
+check "extract-quality: missing dir exit 1" "$(timeout 5 "$BIN" /extract-quality >/dev/null 2>&1; [ $? -eq 1 ] && echo 0 || echo 1)" ""
+
 # =============== auth ===================================================
 kill $CRL_PID 2>/dev/null
 sleep 1

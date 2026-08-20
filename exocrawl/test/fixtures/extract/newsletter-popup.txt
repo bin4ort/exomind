@@ -1,0 +1,4 @@
+# Newsletter Popup Page
+
+# Newsletter Popup Article
+This article body must survive extraction with nothing extra attached.

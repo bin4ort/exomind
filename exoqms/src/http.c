@@ -314,7 +314,12 @@ const char *http_spec_text(void)
         "Checks: `component-tests` (run each manifest test command), "
         "`doc-compliance` (exodoc audit), `dogfood` (swarm conventions),\n"
         "`ui-audit` (exoqms-ui), `metrics` (iter trend of\n"
-        "metric:iterN:tests_passing), `code-safety` (exoqms-code on the\n"
+        "metric:iterN:tests_passing), `rework` (derived metric from the\n"
+        "audit record history: a reopened fix is a fail that follows a\n"
+        "pass which followed an earlier fail of the same check; rate =\n"
+        "cycles / total audits, fails above a 10%% threshold, overridable\n"
+        "via EXOQMS_REWORK_THRESHOLD in percent; results in\n"
+        "metric:velocity:<date>:* keys), `code-safety` (exoqms-code on the\n"
         "stack's own C source; default target = the manifest source dirs,\n"
         "passes when 0 major findings — minor findings are non-fatal),\n"
         "`asset-logic` (exoqms-svg on the stack's own SVG assets; default\n"
@@ -342,7 +347,9 @@ const char *http_spec_text(void)
         "GET /report: objective statuses (met/not/no-data), open NC\n"
         "count, last audit score, trend verdict and stagnation flag.\n"
         "GET /trends: `metric:iterN:tests_passing <value>` lines oldest\n"
-        "to newest plus `trend up|flat|down`.\n"
+        "to newest, the `rework_rate`/`rework_cycles` rows from\n"
+        "metric:velocity:<date>:* once audits have run, plus\n"
+        "`trend up|flat|down`.\n"
         "\n"
         "## durability\n"
         "\n"
@@ -377,10 +384,11 @@ static const char *known_check(const char *id)
 {
     static const char *known[] = {"component-tests", "doc-compliance",
                                   "dogfood", "ui-audit", "metrics",
-                                  "code-safety", "asset-logic", "debt",
-                                  "hygiene", "secrets", "agent-health",
-                                  "docs-coverage", "kit-fidelity",
-                                  "memory-awareness", "issue-tracking"};
+                                  "rework", "code-safety", "asset-logic",
+                                  "debt", "hygiene", "secrets",
+                                  "agent-health", "docs-coverage",
+                                  "kit-fidelity", "memory-awareness",
+                                  "issue-tracking"};
     for (size_t i = 0; i < sizeof known / sizeof known[0]; i++)
         if (!strcmp(known[i], id))
             return known[i];
@@ -853,6 +861,7 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
             ids[nids++] = (char *)"dogfood";
             ids[nids++] = (char *)"ui-audit";
             ids[nids++] = (char *)"metrics";
+            ids[nids++] = (char *)"rework";
             ids[nids++] = (char *)"code-safety";
             ids[nids++] = (char *)"asset-logic";
             ids[nids++] = (char *)"docs-coverage";
@@ -896,6 +905,7 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
                 ids[i] != (char *)"dogfood" &&
                 ids[i] != (char *)"ui-audit" &&
                 ids[i] != (char *)"metrics" &&
+                ids[i] != (char *)"rework" &&
                 ids[i] != (char *)"code-safety" &&
                 ids[i] != (char *)"asset-logic" &&
                 ids[i] != (char *)"docs-coverage" &&
@@ -1108,8 +1118,14 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
                 free(vals);
                 free(list);
             }
-            buf_printf(out, ",\"trend\":\"%s\",\"stagnation\":%s}", tv,
+            buf_printf(out, ",\"trend\":\"%s\",\"stagnation\":%s", tv,
                        flag ? "true" : "false");
+            int rrate = 0, rcyc = 0, rfound = 0;
+            if (rework_latest(e, &rrate, &rcyc, &rfound, err, sizeof err) == 0 &&
+                rfound)
+                buf_printf(out, ",\"rework_rate\":%d,\"rework_cycles\":%d",
+                           rrate, rcyc);
+            buf_puts(out, "}");
         } else {
             buf_printf(out, "objectives_summary\t%d/%zu met\t%d no-data\n",
                        met, total, nd);
@@ -1132,6 +1148,10 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
             }
             buf_printf(out, "trend\t%s\n", tv);
             buf_printf(out, "stagnation\t%d\n", flag);
+            int rrate = 0, rcyc = 0, rfound = 0;
+            if (rework_latest(e, &rrate, &rcyc, &rfound, err, sizeof err) == 0 &&
+                rfound)
+                buf_printf(out, "rework_rate\t%d\n", rrate);
         }
         buf_free(&objs_json);
         return;
@@ -1156,6 +1176,14 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
         }
         int flag = 0;
         const char *tv = trend_verdict(vals, n, &flag);
+        int rrate = 0, rcyc = 0, rfound = 0;
+        if (rework_latest(e, &rrate, &rcyc, &rfound, err, sizeof err) != 0) {
+            *status = 500;
+            buf_puts(out, "error: exomind unreachable");
+            free(vals);
+            free(list);
+            return;
+        }
         if (j) {
             *ctype = "application/json; charset=utf-8";
             buf_puts(out, "{\"values\":[");
@@ -1174,10 +1202,18 @@ static void route(req_t *r, exo_t *e, cfg_t *cfg, qms_t *q, buf_t *out,
                     buf_printf(out, "{\"key\":\"%s\",\"value\":null}", l);
                 }
             }
-            buf_printf(out, "],\"trend\":\"%s\",\"stagnation\":%s}", tv,
+            buf_printf(out, "],\"trend\":\"%s\",\"stagnation\":%s", tv,
                        flag ? "true" : "false");
+            if (rfound)
+                buf_printf(out, ",\"rework_rate\":%d,\"rework_cycles\":%d",
+                           rrate, rcyc);
+            buf_puts(out, "}");
         } else {
             buf_puts(out, list);
+            if (rfound) {
+                buf_printf(out, "rework_rate\t%d\n", rrate);
+                buf_printf(out, "rework_cycles\t%d\n", rcyc);
+            }
             buf_printf(out, "trend %s\n", tv);
         }
         free(vals);

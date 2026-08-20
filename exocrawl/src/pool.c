@@ -126,10 +126,11 @@ int64_t pace_wait(const char *host, int min_ms)
         g_paces = p;
     }
     int64_t now = now_ms();
-    int64_t wait = p->next_ms - now;
-    if (wait < 0)
-        wait = 0;
-    p->next_ms = now + wait + min_ms;
+    /* next_ms = last request start; wait out any remaining min_ms */
+    int64_t wait = 0;
+    if (p->next_ms > 0 && now < p->next_ms + min_ms)
+        wait = p->next_ms + min_ms - now;
+    p->next_ms = now + wait;
     pace_unlock();
     if (wait > 0) {
         struct timespec ns = {(time_t)(wait / 1000),

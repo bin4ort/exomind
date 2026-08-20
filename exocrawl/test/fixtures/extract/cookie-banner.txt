@@ -1,0 +1,4 @@
+# Cookie Banner Page
+
+# Cookie Banner Article
+The extractor should drop the consent layer but this page uses an unusual class name.

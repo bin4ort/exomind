@@ -645,7 +645,7 @@ t "garbage request tolerated" 1 \
     "$(printf '%s' "$GARB" | grep -cE 'HTTP/1.1 (400|404|200)')"
 t "daemon alive after fuzz" "pong" "$(timeout 5 curl -s $BASE:$QMS_A/ping)"
 t_contains "audit json parses" 1 \
-    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$AUDID&json=1" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(1 if d["score"]==100 and len(d["findings"])==9 else 0)')"
+    "$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$AUDID&json=1" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(1 if d["score"]==100 and len(d["findings"])==10 else 0)')"
 t_contains "audits json parses" 1 \
     "$(timeout 5 curl -s "$BASE:$QMS_A/audits?json=1" | python3 -c 'import sys,json;print(1 if len(json.load(sys.stdin))>=4 else 0)')"
 
@@ -740,6 +740,87 @@ for i in $(seq 1 20); do
     sleep 1
 done
 t "background reload picked up state" 1 "$ok"
+
+# ---- rework derived metric (velocity: reopened fix cycles) ------------------
+# The check scans the exoqms:audit:* history (oldest first) and counts a
+# "rework cycle" per check id that fails, later passes, then fails again.
+# The suite's own audits share one-second scheduled timestamps, and their
+# intra-second order (by random audit id) is nondeterministic, so the
+# suite history is wiped first: every expectation below derives solely from
+# the crafted probe records (probe-a..) in their explicit scheduled order.
+DATE=$(date +%Y%m%d)
+for k in $(timeout 5 curl -s "$EM/list?prefix=exoqms:audit:"); do
+    timeout 5 curl -s -X DELETE "$EM/del?key=$k" > /dev/null
+done
+em_tsv() { # key value
+    timeout 5 curl -s -X POST "$EM/set?key=$1" \
+        --data-urlencode "key=$1" --data-urlencode "value=$2" \
+        --data-urlencode "ttl=0" | grep -q ok
+}
+# (a) crafted history: probe-a and probe-b each fail -> pass -> fail,
+# exactly 2 rework cycles; ttm: feature alpha/beta were fully passing one
+# 'scheduled' tick after their first audit (1e6 seconds). The standalone
+# run sees 6 probes (its own record persists after the checks) -> 2/6 =
+# 33.3% > 10% threshold.
+em_tsv "exoqms:audit:rw1" $'rw1\tfeature alpha\tdetect\t1000000\tdone\t66\tprobe-a\tfail\tboom'
+em_tsv "exoqms:audit:rw2" $'rw2\tfeature alpha\tdetect\t2000000\tdone\t100\tprobe-a\tpass\tfixed'
+em_tsv "exoqms:audit:rw3" $'rw3\tfeature alpha\tdetect\t3000000\tdone\t66\tprobe-a\tfail\trelapsed'
+em_tsv "exoqms:audit:rw4" $'rw4\tfeature beta\tdetect\t4000000\tdone\t66\tprobe-b\tfail\tboom'
+em_tsv "exoqms:audit:rw5" $'rw5\tfeature beta\tdetect\t5000000\tdone\t100\tprobe-b\tpass\tfixed'
+em_tsv "exoqms:audit:rw6" $'rw6\tfeature beta\tdetect\t6000000\tdone\t66\tprobe-b\tfail\trelapsed'
+RW1=$(timeout 20 curl -s -d $'rework probe\trework' $BASE:$QMS_A/audit)
+RW1ID=$(printf '%s' "$RW1" | awk '{print $2}')
+RW1REP=$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$RW1ID")
+t "rework check runs standalone (fails above the threshold)" 1 \
+    "$(printf '%s\n' "$RW1REP" | awk -F'\t' '$1=="rework" && $2=="fail" {n++} END {print n+0}')"
+t_contains "rework evidence names the first reopened check" "probe-a=1" "$RW1REP"
+t_contains "rework evidence names the second reopened check" "probe-b=1" "$RW1REP"
+
+# (b) the velocity metric key is written with the expected fields: rate in
+# per-mille, total cycles, per-check counts and time-to-merge per feature
+t "velocity rework_rate key (per-mille)" 333 \
+    "$(timeout 5 curl -s "$EM/get?key=metric:velocity:$DATE:rework_rate")"
+t "velocity rework_cycles key" 2 \
+    "$(timeout 5 curl -s "$EM/get?key=metric:velocity:$DATE:rework_cycles")"
+t "velocity per-check cycle count probe-a" 1 \
+    "$(timeout 5 curl -s "$EM/get?key=metric:velocity:$DATE:rework:probe-a")"
+t "velocity per-check cycle count probe-b" 1 \
+    "$(timeout 5 curl -s "$EM/get?key=metric:velocity:$DATE:rework:probe-b")"
+t "velocity ttm key for feature alpha" 1000000 \
+    "$(timeout 5 curl -s "$EM/get?key=metric:velocity:$DATE:ttm:feature_alpha")"
+t "velocity ttm key for feature beta" 1000000 \
+    "$(timeout 5 curl -s "$EM/get?key=metric:velocity:$DATE:ttm:feature_beta")"
+t_contains "trends output carries the rework row" "rework_rate" \
+    "$(timeout 5 curl -s "$BASE:$QMS_A/trends")"
+
+# (c) the rework check is part of /audit?criteria=detect and reacts to the
+# rate threshold: fail on 2 probe cycles over the crafted history, and fail
+# harder once 4 more reopened fixes push the rate back up at DET2
+DET1=$(timeout 40 curl -s -d $'detect rework\t' $BASE:$QMS_A/audit)
+DET1ID=$(printf '%s' "$DET1" | awk '{print $2}')
+DET1REP=$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$DET1ID")
+t "rework appears in criteria=detect output" 1 \
+    "$(printf '%s\n' "$DET1REP" | awk -F'\t' '$1=="rework" && $2=="fail" {n++} END {print n+0}')"
+em_tsv "exoqms:audit:rw7" $'rw7\tfeature gamma\tdetect\t7000000\tdone\t66\tprobe-c\tfail\tboom'
+em_tsv "exoqms:audit:rw8" $'rw8\tfeature gamma\tdetect\t8000000\tdone\t100\tprobe-c\tpass\tfixed'
+em_tsv "exoqms:audit:rw9" $'rw9\tfeature gamma\tdetect\t9000000\tdone\t66\tprobe-c\tfail\trelapsed'
+em_tsv "exoqms:audit:rw10" $'rw10\tfeature delta\tdetect\t10000000\tdone\t66\tprobe-d\tfail\tboom'
+em_tsv "exoqms:audit:rw11" $'rw11\tfeature delta\tdetect\t11000000\tdone\t100\tprobe-d\tpass\tfixed'
+em_tsv "exoqms:audit:rw12" $'rw12\tfeature delta\tdetect\t12000000\tdone\t66\tprobe-d\tfail\trelapsed'
+em_tsv "exoqms:audit:rw13" $'rw13\tfeature epsilon\tdetect\t13000000\tdone\t66\tprobe-e\tfail\tboom'
+em_tsv "exoqms:audit:rw14" $'rw14\tfeature epsilon\tdetect\t14000000\tdone\t100\tprobe-e\tpass\tfixed'
+em_tsv "exoqms:audit:rw15" $'rw15\tfeature epsilon\tdetect\t15000000\tdone\t66\tprobe-e\tfail\trelapsed'
+em_tsv "exoqms:audit:rw16" $'rw16\tfeature zeta\tdetect\t16000000\tdone\t66\tprobe-f\tfail\tboom'
+em_tsv "exoqms:audit:rw17" $'rw17\tfeature zeta\tdetect\t17000000\tdone\t100\tprobe-f\tpass\tfixed'
+em_tsv "exoqms:audit:rw18" $'rw18\tfeature zeta\tdetect\t18000000\tdone\t66\tprobe-f\tfail\trelapsed'
+DET2=$(timeout 40 curl -s -d $'detect rework fail\t' $BASE:$QMS_A/audit)
+DET2ID=$(printf '%s' "$DET2" | awk '{print $2}')
+DET2REP=$(timeout 5 curl -s "$BASE:$QMS_A/audit?id=$DET2ID")
+t "rework fails above the rate threshold" 1 \
+    "$(printf '%s\n' "$DET2REP" | awk -F'\t' '$1=="rework" && $2=="fail" {n++} END {print n+0}')"
+t_contains "rework failure names the offenders" "probe-c=1" "$DET2REP"
+t_contains "rework failure states the threshold" "> threshold" "$DET2REP"
+t_contains "rework failure evidence totals the cycles" "6 cycle(s)" "$DET2REP"
 
 # ============================================================================
 printf '=== results: %d passed, %d failed ===\n' "$PASS" "$FAIL"

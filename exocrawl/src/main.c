@@ -9,6 +9,7 @@
 #include "../../common/exo.h"
 
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <pthread.h>
 #include <signal.h>
@@ -20,6 +21,7 @@
 #include <netinet/in.h>
 #include <strings.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -34,7 +36,8 @@ typedef struct {
     int concurrency;
     int pace_ms;
     int use_cache;
-    int robots; /* optional robots.txt politeness mode */
+    int robots; /* optional robots.txt politeness mode (off by default) */
+    char robots_dir[1024]; /* robots cache dir ("" = memory only) */
     char cache_host[256]; /* parsed from --cache <url> */
     int cache_port;
     char *instances; /* optional search instance list file */
@@ -251,91 +254,302 @@ typedef struct {
     char err[256];
 } fetch_job_t;
 
-/* robots.txt policy cache: host -> "allow" | "deny" | "unknown" */
+/* ---------------- robots.txt politeness (--robots [dir]) ----------------
+ *
+ * Off by default: research mode never consults robots.txt. With robots
+ * mode on, each host's robots.txt is fetched once (same scheme as the
+ * target URL) and cached in <dir>/<host>.txt; a pre-existing cache file
+ * is consulted instead of fetching. Enforced per fetch/scrape target:
+ *   - Disallow rules for the target path -> the fetch is skipped with a
+ *     clear "robots.txt disallows <rule>" note in the output/evidence;
+ *   - "Crawl-delay: N" (seconds) floors the per-host request spacing;
+ *   - <dir>/<host>.pace (one integer, ms) overrides the global --pace-ms
+ *     for that host (Crawl-delay still floors it).
+ * The robots.txt request itself is paced by the base pace so a fresh
+ * cache populates without hammering the site. "host" here is the URL
+ * authority (host[:port]) - the connection identity, distinct from the
+ * port-stripped pacing key.
+ */
 typedef struct rob_s {
     char host[256];
-    char policy[16];
+    int fetched;          /* robots.txt consulted this run */
+    int fetching;         /* another thread is fetching it */
+    int crawl_delay_ms;   /* Crawl-delay: N seconds * 1000, 0 = none */
+    char *rules[16];      /* disallow path prefixes ("" = "/"), NUL-ended */
+    int nrules;
+    int pace_override_ms; /* <dir>/<host>.pace, -1 = unset */
     struct rob_s *next;
 } rob_t;
 static rob_t *g_robs;
+static pthread_mutex_t g_rob_mu = PTHREAD_MUTEX_INITIALIZER;
 
-static void robots_policy(const char *host, const char *url, char *out,
-                          size_t cap)
+/* "host[:port]" authority of a URL ("example.com" / "127.0.0.1:8080") */
+static void url_authority(const char *url, char *out, size_t cap)
 {
-    snprintf(out, cap, "unknown");
-    if (!g_cfg.robots)
+    const char *p = strstr(url, "://");
+    out[0] = 0;
+    if (!p)
         return;
-    rob_t *r = g_robs;
-    while (r && strcmp(r->host, host) != 0)
-        r = r->next;
-    if (r) {
-        snprintf(out, cap, "%s", r->policy);
-        return;
-    }
-    r = calloc(1, sizeof *r);
-    if (!r)
-        return;
-    snprintf(r->host, sizeof r->host, "%s", host);
-    snprintf(r->policy, sizeof r->policy, "%s", "allow");
-    g_robs = r;
-    /* fetch robots.txt once per host */
-    char rurl[2048];
-    snprintf(rurl, sizeof rurl, "https://%s/robots.txt", host);
-    resp_t rr;
-    char err[256];
-    if (net_fetch(&g_net, rurl, &rr, err, sizeof err) == 0 && rr.status == 200 &&
-        rr.body) {
-        /* UA-agnostic: honor the broadest restriction - any "Disallow: /"
-           (or a disallow of the url path) denies */
-        if (strstr(rr.body, "Disallow: /") != NULL)
-            snprintf(r->policy, sizeof r->policy, "%s", "deny");
-        else {
-            /* path-specific: does any Disallow cover our path? */
-            char pth[1024];
-            url_path(url, pth, sizeof pth);
-            const char *p = rr.body;
-            while ((p = strstr(p, "Disallow:")) != NULL) {
-                p += 9;
-                while (*p == ' ')
-                    p++;
-                const char *e = p;
-                while (*e && *e != '\n')
-                    e++;
-                char rule[512];
-                size_t rl = (size_t)(e - p);
-                if (rl >= sizeof rule)
-                    rl = sizeof rule - 1;
-                memcpy(rule, p, rl);
-                rule[rl] = 0;
-                if (rl == 1 && rule[0] == '/') {
-                    snprintf(r->policy, sizeof r->policy, "%s", "deny");
-                    break;
-                }
-                if (rl > 1 && rule[0] == '/' &&
-                    strncmp(pth, rule, rl) == 0) {
-                    snprintf(r->policy, sizeof r->policy, "%s", "deny");
-                    break;
-                }
-                p = e;
+    p += 3;
+    const char *e = p;
+    while (*e && *e != '/' && *e != '?' && *e != '#')
+        e++;
+    size_t n = (size_t)(e - p);
+    if (n >= cap)
+        n = cap - 1;
+    memcpy(out, p, n);
+    out[n] = 0;
+}
+
+static void robots_parse(const char *body, size_t blen, rob_t *r)
+{
+    /* UA-agnostic (honor the broadest restriction): every Disallow line
+     * counts, whichever group it lives in. "*" and trailing "$" are
+     * stripped; "/" covers the whole site; Crawl-delay may be fractional. */
+    const char *p = body, *end = body + blen;
+    while (p < end && r->nrules < 16) {
+        const char *eol = memchr(p, '\n', (size_t)(end - p));
+        size_t ln = eol ? (size_t)(eol - p) : (size_t)(end - p);
+        const char *line = p;
+        while (ln && isspace((unsigned char)*line)) { line++; ln--; }
+        if (ln >= 9 && strncasecmp(line, "disallow:", 9) == 0) {
+            const char *v = line + 9;
+            size_t vl = ln - 9;
+            while (vl && isspace((unsigned char)*v)) { v++; vl--; }
+            while (vl && (v[vl - 1] == '\r' || isspace((unsigned char)v[vl - 1])))
+                vl--;
+            if (vl == 0 || (vl == 1 && v[0] == '*')) {
+                r->rules[r->nrules++] = strdup("/");
+                continue;
+            }
+            char *rule = malloc(vl + 2);
+            if (!rule)
+                continue;
+            size_t w = 0;
+            if (v[0] != '/')
+                rule[w++] = '/';
+            for (size_t i = 0; i < vl; i++) {
+                if (v[i] == '*' || (v[i] == '$' && i + 1 == vl))
+                    continue;
+                rule[w++] = v[i];
+            }
+            rule[w] = 0;
+            if (w)
+                r->rules[r->nrules++] = rule;
+            else
+                free(rule);
+        } else if (ln >= 12 && strncasecmp(line, "crawl-delay:", 12) == 0) {
+            const char *v = line + 12;
+            while (*v == ' ' || *v == '\t')
+                v++;
+            double sec = strtod(v, NULL);
+            if (sec > 0 && sec < 3600) {
+                int ms = (int)(sec * 1000);
+                if (ms > r->crawl_delay_ms)
+                    r->crawl_delay_ms = ms;
             }
         }
+        p = eol ? eol + 1 : end;
+    }
+}
+
+static void robots_cache_save(const char *host, const char *body, size_t blen)
+{
+    if (!g_cfg.robots_dir[0])
+        return;
+    mkdir(g_cfg.robots_dir, 0755);
+    char fn[1200];
+    snprintf(fn, sizeof fn, "%s/%s.txt", g_cfg.robots_dir, host);
+    FILE *f = fopen(fn, "wb");
+    if (f) {
+        fwrite(body, 1, blen, f);
+        fclose(f);
+    }
+}
+
+static char *robots_cache_load(const char *host, size_t *n)
+{
+    if (!g_cfg.robots_dir[0])
+        return NULL;
+    char fn[1200];
+    snprintf(fn, sizeof fn, "%s/%s.txt", g_cfg.robots_dir, host);
+    FILE *f = fopen(fn, "rb");
+    if (!f)
+        return NULL;
+    char *buf = NULL;
+    size_t len = 0;
+    for (;;) {
+        char c[4096];
+        size_t r = fread(c, 1, sizeof c, f);
+        if (r == 0)
+            break;
+        char *grown = realloc(buf, len + r + 1);
+        if (!grown)
+            break;
+        buf = grown;
+        memcpy(buf + len, c, r);
+        len += r;
+    }
+    fclose(f);
+    if (buf)
+        buf[len] = 0;
+    *n = len;
+    return buf;
+}
+
+static int robots_pace_file(const char *host)
+{
+    if (!g_cfg.robots_dir[0])
+        return -1;
+    char fn[1200];
+    snprintf(fn, sizeof fn, "%s/%s.pace", g_cfg.robots_dir, host);
+    FILE *f = fopen(fn, "r");
+    if (!f)
+        return -1;
+    int ms = -1;
+    if (fscanf(f, "%d", &ms) != 1)
+        ms = -1;
+    fclose(f);
+    return ms;
+}
+
+static void robots_fetch(const char *host, const char *url, rob_t *r)
+{
+    /* fetched with the target's scheme; paced by the base pace only (the
+     * robots file's own Crawl-delay is not known yet) */
+    char rurl[2304];
+    snprintf(rurl, sizeof rurl, "%s://%s/robots.txt",
+             strncmp(url, "https://", 8) == 0 ? "https" : "http", host);
+    int base = g_cfg.pace_ms;
+    if (r->pace_override_ms >= 0 && r->pace_override_ms > base)
+        base = r->pace_override_ms;
+    /* pace on the same stripped-host key the page fetches use, so the
+     * robots.txt request counts into the same per-host budget */
+    char pkey[256];
+    url_host(url, pkey, sizeof pkey);
+    pace_wait(pkey, base);
+    resp_t rr;
+    char err[256];
+    if (net_fetch(&g_net, rurl, &rr, err, sizeof err) == 0 && rr.body) {
+        robots_parse(rr.body, rr.blen, r);
+        robots_cache_save(host, rr.body, rr.blen);
+        resp_free(&rr);
+    } else if (rr.body) {
+        /* 4xx/5xx robots.txt: no rules, but cache the response so the
+         * disk cache is the state of record */
+        robots_cache_save(host, rr.body, rr.blen);
         resp_free(&rr);
     }
-    snprintf(out, cap, "%s", r->policy);
+}
+
+/* fetch (or load from the disk cache) the robots policy for a host.
+ * Thread-safe: the first caller fetches, the rest wait on the flag. */
+static rob_t *robots_get(const char *host, const char *url)
+{
+    for (int tries = 0; tries < 200; tries++) {
+        pthread_mutex_lock(&g_rob_mu);
+        rob_t *r = g_robs;
+        while (r && strcmp(r->host, host) != 0)
+            r = r->next;
+        if (!r) {
+            r = calloc(1, sizeof *r);
+            if (!r) {
+                pthread_mutex_unlock(&g_rob_mu);
+                return NULL;
+            }
+            snprintf(r->host, sizeof r->host, "%s", host);
+            r->pace_override_ms = -1;
+            r->next = g_robs;
+            g_robs = r;
+        }
+        int do_fetch = !r->fetched && !r->fetching;
+        if (do_fetch)
+            r->fetching = 1;
+        pthread_mutex_unlock(&g_rob_mu);
+        if (!do_fetch) {
+            if (r->fetched)
+                return r;
+            struct timespec ns = {0, 5 * 1000000L};
+            nanosleep(&ns, NULL);
+            continue;
+        }
+        if (r->pace_override_ms < 0) {
+            int pf = robots_pace_file(host);
+            pthread_mutex_lock(&g_rob_mu);
+            r->pace_override_ms = pf;
+            pthread_mutex_unlock(&g_rob_mu);
+        }
+        size_t n = 0;
+        char *cached = robots_cache_load(host, &n);
+        if (cached) {
+            robots_parse(cached, n, r);
+            free(cached);
+        } else if (url && url[0]) {
+            robots_fetch(host, url, r);
+        }
+        pthread_mutex_lock(&g_rob_mu);
+        r->fetched = 1;
+        r->fetching = 0;
+        pthread_mutex_unlock(&g_rob_mu);
+        return r;
+    }
+    return NULL;
+}
+
+/* does a Disallow rule cover url's path? fills rule ("" means "/") */
+static int robots_denied(const char *host, const char *url, char *rule,
+                         size_t rcap)
+{
+    rob_t *r = robots_get(host, url);
+    if (!r)
+        return 0;
+    char pth[1024];
+    url_path(url, pth, sizeof pth);
+    for (int i = 0; i < r->nrules; i++) {
+        size_t rl = strlen(r->rules[i]);
+        if (rl <= 1 || strncmp(pth, r->rules[i], rl) == 0) {
+            snprintf(rule, rcap, "%s", rl <= 1 ? "/" : r->rules[i]);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* min ms between requests to host under robots mode: the per-host pace
+ * override (or the global pace) floored by the site's Crawl-delay */
+static int robots_effective_pace(const char *host)
+{
+    int ms = g_cfg.pace_ms;
+    rob_t *r = robots_get(host, NULL);
+    if (r) {
+        if (r->pace_override_ms >= 0 && r->pace_override_ms > ms)
+            ms = r->pace_override_ms;
+        if (r->crawl_delay_ms > ms)
+            ms = r->crawl_delay_ms;
+    }
+    return ms;
 }
 
 static void fetch_worker(fetch_job_t *j)
 {
     char host[256];
     url_host(j->url, host, sizeof host);
-    pace_wait(host, g_cfg.pace_ms);
-    char pol[16];
-    robots_policy(host, j->url, pol, sizeof pol);
-    if (!j->polite && strcmp(pol, "deny") == 0) {
-        snprintf(j->err, sizeof j->err, "robots.txt disallows");
-        j->status = -1;
-        return;
+    char auth[256];
+    url_authority(j->url, auth, sizeof auth);
+    if (g_cfg.robots && !j->polite) {
+        /* ensure the policy is known (cache file or one fetch), then
+         * enforce disallow rules with a clear note when skipped */
+        robots_get(auth, j->url);
+        char rule[1024];
+        if (robots_denied(auth, j->url, rule, sizeof rule)) {
+            snprintf(j->err, sizeof j->err, "robots.txt disallows %.200s",
+                     rule);
+            j->status = -1;
+            return;
+        }
     }
+    int min_ms = g_cfg.robots ? robots_effective_pace(auth) : g_cfg.pace_ms;
+    pace_wait(host, min_ms);
 
     char *cached = cache_get(j->url);
     if (cached) {
@@ -589,6 +803,200 @@ static void handle_stats(dout_t *d)
                (unsigned long long)g_bytes);
 }
 
+/* ---------------- extraction quality measurement ----------------
+ * /extract-quality?dir=<fixtures-dir>: runs the extractor over every
+ * <name>.html with a matching <name>.txt goldfile and reports per-fixture
+ * and overall precision / recall / f1, line-matched (trimmed, non-empty
+ * lines). extra = leaked lines the goldfile does not contain; a fixture
+ * is "fooled" when precision or recall is below 1.0. */
+
+static void qline_push(char ***lines, size_t *n, const char *line)
+{
+    char *c = strdup(line);
+    if (!c)
+        return;
+    size_t l = strlen(c);
+    while (l && (c[l - 1] == ' ' || c[l - 1] == '\t' || c[l - 1] == '\r'))
+        c[--l] = 0;
+    if (!c[0]) {
+        free(c);
+        return;
+    }
+    char **grown = realloc(*lines, (*n + 1) * sizeof(char *));
+    if (!grown) {
+        free(c);
+        return;
+    }
+    *lines = grown;
+    (*lines)[(*n)++] = c;
+}
+
+static void handle_extract_quality(dout_t *d, const char *query)
+{
+    char dir[1024];
+    if (!query_param(query, "dir", dir, sizeof dir) || !dir[0]) {
+        d->status = 400;
+        buf_puts(&d->body, "error: missing dir\n");
+        return;
+    }
+    DIR *dh = opendir(dir);
+    if (!dh) {
+        d->status = 400;
+        buf_printf(&d->body, "error: cannot open dir %s\n", dir);
+        return;
+    }
+    char **names = NULL;
+    size_t nn = 0;
+    struct dirent *de;
+    while ((de = readdir(dh))) {
+        size_t ln = strlen(de->d_name);
+        if (ln > 5 && strcmp(de->d_name + ln - 5, ".html") == 0) {
+            char **grown = realloc(names, (nn + 1) * sizeof(char *));
+            if (!grown)
+                break;
+            names = grown;
+            names[nn++] = strdup(de->d_name);
+        }
+    }
+    closedir(dh);
+    for (size_t i = 0; i < nn; i++)
+        for (size_t j = i + 1; j < nn; j++)
+            if (strcmp(names[j], names[i]) < 0) {
+                char *t = names[i];
+                names[i] = names[j];
+                names[j] = t;
+            }
+    if (nn == 0) {
+        free(names);
+        d->status = 400;
+        buf_puts(&d->body, "error: no html fixtures in dir\n");
+        return;
+    }
+    double tp = 0, tr = 0;
+    int tf = 0, fooled = 0, tmatched = 0, texp = 0;
+    for (size_t i = 0; i < nn; i++) {
+        char htmlpath[2048], gold[3072], base[1024];
+        snprintf(htmlpath, sizeof htmlpath, "%s/%s", dir, names[i]);
+        snprintf(base, sizeof base, "%s", names[i]);
+        size_t bl = strlen(base);
+        if (bl > 5)
+            base[bl - 5] = 0;
+        snprintf(gold, sizeof gold, "%s/%s.txt", dir, base);
+        FILE *gf = fopen(gold, "rb");
+        if (!gf) {
+            free(names[i]);
+            continue;
+        }
+        FILE *f = fopen(htmlpath, "rb");
+        if (!f) {
+            fclose(gf);
+            free(names[i]);
+            continue;
+        }
+        char *html = NULL;
+        size_t hlen = 0;
+        for (;;) {
+            char c[8192];
+            size_t r = fread(c, 1, sizeof c, f);
+            if (r == 0)
+                break;
+            html = realloc(html, hlen + r + 1);
+            if (!html)
+                break;
+            memcpy(html + hlen, c, r);
+            hlen += r;
+        }
+        fclose(f);
+        if (html)
+            html[hlen] = 0;
+        page_t p;
+        page_extract(html ? html : "", hlen, "https://fixture.local/", &p,
+                     1u << 20);
+        buf_t out;
+        buf_init(&out, 1u << 20);
+        if (p.title && p.title[0])
+            buf_printf(&out, "# %s\n\n", p.title);
+        if (p.text)
+            buf_puts(&out, p.text);
+        page_free(&p);
+        free(html);
+        char **el = NULL, **al = NULL;
+        size_t en = 0, an = 0;
+        {
+            char line[8192];
+            while (fgets(line, sizeof line, gf)) {
+                size_t l = strlen(line);
+                while (l && (line[l - 1] == '\n' || line[l - 1] == '\r'))
+                    line[--l] = 0;
+                qline_push(&el, &en, line);
+            }
+        }
+        fclose(gf);
+        {
+            char *dup = out.p ? strdup(out.p) : NULL;
+            if (dup) {
+                char *save = NULL;
+                for (char *t = strtok_r(dup, "\n", &save); t;
+                     t = strtok_r(NULL, "\n", &save))
+                    qline_push(&al, &an, t);
+                free(dup);
+            }
+        }
+        buf_free(&out);
+        int matched = 0, extra = 0;
+        for (size_t e = 0; e < en; e++)
+            for (size_t a = 0; a < an; a++)
+                if (strcmp(el[e], al[a]) == 0) {
+                    matched++;
+                    break;
+                }
+        for (size_t a = 0; a < an; a++) {
+            int hit = 0;
+            for (size_t e = 0; e < en; e++)
+                if (strcmp(al[a], el[e]) == 0) {
+                    hit = 1;
+                    break;
+                }
+            if (!hit)
+                extra++;
+        }
+        double prec = an ? (double)matched / (double)an : 1.0;
+        double rec = en ? (double)matched / (double)en : 1.0;
+        double f1 = (prec + rec) > 0 ? 2 * prec * rec / (prec + rec) : 0.0;
+        int fl = (prec < 1.0 || rec < 1.0) ? 1 : 0;
+        buf_printf(&d->body,
+                   "fixture %s: precision=%.3f recall=%.3f f1=%.3f "
+                   "lines=%d/%d extra=%d %s\n",
+                   base, prec, rec, f1, matched, (int)en, extra,
+                   fl ? "fooled=yes" : "fooled=no");
+        tp += prec;
+        tr += rec;
+        tf++;
+        tmatched += matched;
+        texp += (int)en;
+        fooled += fl;
+        for (size_t e = 0; e < en; e++)
+            free(el[e]);
+        free(el);
+        for (size_t a = 0; a < an; a++)
+            free(al[a]);
+        free(al);
+        free(names[i]);
+    }
+    free(names);
+    if (tf == 0) {
+        d->status = 400;
+        buf_puts(&d->body, "error: no fixtures with goldfiles in dir\n");
+        return;
+    }
+    double ap = (double)tp / tf, ar = (double)tr / tf;
+    double af = (ap + ar) > 0 ? 2 * ap * ar / (ap + ar) : 0.0;
+    buf_printf(&d->body,
+               "overall: fixtures=%d precision=%.3f recall=%.3f f1=%.3f "
+               "lines=%d/%d fooled=%d\n",
+               tf, ap, ar, af, tmatched, texp, fooled);
+}
+
 int g_rate_limit_active = 0;
 
 /* the self-describing spec: GET / in server mode, and the no-arg guide
@@ -607,8 +1015,18 @@ static const char *spec_text(void)
            "POST /scrape  body: one url per line [TAB max] - concurrent\n"
            "  fetch-all with per-host pacing and identity rotation\n"
            "GET /stats - counters\n"
-           "GET /ping - pong\n\n"
-           "console: exocrawl /search?q=... | /fetch?url=... | /scrape | /stats | /ping\n"
+           "GET /ping - pong\n"
+           "GET /extract-quality?dir=<fixtures-dir>\n"
+           "  extraction quality vs <name>.txt goldfiles: per-fixture and\n"
+           "  overall precision/recall/f1 (line-matched), fooled fixtures\n"
+           "  flagged (boilerplate leak measurement)\n\n"
+           "robots.txt politeness: --robots [dir] (or env EXO_CRAWL_ROBOTS)\n"
+           "  consults robots.txt per host (cached in <dir>/<host>.txt),\n"
+           "  enforces Disallow (skips with robots.txt disallows), site\n"
+           "  Crawl-delay, and the per-host <dir>/<host>.pace override (ms).\n"
+           "  Off by default - research mode is pace-limited only.\n"
+           "console: exocrawl /search?q=... | /fetch?url=... | /scrape | \n"
+           "  /stats | /ping | /extract-quality?dir=...\n"
            "  same endpoints, one-shot, in-process, no port bound (body on\n"
            "  --body <text> or stdin); --extract <file.html> is a legacy\n"
            "  offline extraction op\n"
@@ -643,6 +1061,8 @@ static void dispatch(const char *method, const char *path, const char *query,
         handle_scrape(d, body);
     else if (strcmp(path, "/stats") == 0)
         handle_stats(d);
+    else if (strcmp(path, "/extract-quality") == 0)
+        handle_extract_quality(d, query);
     else {
         d->status = 404;
         buf_puts(&d->body, "error: unknown path\n");
@@ -742,10 +1162,10 @@ static void usage(const char *prog)
     fprintf(stderr,
             "usage: %s [--serve] [--port 7658] [--token secret]\n"
             "       [--concurrency 16] [--pace-ms 200]\n"
-            "       [--cache http://127.0.0.1:7654] [--robots] [--proxy http://...]\n"
+            "       [--cache http://127.0.0.1:7654] [--robots [dir]] [--proxy http://...]\n"
             "       %s /search?q=... | /fetch?url=... | /scrape | /stats | /ping\n"
-            "       %s --extract <file.html>\n",
-            prog, prog, prog);
+            "       %s /extract-quality?dir=<fixtures-dir> | %s --extract <file.html>\n",
+            prog, prog, prog, prog);
 }
 
 /* console mode: run ONE operation in-process (`exocrawl /fetch?url=...`),
@@ -813,6 +1233,15 @@ int main(int argc, char **argv)
                                                                 : NULL;
     int want_server = 0; /* only --serve or --port start the server */
     const char *body_arg = "";
+    g_cfg.robots_dir[0] = 0;
+    const char *envr = getenv("EXO_CRAWL_ROBOTS");
+    if (envr && envr[0] && strcmp(envr, "0") &&
+        strcasecmp(envr, "false") && strcasecmp(envr, "off")) {
+        g_cfg.robots = 1;
+        if (strcmp(envr, "1") && strcasecmp(envr, "true") &&
+            strcasecmp(envr, "on"))
+            snprintf(g_cfg.robots_dir, sizeof g_cfg.robots_dir, "%s", envr);
+    }
     for (int i = console_path ? 2 : 1; i < argc; i++) {
         const char *a = argv[i];
         if (!strcmp(a, "--port") && i + 1 < argc) {
@@ -845,9 +1274,10 @@ int main(int argc, char **argv)
             self[0].name = "exocrawl";
             self[0].spec = "exocrawl v%s - AI-native web research daemon\n"
                 "usage: exocrawl [--serve] [--port 7658] [--token t | --keys file]\n"
-                "       [--proxy url] [--robots] [--rate-limit n] [--cache url]\n"
+                "       [--proxy url] [--robots [dir]] [--rate-limit n] [--cache url]\n"
                 "console: exocrawl /search?q=... | /fetch?url=... | /scrape | /stats | /ping\n"
-                "GET /search /fetch /scrape /stats; GET / = usage\n",
+                "       /extract-quality?dir=<fixtures-dir> (extraction quality vs goldfiles)\n"
+                "GET /search /fetch /scrape /stats /extract-quality; GET / = usage\n",
                 EXO_VERSION;
             exo_help_add(self, 1);
             exo_help_add_siblings();
@@ -868,8 +1298,12 @@ int main(int argc, char **argv)
             g_cfg.pace_ms = atoi(argv[++i]);
         else if (!strcmp(a, "--cache") && i + 1 < argc)
             cache_parse(argv[++i]);
-        else if (!strcmp(a, "--robots"))
+        else if (!strcmp(a, "--robots")) {
             g_cfg.robots = 1;
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+                snprintf(g_cfg.robots_dir, sizeof g_cfg.robots_dir, "%s",
+                         argv[++i]);
+        }
         else if (!strcmp(a, "--extract") && i + 1 < argc) {
             /* legacy offline extraction op: read the file, print the
              * extracted text. Used by the extraction regression corpus
@@ -916,6 +1350,16 @@ int main(int argc, char **argv)
             g_net.proxy = argv[++i];
         else if (!strcmp(a, "--engine-base") && i + 1 < argc)
             g_net.engine_base = argv[++i];
+        else if (a[0] == '/') {
+            /* console op after flags: `exocrawl --robots dir /fetch?...` */
+            if (!console_path)
+                console_path = a;
+            else {
+                fprintf(stderr, "exocrawl: unknown argument %s\n", a);
+                usage(argv[0]);
+                return 1;
+            }
+        }
         else {
             fprintf(stderr, "exocrawl: unknown argument %s\n", a);
             usage(argv[0]);

@@ -41,7 +41,7 @@ make test-exocrawl     # hermetic suite (local mock web, 47 checks)
 Flags: `--serve` (the only way to run the HTTP server, together with
 `--port`), `--token`, `--concurrency` (16), `--pace-ms` (150),
 `--cache <url>` (`exomind` alone means `http://127.0.0.1:7654`),
-`--robots`, `--proxy http://...`.
+`--robots [dir]` (or env `EXO_CRAWL_ROBOTS`), `--proxy http://...`.
 
 Without `--serve` (and without `--port`) the binary never binds a port:
 with `--port` is explicit, with a leading `/` operation it runs that one
@@ -58,6 +58,7 @@ exocrawl /fetch?url=https://example.com&links=1
 exocrawl /stats
 printf 'https://a.example/\nhttps://b.example/\t4000\n' | exocrawl /scrape
 exocrawl /search?q=llm+evals&n=5 --body ignored       # GET ops take no body
+exocrawl /extract-quality?dir=test/fixtures/extract   # extraction quality
 ```
 
 Exit codes: `0` success, `1` operation failed (e.g. `error: missing url`),
@@ -80,9 +81,42 @@ is the documentation; this file is the human view).
 | POST | `/scrape` | one URL per line `[TAB max]`, concurrent fetch-all |
 | GET | `/stats` | counters (fetches, errors, cache_hits, bytes) |
 | GET | `/ping` | `pong` |
+| GET | `/extract-quality?dir=<fixtures-dir>` | extraction quality vs `<name>.txt` goldfiles: per-fixture + overall precision/recall/f1 (line-matched), fooled fixtures flagged |
 
 All endpoints answer plain text, lowercase `ok`/`error:` style; `--token`
 enforces Bearer auth.
+
+## Robots.txt politeness (`--robots [dir]`, env `EXO_CRAWL_ROBOTS`)
+
+Off by default — research mode is pace-limited only and never consults
+robots.txt. With robots mode on, before every `/fetch` and `/scrape`
+target the host's robots.txt is loaded from the cache (`<dir>/<host>.txt`,
+where `<host>` is the URL authority, port included) or fetched once from
+the host (same scheme as the target) and cached there. Enforced:
+
+- **Disallow** — path rules are matched as prefixes (`/` covers the whole
+  site, `*`/trailing `$` stripped, UA-agnostic: the broadest restriction
+  wins). A disallowed target is skipped with a clear
+  `error: robots.txt disallows <rule>` note; `?polite=0` on `/fetch`
+  explicitly bypasses the check.
+- **Crawl-delay** — `Crawl-delay: N` (seconds, may be fractional) floors
+  the per-host request spacing; the robots.txt fetch itself counts into
+  that host's budget.
+- **Per-host pace override** — `<dir>/<host>.pace` (one integer, ms)
+  replaces the global `--pace-ms` for that host (site Crawl-delay still
+  floors it).
+
+## Extraction quality measurement
+
+`/extract-quality?dir=<fixtures-dir>` runs the extractor over every
+`<name>.html` that has a `<name>.txt` goldfile and prints per-fixture and
+overall **precision / recall / f1** on the line level (trimmed, non-empty
+lines; `extra` = leaked lines the goldfile does not contain; a fixture is
+`fooled=yes` when precision or recall < 1.0). The regression corpus in
+`test/fixtures/extract/` holds pages that currently fool the boilerplate
+heuristics (sticky promo, consent layer, paywall gate, signup drawer —
+all with class names outside the boilerplate keyword list); the numbers
+above them are the measured, testable baseline.
 
 ## Extraction rules
 
@@ -114,7 +148,8 @@ enforces Bearer auth.
   rotation and bounded retries mitigate this, and the engine list is
   configurable (edit the table in `src/search.c`).
 - `robots.txt` is not consulted by default (research mode); rate limits and
-  pacing are the politeness mechanism.
+  pacing are the politeness mechanism. Opt into robots.txt politeness with
+  `--robots [dir]` (see above).
 
 ## Tests
 
@@ -122,7 +157,9 @@ enforces Bearer auth.
 five engines plus a test page; asserts extraction (boilerplate removal,
 headings, links, images, entities, pre verbatim), every engine's parser,
 ad filtering, redirect decoding, /fetch caps, /scrape concurrency, 403
-retry, stats counters, auth. ASAN-clean.
+retry, stats counters, auth, robots.txt politeness (disallow skip,
+crawl-delay spacing, per-host pace override, default-off), and
+/extract-quality numbers over the fooling corpus. ASAN-clean.
 
 ## License
 

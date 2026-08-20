@@ -193,6 +193,8 @@ void cfg_defaults(cfg_t *cfg);
 void ctx_cleanup(check_ctx_t *ctx);
 int trend_values(exo_t *e, int64_t **vals, int *n, char **list, size_t *llen);
 const char *trend_verdict(int64_t *vals, int n, int *flag);
+int rework_latest(exo_t *e, int *rate, int *cycles, int *found,
+                  char *err, size_t errsz);
 
 void pcfg_defaults(pcfg_t *p);
 void pcfg_free(pcfg_t *p);

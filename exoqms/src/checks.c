@@ -618,6 +618,7 @@ const char *trend_verdict(int64_t *vals, int n, int *flag)
 
 static void check_metrics(check_ctx_t *ctx, finding_t *f)
 {
+    char err[256];
     int64_t *vals = NULL;
     int n = 0;
     char *list = NULL;
@@ -647,6 +648,19 @@ static void check_metrics(check_ctx_t *ctx, finding_t *f)
                                     l, tab + 1);
         }
     }
+    /* derived metric integration: the rework rate rides along in the
+     * trend evidence once velocity data exists */
+    int rrate = 0, rcyc = 0, rfound = 0;
+    if (rework_latest(ctx->exo, &rrate, &rcyc, &rfound, err, sizeof err) == 0 &&
+        rfound) {
+        char rw[128];
+        snprintf(rw, sizeof rw, "rework_rate=%d.%d%% rework_cycles=%d ",
+                 rrate / 10, rrate % 10, rcyc);
+        if (off + strlen(rw) < sizeof seq - 1) {
+            memcpy(seq + off, rw, strlen(rw) + 1);
+            off += strlen(rw);
+        }
+    }
     if (strcmp(v, "down") == 0)
         set_finding(f, "metrics", R_FAIL, "trend %s (stagnation flag set): %s",
                     v, seq);
@@ -655,6 +669,313 @@ static void check_metrics(check_ctx_t *ctx, finding_t *f)
                     v, flag ? "set" : "none", seq);
     free(vals);
     free(list);
+}
+
+/* ---------- check: rework (derived metric: reopened fixes in the audit
+ * record history, ISO 9001 10.2 "did the fix stick?") ----------
+ * Definition: scan every audit record (exoqms:audit:* keys, oldest to
+ * newest by scheduled). For each distinct check id a "rework cycle" is a
+ * fail that follows a pass which itself followed an earlier fail
+ * (fail -> pass -> fail: a reopened fix). rework_rate = rework_cycles /
+ * total_audits. The check FAILs when the rate is above the threshold
+ * (default 10%, overridable via EXOQMS_REWORK_THRESHOLD in percent).
+ * Results are written under metric:velocity:<YYYYMMDD>:* keys:
+ * `rework_rate` (per-mille integer), `rework_cycles`, `rework:<check>`
+ * (per-check cycle counts) and `ttm:<feature>` (time-to-merge in seconds:
+ * the time from the first audit mentioning a feature - the audit name -
+ * to the first audit where it fully passes (score 100); a feature that
+ * never fully passes gets no key). Skipped findings carry no signal. */
+
+#define REWORK_THRESHOLD_DEFAULT_PERMILLE 100 /* 10% */
+
+typedef struct {
+    char *name;
+    int64_t scheduled;
+    int score;
+    char *findings;
+} rw_aud_t;
+
+typedef struct {
+    char id[64];
+    int cycles;
+    int state; /* 0 unknown, 1 failed, 2 passed */
+} rw_chk_t;
+
+static int key_has_suffix(const char *s, const char *suf)
+{
+    size_t sl = strlen(s), fl = strlen(suf);
+    return sl >= fl && strcmp(s + sl - fl, suf) == 0;
+}
+
+/* latest velocity values from metric:velocity:<date>:rework_* (newest
+ * date wins). *found = 1 when a rework_rate key exists. */
+int rework_latest(exo_t *e, int *rate, int *cycles, int *found,
+                  char *err, size_t errsz)
+{
+    *rate = 0;
+    *cycles = 0;
+    *found = 0;
+    char **keys = NULL;
+    size_t nk = 0;
+    if (exo_list(e, "metric:velocity:", &keys, &nk, err, errsz) != 0)
+        return -1;
+    char ratekey[512] = "", cyckey[512] = "";
+    long best = -1;
+    for (size_t i = 0; i < nk; i++) {
+        const char *k = keys[i];
+        if (strncmp(k, "metric:velocity:", 16) != 0)
+            continue;
+        const char *d = k + 16;
+        if (d[0] < '0' || d[0] > '9')
+            continue;
+        long date = atol(d);
+        if (date < best)
+            continue;
+        best = date;
+        if (key_has_suffix(k, ":rework_rate"))
+            snprintf(ratekey, sizeof ratekey, "%s", k);
+        if (key_has_suffix(k, ":rework_cycles"))
+            snprintf(cyckey, sizeof cyckey, "%s", k);
+    }
+    for (size_t i = 0; i < nk; i++)
+        free(keys[i]);
+    free(keys);
+    char *v = NULL;
+    if (ratekey[0]) {
+        if (exo_get(e, ratekey, &v, err, errsz) == 0 && v) {
+            *rate = atoi(v);
+            *found = 1;
+        }
+        free(v);
+        v = NULL;
+    }
+    if (cyckey[0]) {
+        if (exo_get(e, cyckey, &v, err, errsz) == 0 && v)
+            *cycles = atoi(v);
+        free(v);
+    }
+    return 0;
+}
+
+static void check_rework(check_ctx_t *ctx, finding_t *f)
+{
+    char err[256];
+    char **keys = NULL;
+    size_t nk = 0;
+    if (exo_list(ctx->exo, AUDIT_KEY_PREFIX, &keys, &nk, err, sizeof err) != 0) {
+        set_finding(f, "rework", R_FAIL, "exomind unreachable: %s", err);
+        return;
+    }
+    rw_aud_t *auds = NULL;
+    size_t n = 0;
+    for (size_t i = 0; i < nk; i++) {
+        char *v = NULL;
+        if (exo_get(ctx->exo, keys[i], &v, err, sizeof err) != 0 || !v) {
+            free(v);
+            continue;
+        }
+        /* id<TAB>name<TAB>criteria<TAB>scheduled<TAB>status<TAB>score
+         * <TAB>findings: split off the six header fields, keep the
+         * tabbed findings tail intact */
+        char *u = unesc_line(v);
+        free(v);
+        char *hdr[6];
+        char *p = u;
+        int nf = 0;
+        for (; nf < 6; nf++) {
+            hdr[nf] = p;
+            char *t = strchr(p, '\t');
+            if (!t) {
+                nf++;
+                break;
+            }
+            *t = 0;
+            p = t + 1;
+        }
+        if (nf < 6) {
+            free(u);
+            continue;
+        }
+        auds = xrealloc(auds, (n + 1) * sizeof(rw_aud_t));
+        rw_aud_t *a = &auds[n++];
+        memset(a, 0, sizeof *a);
+        a->name = xstrdup(hdr[1]);
+        a->scheduled = strtoll(hdr[3], NULL, 10);
+        a->score = atoi(hdr[5]);
+        a->findings = xstrdup(p);
+        free(u);
+    }
+    for (size_t i = 0; i < nk; i++)
+        free(keys[i]);
+    free(keys);
+    if (n == 0) {
+        set_finding(f, "rework", R_SKIP,
+                    "no audit records yet (exoqms:audit:*)");
+        return;
+    }
+    /* oldest first by scheduled (stable: equal timestamps keep store
+     * order) */
+    for (size_t i = 0; i < n; i++)
+        for (size_t j = i + 1; j < n; j++)
+            if (auds[j].scheduled < auds[i].scheduled) {
+                rw_aud_t t = auds[i];
+                auds[i] = auds[j];
+                auds[j] = t;
+            }
+
+    /* per-check state machine: a cycle is a fail after a pass that
+     * followed an earlier fail (a reopened fix) */
+    rw_chk_t *chks = NULL;
+    size_t nchk = 0;
+    int cycles = 0;
+    for (size_t i = 0; i < n; i++) {
+        char *copy = xstrdup(auds[i].findings);
+        char *save = NULL;
+        for (char *l = strtok_r(copy, "\n", &save); l;
+             l = strtok_r(NULL, "\n", &save)) {
+            char *bf[3];
+            int nf = tab_split(l, bf, 3);
+            if (nf < 2)
+                continue;
+            int is_fail = !strcmp(bf[1], "fail");
+            int is_pass = !strcmp(bf[1], "pass");
+            if (!is_fail && !is_pass)
+                continue; /* skips carry no signal */
+            rw_chk_t *c = NULL;
+            for (size_t k = 0; k < nchk; k++)
+                if (!strcmp(chks[k].id, bf[0])) {
+                    c = &chks[k];
+                    break;
+                }
+            if (!c) {
+                chks = xrealloc(chks, (nchk + 1) * sizeof(rw_chk_t));
+                c = &chks[nchk++];
+                snprintf(c->id, sizeof c->id, "%s", bf[0]);
+                c->cycles = 0;
+                c->state = 0;
+            }
+            if (is_fail) {
+                if (c->state == 2) {
+                    c->cycles++;
+                    cycles++;
+                }
+                c->state = 1;
+            } else if (c->state == 1) {
+                c->state = 2;
+            }
+        }
+        free(copy);
+    }
+
+    /* time-to-merge per feature (the audit name): seconds from the first
+     * audit mentioning the feature to the first one that fully passes
+     * (score 100 = no failing finding) */
+    buf_t ttm = {0};
+    for (size_t i = 0; i < n; i++) {
+        const char *nm = auds[i].name;
+        if (!nm || !nm[0])
+            continue;
+        int seen = 0;
+        for (size_t j = 0; j < i; j++)
+            if (auds[j].name && !strcmp(auds[j].name, nm)) {
+                seen = 1;
+                break;
+            }
+        if (seen)
+            continue;
+        int64_t merge = -1;
+        for (size_t j = i; j < n; j++)
+            if (!strcmp(auds[j].name, nm) && auds[j].score == 100) {
+                merge = auds[j].scheduled;
+                break;
+            }
+        if (merge >= 0) {
+            char slug[256];
+            size_t w = 0;
+            for (const char *q = nm; *q && w + 1 < sizeof slug; q++) {
+                unsigned char cc = (unsigned char)*q;
+                if (isalnum(cc) || cc == '-' || cc == '_')
+                    slug[w++] = (char)cc;
+                else
+                    slug[w++] = '_';
+            }
+            slug[w] = 0;
+            buf_printf(&ttm, "%s\t%lld\n", slug,
+                       (long long)(merge - auds[i].scheduled));
+        }
+    }
+
+    /* write the derived metric under metric:velocity:<YYYYMMDD>:* */
+    time_t now = (time_t)now_epoch();
+    struct tm tmv;
+    localtime_r(&now, &tmv);
+    char dkey[64];
+    snprintf(dkey, sizeof dkey, "metric:velocity:%04d%02d%02d",
+             tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday);
+    int rate = (int)((long long)cycles * 1000 / (long long)n);
+    {
+        char vk[512], val[32];
+        snprintf(vk, sizeof vk, "%s:rework_rate", dkey);
+        snprintf(val, sizeof val, "%d", rate);
+        if (exo_persist(ctx->exo, vk, val, err, sizeof err) != 0)
+            fprintf(stderr, "exoqms: %s store failed: %s\n", vk, err);
+        snprintf(vk, sizeof vk, "%s:rework_cycles", dkey);
+        snprintf(val, sizeof val, "%d", cycles);
+        if (exo_persist(ctx->exo, vk, val, err, sizeof err) != 0)
+            fprintf(stderr, "exoqms: %s store failed: %s\n", vk, err);
+        for (size_t k = 0; k < nchk; k++)
+            if (chks[k].cycles > 0) {
+                snprintf(vk, sizeof vk, "%s:rework:%s", dkey, chks[k].id);
+                snprintf(val, sizeof val, "%d", chks[k].cycles);
+                if (exo_persist(ctx->exo, vk, val, err, sizeof err) != 0)
+                    fprintf(stderr, "exoqms: %s store failed: %s\n", vk, err);
+            }
+        char *save = NULL;
+        for (char *l = strtok_r(ttm.p, "\n", &save); l;
+             l = strtok_r(NULL, "\n", &save)) {
+            char *tab = strchr(l, '\t');
+            if (!tab)
+                continue;
+            *tab = 0;
+            snprintf(vk, sizeof vk, "%s:ttm:%s", dkey, l);
+            if (exo_persist(ctx->exo, vk, tab + 1, err, sizeof err) != 0)
+                fprintf(stderr, "exoqms: %s store failed: %s\n", vk, err);
+        }
+    }
+    buf_free(&ttm);
+
+    /* verdict: rate above the threshold fails with the offenders */
+    int threshold = REWORK_THRESHOLD_DEFAULT_PERMILLE;
+    const char *envt = getenv("EXOQMS_REWORK_THRESHOLD");
+    if (envt && envt[0]) {
+        double pct = strtod(envt, NULL);
+        if (pct >= 0 && pct <= 100)
+            threshold = (int)(pct * 10);
+    }
+    buf_t off = {0};
+    for (size_t k = 0; k < nchk; k++)
+        if (chks[k].cycles > 0)
+            buf_printf(&off, "%s%s=%d", off.len ? " " : "", chks[k].id,
+                       chks[k].cycles);
+    if (rate > threshold)
+        set_finding(f, "rework", R_FAIL,
+                    "rework rate %d.%d%% (%d cycle(s) over %zu audits) "
+                    "> threshold %d%%%s%s",
+                    rate / 10, rate % 10, cycles, n, threshold / 10,
+                    off.len ? ": " : "", off.p ? off.p : "");
+    else
+        set_finding(f, "rework", R_PASS,
+                    "rework rate %d.%d%% (%d cycle(s) over %zu audits, "
+                    "threshold %d%%): %s",
+                    rate / 10, rate % 10, cycles, n, threshold / 10,
+                    off.p ? off.p : "");
+    free(chks);
+    for (size_t i = 0; i < n; i++) {
+        free(auds[i].name);
+        free(auds[i].findings);
+    }
+    free(auds);
+    buf_free(&off);
 }
 
 /* ---------- check 6/7: code-safety (exoqms-code) and asset-logic
@@ -1533,6 +1854,8 @@ int check_run(const char *id, check_ctx_t *ctx, finding_t *f)
         check_ui_audit(ctx, f);
     else if (!strcmp(id, "metrics"))
         check_metrics(ctx, f);
+    else if (!strcmp(id, "rework"))
+        check_rework(ctx, f);
     else if (!strcmp(id, "code-safety"))
         check_code_safety(ctx, f);
     else if (!strcmp(id, "debt"))
