@@ -123,3 +123,49 @@ before any final answer.
 - [idea] batch ops synthesize the subcommand argv (delegation) so exit
   codes match the subcommand by construction; exodoc refactored to a
   shared audit_run() — keep this pattern.
+
+## Completion waves — merged feedback (console rework → P4)
+
+- [lesson] new endpoints must ship with their README "## API" row in
+  the same commit: `GET /repl` (replication) was added to the source
+  but documented nowhere, so the doc gate failed live-vs-doc
+  (`live-only GET /repl`) until the row landed. The gate caught it
+  immediately — that's the gate working.
+- [lesson] console-op invocation order matters: flags cannot precede
+  the `/op` argument (`exomind --data f /op` → "unknown argument");
+  the op is argv[1] by contract, flags qualify it. Probe scripts must
+  follow suite convention (op first).
+- [lesson] exocontext console ops need `--exomind URL` — session state
+  lives in the memory backend, not locally; a bare `/context` probe
+  without the flag is a usage error, not a bug.
+- [lesson] never let test helpers default to a live store (ISSUE-020):
+  a dry-run arg binding bug made the norms suite write 12 fixture keys
+  into the main 7654 memory. Defaults must be inert or private.
+- [lesson] agent outputs are reviewed, not trusted: two of the
+  wave-2 agents returned empty result texts (the work was verified
+  present via git + suite evidence instead: e.g. the exoqms-code
+  adapters already existed at commit 30f1b3d and needed nothing).
+- [lesson] deterministic suites need deterministic inputs: audit ids
+  (`<epoch>:<rand32>`) + 1s-resolution `scheduled` made exoqms
+  rework/velocity tests order-dependent; suites now wipe
+  `exoqms:audit:*` before probe sections and use fresh private stores.
+- [lesson] needle-based assertions must quote against the real blob:
+  router test failures were cross-matches (`"text":"pong"` matched the
+  wrong op id) or naive (`"exokit: kit initialized"` cut inside a
+  longer echoed sentence). Reproduce the exact bytes before fixing.
+- [lesson] ASAN is the leak oracle: exocrawl pace_wait undercount and a
+  1MB-per-extraction leak only surfaced under sanitizers during the
+  robots/extract-quality work (60/0 ASAN-clean since).
+- [friction] daemons write setup chatter to stderr even for console
+  ops (`reloaded timer ...` under exosched /delivery; `loaded N entries
+  from <file>` under exomind console ops) — consumers must read
+  stdout/stderr separately, and suites match stdout.
+- [friction] `sudo`/passwordless root was unavailable mid-project, so
+  the deploy used `make install PREFIX=$HOME/.local` + repointed
+  systemd ExecStart; the root `/usr/bin` copies and `packaging/`/
+  `dist/` are stale-but-harmless artifacts of the pre-rework build.
+- [idea] replication peers could log authoritative divergences to a
+  `repl:*` note on both sides instead of stderr-only.
+- [idea] robots pace-merging (max of --pace-ms/robots-delay/per-host
+  pace) proved itself on mixed hosts; a `robots:index` summary key
+  would make site policy visible at `/list`.

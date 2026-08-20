@@ -20,6 +20,7 @@ Status legend: `open` (active) · `fixed` (resolution landed on main) ·
 | ISSUE-017 | exoqms `qms_reload` truncated reloaded audit records at the first tab — after a daemon restart every `/audit?id=` lost check/result/evidence | fixed | `parse_audit_record()` in `exoqms/src/model.c` (six header fields split, tabbed findings tail kept) |
 | ISSUE-018 | Stale version pins in test suites (exodoc/exokit/exoqms-ui/exoqms-svg expected `v0.1.0`) — four suites failed at baseline after the version bump | fixed | tests re-pinned via the binaries' `--version` output; lesson: never pin literals |
 | ISSUE-019 | exoqms issue-detection registry: 3 suite tests fail (`issue:<check>` records missing on QMS_A under the stub environment) while the manual 7688 demo works | fixed | 3 detection tests passed 138/0 (root cause: test fixture's own exomind build omitted src/router.c after the MCP-router rework; `check_issue_tracking()` parsed store fields swapped — fixed in src/checks.c; detection section now resets issue:code-safety so counters are exact); /audit?criteria=detect aliased to the standard program |
+| ISSUE-020 | `fetch-norms.sh --dry-run` argument binding bug: after `shift 2` the exomind URL landed in the crawler slot, so the dry run and the norm suite talked to the LIVE 7654 memory — 12 fixture norms + a rewritten `norm:index` polluted the main store | fixed | dedicated `EXOMIND=` binding in the dry-run branch; polluted keys deleted from 7654 (`POST /del?key=norm:<id>` + `norm:index`), v1 ids verified intact; lesson: never let a test script default to a live store — verify bindings before running, use private data files for probes |
 
 ## Software issues
 
@@ -27,7 +28,7 @@ Status legend: `open` (active) · `fixed` (resolution landed on main) ·
 |----|-------|--------|----------------------|
 | ISSUE-006 | exoqms `json_field` truncated multi-element arrays (only first ignore/test/doc entry parsed) | fixed | NC 1786859171; depth-counted array copy in `exoqms/src/util.c`; config ignores now fully applied |
 | ISSUE-007 | exocrawl search double-free (use-after-free on the query string across engine retries) | fixed | ASAN trace `search.c:207`; `free(enc)` moved out of the retry loop; ASAN-clean since |
-| ISSUE-008 | exocrawl HTML extraction misses sticky promo/cookie banners with unusual classes | tracked | real-world regression corpus planned (TODO P3); pace-based politeness only |
+| ISSUE-008 | exocrawl HTML extraction misses sticky promo/cookie banners with unusual classes | mitigated | regression corpus landed (TODO P3): 4 truthfully-fooling fixtures in `exocrawl/test/fixtures/extract/` + goldfiles; `GET /extract-quality?dir=` measures per-page precision/recall/f1 and a `fooled` flag; measured baseline p 0.762 / f1 0.865, fooled=4 — the heuristics still miss these classes (raw issue open) but the failure is now a tested, tracked number |
 | ISSUE-009 | Bing/DDG anti-bot (captcha, rate limits) intermittently blocks direct scraping | mitigated | UA rotation, bounded retries, per-engine pacing, engine filter per query |
 | ISSUE-010 | exodoc live-audit drifts when deployed binaries lag the repo (0.1.0 daemon answering 0.2.0 docs) | fixed | redeploy on merge; `exodoc audit --live` gate in `make test-exodoc` |
 | ISSUE-011 | exoqms `--repo` relative tool paths break child invocations (binaries resolved against the target repo) | fixed | absolute paths required for `--code/--ui/--svg/--exodoc`; documented |
@@ -37,8 +38,4 @@ Status legend: `open` (active) · `fixed` (resolution landed on main) ·
 
 ## Open (from TODO.md)
 
-- `todo:exocontext` — context-continuity/compression module (P1)
-- `todo:norms-more` — expand the norms corpus (P4): ECMA-262, ISO 9241, RFC 3986, A11y checklist
-- `todo:exocrawl-robots` — optional robots.txt politeness profile (P3)
-- `todo:exomind-prefix-index` — O(log n) prefix/list queries (P3)
-- `todo:qms-go-rust` — Go/Rust/TS adapters for exoqms-code (P2)
+- nothing open — all P1-P4 tasks are checked off in TODO.md with landing evidence
