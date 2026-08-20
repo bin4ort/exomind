@@ -339,6 +339,7 @@ record per line, tab-separated. An agent learns the whole API from
 |--------|------|---------|
 | GET | `/` | help / self-describing spec |
 | GET | `/ping` | liveness: `pong` |
+| GET | `/repl?from=N` | raw log records from byte offset N (replication tail) |
 | POST | `/set?key=k` | store a value (raw body + `?key=`, form, or JSON; `ttl=` optional) |
 | GET | `/get?key=k` | read raw value; 404 body `missing` |
 | POST | `/append?key=k` | append body to a value, newline-separated |
