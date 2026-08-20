@@ -42,10 +42,12 @@ if ! command -v "$EXODOC_BIN" >/dev/null 2>&1 && [ "$EXODOC_BIN" = exodoc ]; the
     printf 'FAIL %-54s exodoc binary unavailable\n' "setup exodoc"; exit 1
 fi
 cc -O2 -std=c11 -Wall -Wextra -pthread -D_POSIX_C_SOURCE=200809L \
+    -D_XOPEN_SOURCE=700 \
     ../src/main.c ../src/http.c ../src/store.c ../src/util.c \
-    ../src/router.c ../common/exo.c -o "$TDIR/exomind" 2>/dev/null \
+    ../src/router.c ../src/update.c ../common/exo.c -o "$TDIR/exomind" 2>/dev/null \
  || cc -O2 -std=c11 -Wall -Wextra -pthread -D_POSIX_C_SOURCE=200809L \
-    src/main.c src/http.c src/store.c src/util.c src/router.c \
+    -D_XOPEN_SOURCE=700 \
+    src/main.c src/http.c src/store.c src/util.c src/router.c src/update.c \
     -o "$TDIR/exomind"
 
 # ---------- fixtures --------------------------------------------------------

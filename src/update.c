@@ -171,6 +171,13 @@ int exo_update_self(const char *argv0)
         return 1;
     }
     sq(src, sqdir, sizeof sqdir);
+    char probe[64];
+    if (sh_out("git -C '%s' rev-parse --git-dir >/dev/null 2>&1", probe,
+               sizeof probe, sqdir) != 0) {
+        fprintf(stderr,
+                "exomind: error: %s is not a git working tree\n", src);
+        return 1;
+    }
     char branch[256];
     if (!update_branch(sqdir, branch, sizeof branch)) {
         fprintf(stderr,

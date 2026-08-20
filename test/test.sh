@@ -927,8 +927,8 @@ kill "$BP" 2>/dev/null
 assert_not_contains "update: EXO_UPDATE_CHECK=0 silences banner" "update available" \
     "$(cat "$UPDT/banner2.err")"
 (printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
-    | (exec -a exomind-server "$BIN" --data "$UPDT/mcp.dat" \
-        2>"$UPDT/mcp.err" >/dev/null))
+    | (EXO_UPDATE_DIR="$UPDT/work" exec -a exomind-server "$BIN" \
+        --data "$UPDT/mcp.dat" 2>"$UPDT/mcp.err" >/dev/null))
 assert_contains "update: MCP server stderr banner" "update available" \
     "$(cat "$UPDT/mcp.err")"
 rm -rf "$UPDT"
