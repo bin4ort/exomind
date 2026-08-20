@@ -861,6 +861,78 @@ r=$(curl -s -m 3 "$BASE/mandate")
 assert_contains "mandate served" "MANDATE" "$r"
 assert_contains "mandate ack instruction" "agent:<your-id>:ready" "$r"
 
+### self-update (--update) and the startup version notice
+# hermetic: local bare remote + a trivial Makefile in the clone, so the
+# update pipeline (fetch -> pull -> make -> make install) is exercised
+# without network or a full rebuild.
+R="$(cd "$(dirname "$0")/.." && pwd)"
+UPDT=$(mktemp -d)
+git clone -q --shared "$R" "$UPDT/work" 2>/dev/null
+git init -q --bare "$UPDT/bare.git"
+git -C "$UPDT/work" config user.email updt@test
+git -C "$UPDT/work" config user.name updt
+git -C "$UPDT/work" remote set-url origin "$UPDT/bare.git"
+UBR=$(git -C "$UPDT/work" symbolic-ref --short HEAD)
+git -C "$UPDT/work" push -q "$UPDT/bare.git" "$UBR:$UBR"
+
+out=$(EXO_UPDATE_DIR="$UPDT/work" EXO_UPDATE_PREFIX="$UPDT/prefix" \
+    "$BIN" --update 2>&1); rc=$?
+assert_eq "update: up to date exit 0" "0" "$rc"
+assert_contains "update: up to date line" "up to date" "$out"
+
+git -C "$UPDT/work" commit -q --allow-empty -m "fake new release"
+git -C "$UPDT/work" push -q "$UPDT/bare.git" "$UBR:$UBR"
+git -C "$UPDT/work" reset -q --hard HEAD~1
+printf 'all:\n\t@echo built\ninstall:\n\tinstall -d $(DESTDIR)$(PREFIX)/bin\n\tcp exomind-fake $(DESTDIR)$(PREFIX)/bin/\n' \
+    > "$UPDT/work/Makefile"
+printf '#!/bin/sh\n' > "$UPDT/work/exomind-fake" && chmod +x "$UPDT/work/exomind-fake"
+out=$(EXO_UPDATE_DIR="$UPDT/work" EXO_UPDATE_PREFIX="$UPDT/prefix" \
+    "$BIN" --update 2>/dev/null); rc=$?
+assert_eq "update: behind exit 0" "0" "$rc"
+assert_contains "update: updated sha pair" "updated" "$out"
+assert_contains "update: install target" "binaries installed into" "$out"
+assert_contains "update: restart hint" "restart" "$out"
+assert_eq "update: pulled the new commit" \
+    "$(git -C "$UPDT/work" rev-parse origin/$UBR)" \
+    "$(git -C "$UPDT/work" rev-parse HEAD)"
+assert_eq "update: fake binary installed" "yes" \
+    "$([ -f "$UPDT/prefix/bin/exomind-fake" ] && echo yes)"
+
+git -C "$UPDT/work" commit -q --allow-empty -m "local ahead"
+out=$(EXO_UPDATE_DIR="$UPDT/work" EXO_UPDATE_PREFIX="$UPDT/prefix" \
+    "$BIN" --update 2>/dev/null); rc=$?
+assert_eq "update: local ahead exit 0" "0" "$rc"
+assert_contains "update: local ahead line" "local" "$out"
+assert_contains "update: local ahead nothing to pull" "nothing to pull" "$out"
+
+out=$(EXO_UPDATE_DIR=/nonexistent "$BIN" --update 2>&1); rc=$?
+assert_eq "update: missing source dir exit 1" "1" "$rc"
+assert_contains "update: missing source dir error" "not a git working tree" "$out"
+
+git -C "$UPDT/work" commit -q --allow-empty -m "one more"
+git -C "$UPDT/work" push -q "$UPDT/bare.git" "$UBR:$UBR"
+git -C "$UPDT/work" reset -q --hard HEAD~1
+out=$("$BIN" /ping --data "$UPDT/console.dat" 2>/dev/null)
+assert_eq "update: console stdout stays pure while behind" "pong" "$out"
+EXO_UPDATE_DIR="$UPDT/work" "$BIN" --serve --port $((PORT + 1)) \
+    --data "$UPDT/banner.dat" 2>"$UPDT/banner.err" & BP=$!
+sleep 1
+kill "$BP" 2>/dev/null
+assert_contains "update: banner on serve stderr" "update available" \
+    "$(cat "$UPDT/banner.err")"
+EXO_UPDATE_DIR="$UPDT/work" EXO_UPDATE_CHECK=0 "$BIN" --serve \
+    --port $((PORT + 1)) --data "$UPDT/banner2.dat" 2>"$UPDT/banner2.err" & BP=$!
+sleep 1
+kill "$BP" 2>/dev/null
+assert_not_contains "update: EXO_UPDATE_CHECK=0 silences banner" "update available" \
+    "$(cat "$UPDT/banner2.err")"
+(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+    | (exec -a exomind-server "$BIN" --data "$UPDT/mcp.dat" \
+        2>"$UPDT/mcp.err" >/dev/null))
+assert_contains "update: MCP server stderr banner" "update available" \
+    "$(cat "$UPDT/mcp.err")"
+rm -rf "$UPDT"
+
 if [ "$FAILS" -ne 0 ]; then
     cp "$DATA/server.log" /tmp/opencode/fail-server.log 2>/dev/null
     echo "DATA=$DATA"

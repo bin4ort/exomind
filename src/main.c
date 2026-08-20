@@ -1,5 +1,6 @@
 #include "http.h"
 #include "router.h"
+#include "update.h"
 #include "store.h"
 #include "util.h"
 #include "version.h"
@@ -117,6 +118,12 @@ static void usage(const char *argv0)
             "  --mcp            serve as a stdio Model Context Protocol\n"
            "                   server (installing as `exomind-server` does\n"
            "                   the same)\n"
+           "  --update         fetch, rebuild and reinstall into the running\n"
+           "                   binary's own prefix (no sudo for user\n"
+           "                   installs); env EXO_UPDATE_DIR (source tree),\n"
+           "                   EXO_UPDATE_PREFIX (install prefix),\n"
+           "                   EXO_UPDATE_BRANCH, EXO_UPDATE_CHECK=0 to kill\n"
+           "                   the startup version notice (stderr only)\n"
 "  keys add <name[:mods]> | keys list | keys remove <name>\n"
             "  <operation>      run ONE API operation directly, no server:\n"
             "                   exomind /set?key=k (body = value, from\n"
@@ -476,6 +483,7 @@ int main(int argc, char **argv)
     int mcp_mode = 0;
     long rate_limit = 0;
     int want_server = 0; /* --serve or an explicit --port requested */
+    int want_update = 0;
     const char *body_arg = "";
     const char *backup_dir = NULL;
     const char *project_root = NULL;
@@ -570,6 +578,9 @@ int main(int argc, char **argv)
                      argv[++i]);
             g_repl.enabled = 1;
         }
+        else if (!strcmp(a, "--update")) {
+            want_update = 1;
+        }
         else if (!strcmp(a, "--body") && i + 1 < argc)
             body_arg = argv[++i];
         else if (!strcmp(a, "--log-level") && i + 1 < argc) {
@@ -602,12 +613,15 @@ int main(int argc, char **argv)
             return 1;
         }
     }
+    if (want_update)
+        return exo_update_self(argv[0]);
     if (invoked_as_server(argv[0])) {
         /* exomind-server: the stack-wide MCP router */
         mcp_mode = 1;
     }
     if (mcp_mode) {
         g_store = store_open(data);
+        exo_update_banner(argv[0]);
         if (invoked_as_server(argv[0]) &&
             !getenv("EXOMIND_SERVER_LOCAL")) {
             /* register exomind's own tools then the sibling modules;
@@ -807,6 +821,7 @@ int main(int argc, char **argv)
                 token ? ", auth: bearer token" : "",
                 tokens_file ? ", scoped tokens: yes" : "");
     } else if (want_server) {
+        exo_update_banner(argv[0]);
         fprintf(stderr,
                 "exomind v%s listening on http://%s:%d (data: %s%s%s)\n",
                 EXOMIND_VERSION, host, port, data,

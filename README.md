@@ -206,8 +206,9 @@ exomind --help exosched   # one module's guide
 `--body <text>`, `--serve`, `--port <n>`, `--token <t>` (or env
 `EXO<MODULE>_TOKEN`), `--keys <file>`, `--rate-limit <n>/s` (429 when
 exhausted), `--log-level error|warn|info|debug`, `--help [modules]`,
-`--version`. `--host <addr>` (default 127.0.0.1) exists on the modules
-that support a bind address. Tokens require
+`--version`, `--update` (fetch + rebuild + reinstall, see the
+self-update section). `--host <addr>` (default 127.0.0.1) exists on the
+modules that support a bind address. Tokens require
 `Authorization: Bearer <token>` on every request.
 
 ### keys (auth) file management
@@ -262,6 +263,55 @@ exomind --mcp
 # the stack-wide MCP router
 exomind-server
 ```
+
+### Self-update (`--update`)
+
+`exomind-server --update` (works on plain `exomind` too) fetches the
+remote, pulls the newest commits, rebuilds and reinstalls the whole
+stack into the prefix the running binary lives in — **no sudo needed
+for user-local installs** (`~/.local/bin` → `~/.local`). The update is
+a human-only, terminal action and is deliberately invisible to agents:
+
+```sh
+exomind-server --update
+
+# exomind: updated e35b77d -> 4463ea1 (2 commits, v0.4.0-alpha.1)
+# exomind: binaries installed into /home/you/.local/bin
+# exomind: restart 'exomind-server' to apply (hint: systemctl --user
+#           restart exo-exomind)
+```
+
+Behavior, in order: fetch (30s timeout) → compare `HEAD` vs
+`origin/<branch>` → if equal: `up to date`, exit 0 → pull
+(`--ff-only`; dirty working trees abort with a hint) → `make` (build
+errors abort) → `make install` into the derived prefix (non-writable
+prefixes abort with `EXO_UPDATE_PREFIX` hint). It never restarts the
+daemon itself; the hint does a `systemctl --user restart` .
+
+**Startup version notice (humans only):** every time exomind-server
+(or `exomind --serve`) starts, it quietly checks the remote and —
+only when updates exist — prints a notice to **stderr**:
+
+```
+exomind-server v0.4.0-alpha.1: update available (git e35b77d -> 4463ea1, 2 commits behind origin/main)
+  run 'exomind-server --update' to fetch, rebuild and reinstall into /home/you/.local/bin
+  (EXO_UPDATE_CHECK=0 silences this notice)
+```
+
+The check is bounded (`timeout 8`), fails silent on any error, and
+never touches **stdout**: agent channels (console-op replies, MCP
+JSON-RPC, HTTP bodies) stay byte-clean, so agents never see the notice
+and cannot be nudged into updating mid-work. Notes:
+
+- The check needs a source tree + git remote. The build default is the
+  directory the binary was compiled in
+  (`EXO_REPO_DIR_DEFAULT`); a distro binary without it stays silent.
+- `EXO_UPDATE_CHECK=0` (or `off`/`no`) disables the notice.
+- `EXO_UPDATE_DIR=/path/to/exomind` overrides the source tree.
+- `EXO_UPDATE_PREFIX=~/.local` overrides the install prefix (default:
+  derived from the binary's own location).
+- `EXO_UPDATE_BRANCH=main` overrides the tracked branch (default: the
+  working tree's current branch).
 
 ### MCP over stdio, concretely
 
