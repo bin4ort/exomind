@@ -99,3 +99,27 @@ a later run can `failed` it so the next 6h iteration starts fresh.
 with `test/mock_research.py` standing in for exocrawl. `exocrawl`'s own
 suite is untouched: the refresh worker consumes its public console
 contract only.
+
+## norms harvest loop (norms-loop)
+
+The norms corpus (`norm:<id>` keys, registry `norm:index`) is harvested
+by `exocrawl/contrib/fetch-norms.sh` — 19 freely-available international
+norms capped at 30 KB each. `exoflow/contrib/norms-refresh.flow` is a
+`every 24h` loop that re-runs the harvest so the corpus tracks the
+sources; `exoflow/contrib/norms-loop.sh` drives it:
+
+```
+norms-loop.sh -u http://127.0.0.1:7676 -f <flow-id> -w norms-agent \
+              -m http://127.0.0.1:7654 -X http://127.0.0.1:7658
+```
+
+The driver claims the `harvest` step via `/next` and appends a
+`=== <ts> ===` block to `norm:refresh:note` only when at least one norm
+was (re)fetched — silence is information: an unchanged corpus produces
+no note growth. Offline mode: `-R <fixtures-dir>` runs the harvest with
+`--dry-run` against fixture files (`exocrawl/test/fixtures/norms/`), so
+the loop is exercisable without the network; the dry-run path is
+byte-identical to a real run except the fetch leg.
+
+`exocrawl/test/test.sh` covers the dry-run mechanics: 19-id registry,
+cap, idempotence, soft failure on a missing fixture.

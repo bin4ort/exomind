@@ -178,6 +178,42 @@ check "extract-quality: overall f1 printed" "$(echo "$EQ" | grep -q '^overall: f
 check "extract-quality: exit 0" "$(timeout 30 "$BIN" "/extract-quality?dir=$EQDIR" >/dev/null 2>&1 && echo 0 || echo 1)" ""
 check "extract-quality: missing dir exit 1" "$(timeout 5 "$BIN" /extract-quality >/dev/null 2>&1; [ $? -eq 1 ] && echo 0 || echo 1)" ""
 
+# =============== norms corpus harvest (--dry-run, offline) ==============
+[ -x ../build/exomind ] || (cd .. && make exomind) > /dev/null 2>&1
+NRM=7778
+OLDPID=$(ss -tlnp 2>/dev/null | grep ":$NRM " | grep -oP 'pid=\K[0-9]+' | head -1)
+[ -n "$OLDPID" ] && kill $OLDPID 2>/dev/null
+setsid nohup ../build/exomind --port $NRM --data "$TDIR/norm.dat" \
+    > "$TDIR/norm.log" 2>&1 < /dev/null &
+NRM_PID=$!
+for i in $(seq 1 20); do
+    timeout 2 curl -s http://127.0.0.1:$NRM/ping 2>/dev/null | grep -q pong && break
+    sleep 1
+done
+NFIX="$(pwd)/test/fixtures/norms"
+# probe the missing-fixture soft-fail path FIRST on a store with no norms yet
+NFAILOUT=$(bash contrib/fetch-norms.sh --dry-run "$NFIX/missing" "http://127.0.0.1:$NRM" 2>&1)
+check "norms: missing fixture fails soft (still harvests others)" "$(echo "$NFAILOUT" | grep -q 'FAIL: fixture' && echo 0 || echo 1)" "$NFAILOUT"
+check "norms: soft failure records a fetch-failed note" "$(curl -s --max-time 5 "http://127.0.0.1:$NRM/get?key=norm:pep20" | grep -q '^fetch failed' && echo 0 || echo 1)" ""
+kill $NRM_PID 2>/dev/null
+sleep 1
+setsid nohup ../build/exomind --port $NRM --data "$TDIR/norm2.dat" \
+    > "$TDIR/norm2.log" 2>&1 < /dev/null &
+NRM_PID=$!
+for i in $(seq 1 20); do
+    timeout 2 curl -s http://127.0.0.1:$NRM/ping 2>/dev/null | grep -q pong && break
+    sleep 1
+done
+NHARVEST=$(bash contrib/fetch-norms.sh --dry-run "$NFIX" "http://127.0.0.1:$NRM" 2>&1)
+NINDEX=$(curl -s --max-time 5 "http://127.0.0.1:$NRM/get?key=norm:index")
+check "norms: dry-run harvests the new P4 ids" "$(echo "$NINDEX" | grep -q 'pep20 .*ecma262 .*diataxis' && echo 0 || echo 1)" "$NINDEX"
+check "norms: all 19 ids registered" "$([ "$(echo "$NINDEX" | wc -w)" -eq 19 ] && echo 0 || echo 1)" "$NINDEX"
+check "norms: stored value carries the header line" "$(curl -s --max-time 5 "http://127.0.0.1:$NRM/get?key=norm:pep20" | head -1 | grep -q '^# PEP 20' && echo 0 || echo 1)" ""
+check "norms: oversized fixture capped at MAX" "$([ "$(curl -s --max-time 10 "http://127.0.0.1:$NRM/get?key=norm:ecma262" | wc -c)" -le 31000 ] && echo 0 || echo 1)" "$(curl -s --max-time 10 "http://127.0.0.1:$NRM/get?key=norm:ecma262" | wc -c)"
+check "norms: re-run is idempotent (skips, same registry)" "$([ "$(bash contrib/fetch-norms.sh --dry-run "$NFIX" "http://127.0.0.1:$NRM" 2>&1 | grep -c '^fetch ')" -eq 0 ] && [ "$(curl -s --max-time 5 "http://127.0.0.1:$NRM/get?key=norm:index")" = "$NINDEX" ] && echo 0 || echo 1)" ""
+check "norms: norms-refresh.flow exists and is looped" "$([ -f "$(pwd)/../exoflow/contrib/norms-refresh.flow" ] && grep -q 'loop.*every 24h' "$(pwd)/../exoflow/contrib/norms-refresh.flow" && echo 0 || echo 1)" ""
+kill $NRM_PID 2>/dev/null
+
 # =============== auth ===================================================
 kill $CRL_PID 2>/dev/null
 sleep 1

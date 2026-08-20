@@ -1,0 +1,35 @@
+The A11y Project checklist — digest (extract)
+The checklist is a practical, step-by-step guide to auditing a web
+project.
+
+Content:
+- Use plain language and avoid figures of speech, idioms, complex
+  metaphors and culturally specific terms where possible.
+- Provide alt text on functional images and images conveying
+  information; leave decorative images empty.
+- Avoid text on images; provide text alternatives for images used as
+  links or buttons.
+- Do not use colour alone to convey meaning.
+
+Global code:
+- Validate HTML; use a native element whenever possible (buttons,
+  links, inputs).
+- Keep heading levels in order; heading text is descriptive.
+- Provide a unique and descriptive title per page.
+- Use lang attribute on the html element.
+- Rescue text with escaped entities; use semantic markup (strong/em).
+
+Keyboard:
+- All functionality is operable without a mouse: tab order matches
+  reading order; visible focus indicator; no keyboard traps.
+
+Forms:
+- Labels are associated with controls and visible; error messages are
+  associated with the field; autocomplete where useful.
+- Required fields are clearly marked; errors are announced.
+
+Media, animation, and motion:
+- Provide transcripts for audio, captions for video; don't autoplay.
+- Prefer prefers-reduced-motion support; no content that blinks more
+  than 3 times, or that could cause seizures.
+

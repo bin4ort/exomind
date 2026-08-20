@@ -1,0 +1,34 @@
+WHATWG HTML — landmarks and semantics (digest)
+Landmarks are regions of a page that represent navigable content
+sections. They are conveyed to assistive technology.
+
+Page structure:
+- header (banner): introductory content, typically the masthead
+- nav: set of navigation links
+- main: the main content of the document
+- footer (contentinfo): about the page or site
+- aside: tangentially related content
+- section: a thematic grouping of content, usually with a heading
+- article: a self-contained composition (that could stand alone)
+- form: a region that contains a form
+- search: a region with site search functionality
+
+The doc element:
+- The main element must not be used more than once per document,
+  unless it is hidden.
+- Landmark elements must have an accessible name when there is more
+  than one of the same type.
+- The header and footer elements are not landmark regions when their
+  nearest ancestor sectioning content is the body.
+
+ARIA roles refine semantics:
+- role=banner, role=navigation, role=main, role=contentinfo
+- role=region with an accessible name for generic regions
+- role=search for search regions
+- role=complementary for aside content
+
+Assistive technology exposes landmarks for quick navigation: prefer
+native elements over divs with ARIA roles, and give each landmark a
+labelled heading or aria-label when the content does not already
+identify the region.
+

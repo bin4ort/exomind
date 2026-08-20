@@ -1,0 +1,3 @@
+norms refresh
+harvest	run exocrawl/contrib/fetch-norms.sh (norms-loop.sh drives); append a === delta block === to norm:refresh:note only when ids changed (silence = unchanged)			600
+loop	every 24h

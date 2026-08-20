@@ -1,0 +1,25 @@
+Material Design 3 — principles (digest)
+Material Design is an adaptable system of guidelines, components, and
+tools. Its three principles:
+
+1. Color is more than decoration — color builds identity and guides
+   focus. Material You uses color extracted from the user to build a
+   personal, dynamic experience.
+2. Shape expresses mood — rounded corners feel calm and friendly,
+   sharp corners feel precise and technical.
+3. Typography expresses the voice of the product.
+
+Key concepts:
+- Tokens: design decisions expressed as code (color, type, spacing,
+  shape elevation tokens) so themes stay consistent and testable.
+- State layers: overlays that convey interaction feedback (hover,
+  focus, pressed, dragged) consistently across components.
+- Elevation: shadow levels (0-5) that express hierarchy.
+- Dynamic color: a small set of colors derived from wallpapers and
+  extended across the UI for harmony.
+- Adaptive components: the same component scales across screen sizes
+  (compact, medium, expanded breakpoints at 600 and 840dp).
+
+Accessibility baseline: contrast of 4.5:1 for text, touch targets of
+at least 48x48dp, and content that does not rely on color alone.
+

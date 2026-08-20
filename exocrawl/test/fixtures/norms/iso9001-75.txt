@@ -1,0 +1,34 @@
+ISO 9001:2015 — clause 7.5 Documented information (summary)
+7.5 Documented information
+  7.5.1 General
+  The organization's quality management system shall include:
+  a) documented information required by this International Standard;
+  b) documented information determined by the organization as being
+     necessary for the effectiveness of the QMS.
+
+  7.5.2 Creating and updating
+  When creating and updating documented information the organization
+  shall ensure appropriate:
+  a) identification and description (e.g. a title, date, author or
+     reference number);
+  b) format (e.g. language, software version, graphics) and media
+     (e.g. paper, electronic);
+  c) review and approval for suitability and adequacy.
+
+  7.5.3 Control of documented information
+  Documented information required by the QMS and by this standard
+  shall be controlled to ensure:
+  a) it is available and suitable for use, where and when it is
+     needed;
+  b) it is adequately protected (e.g. from loss of confidentiality,
+     improper use, or loss of integrity).
+
+  For the control of documented information, the organization shall
+  address the following activities, as applicable:
+  - distribution, access, retrieval and use;
+  - storage and preservation, including preservation of legibility;
+  - control of changes (e.g. version control);
+  - retention and disposition.
+  Documented information of external origin shall be identified and
+  controlled as appropriate.
+

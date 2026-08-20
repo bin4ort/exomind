@@ -1,0 +1,30 @@
+ISO 9241-11 — Usability: definitions and concepts (summary)
+This part of ISO 9241 provides a framework for usability and explains
+how to specify and evaluate usability.
+
+Definition: the extent to which a product can be used by specified
+users to achieve specified goals with effectiveness, efficiency and
+satisfaction in a specified context of use.
+
+Components:
+- Effectiveness: accuracy and completeness with which users achieve
+  specified goals.
+- Efficiency: resources expended in relation to the accuracy and
+  completeness with which users achieve goals.
+- Satisfaction: the extent to which the user's physical, cognitive
+  and emotional responses that result from the use of a system, product
+  or service meet the user's needs and expectations.
+
+Context of use: the combination of users, goals, tasks, resources,
+and the physical, social and organizational environment in which a
+system is used.
+
+Usability is defined relative to a specified context of use, never
+absolutely. Measures should be stated in terms of effectiveness,
+efficiency and satisfaction, with the context described explicitly.
+
+Related concepts: accessibility (extent to which products can be used
+by people with the widest range of capabilities) and user experience
+(perceptions and responses resulting from the anticipated or actual
+use of the product).
+

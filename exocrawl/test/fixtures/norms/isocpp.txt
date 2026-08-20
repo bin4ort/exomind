@@ -1,0 +1,48 @@
+ISO C++ Core Guidelines — table of contents (extract)
+The guidelines are a set of best-practice rules for writing modern,
+safe, performant C++. They are organized by topic.
+
+P: Philosophy
+- P.1: Express ideas directly in code
+- P.2: Write in ISO Standard C++
+- P.3: Express intent
+- P.4: Ideally, a program should be statically type safe
+
+I: Interfaces
+- I.1: Make interfaces explicit
+- I.2: Avoid non-const global variables
+- I.3: Avoid singletons
+- I.4: Make interfaces precisely and strongly typed
+
+F: Functions
+- F.1: Package meaningful operations as carefully named functions
+- F.2: A function should perform a single logical operation
+- F.3: Keep functions short and simple
+
+C: Classes and class hierarchies
+- C.1: Organize related data, functions, and overloads into classes
+- C.2: Use class if the class has an invariant
+
+ES: Expressions and statements
+- ES.1: Prefer the standard library to other libraries
+- ES.2: Prefer suitable abstractions to direct use of language features
+- ES.5: Keep scopes small
+- ES.20: Always initialize an object
+- ES.22: Don't declare a variable until you have a value to initialize it with
+
+Per: Performance
+- Per.1: Don't optimize without reason
+- Per.2: Don't optimize prematurely
+- Per.3: Don't optimize through something that's not a bottleneck
+
+CP: Concurrency
+- CP.1: Assume that your code will run as part of a multi-threaded program
+- CP.2: Avoid data races
+- CP.3: Minimize explicit sharing of writable data
+
+Error handling
+- E.1: Develop an error-handling strategy early in a design
+- E.2: Throw an exception to signal that a function cannot perform its
+  assigned task
+- E.28: Avoid error handling based on global state
+

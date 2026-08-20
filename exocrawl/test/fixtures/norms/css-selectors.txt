@@ -1,0 +1,58 @@
+Selectors Level 4 — digest (extract)
+Selectors are patterns that match against elements in a tree and
+select one or more nodes. They are used in CSS and in DOM query APIs.
+
+1 Introduction
+2 Selectors Overview
+3 Selector Syntax and Structure
+  3.1 Structure and Terminology
+  3.2 Data Model
+4 Logical Combinations
+  4.1 Selector Lists
+  4.2 The Matches-Any Pseudo-class: :is()
+  4.3 The Negation Pseudo-class: :not()
+  4.4 The Forgiving Selector Parser
+5 Attribute Selectors
+  5.1 Attribute Presence and Value Selectors
+  5.2 Substring Matching Attribute Selectors
+  5.3 Case-sensitivity: the i and s flags
+6 Linguistic Pseudo-classes
+  6.1 The Dir Pseudo-class: :dir()
+  6.2 The Language Pseudo-class: :lang()
+7 Location Pseudo-classes
+  7.1 The Any-Link Pseudo-class: :any-link
+  7.2 The Link History Pseudo-classes: :link and :visited
+  7.3 The Target Pseudo-class: :target
+8 User Action Pseudo-classes
+  8.1 The Hover Pseudo-class: :hover
+  8.2 The Active Pseudo-class: :active
+  8.3 The Focus Pseudo-classes: :focus, :focus-within, :focus-visible
+9 Time-dimensional Pseudo-classes
+10 The Input Pseudo-classes
+  10.1 The Input Value Pseudo-classes: :checked, :indeterminate
+  10.2 The Validity Pseudo-classes: :valid and :invalid
+  10.3 The Range Pseudo-classes: :in-range and :out-of-range
+  10.4 The Optionality Pseudo-classes: :required and :optional
+11 Tree-Structural Pseudo-classes
+  11.1 The Root Pseudo-class: :root
+  11.2 The Nth-child Pseudo-class: :nth-child()
+  11.3 The Nth-last-child Pseudo-class
+  11.4 The Of-type Pseudo-classes
+  11.5 The Empty Pseudo-class: :empty
+12 Combinators
+  12.1 Descendant Combinator
+  12.2 Child Combinator
+  12.3 Next-sibling Combinator
+  12.4 Following-sibling Combinator
+13 Pseudo-elements
+  13.1 The Marker Pseudo-element: ::marker
+  13.2 The Placeholder Pseudo-element
+  13.3 The Selection Pseudo-element: ::selection
+14 Element and Pseudo-element Selectors
+15 Defining Namespaces
+  15.2 Declaring Namespaces in Selectors
+16 Calculated Values
+17 Grammar
+18 API Hooks
+19 Security Considerations
+

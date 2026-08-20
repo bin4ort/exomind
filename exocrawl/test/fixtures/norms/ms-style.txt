@@ -1,0 +1,21 @@
+Microsoft Style Guide — summary (digest)
+Plain language, consistency and clarity. Key rules:
+- Write short sentences and paragraphs; one idea per sentence.
+- Use active voice and strong verbs; say who does what.
+- Cut unnecessary words (redundancy); avoid fluff.
+- Use the present tense for instructions.
+- Address the reader as 'you'; use imperative mood for instructions.
+- Use one term consistently for a concept; avoid synonyms.
+- Use standard punctuation; be consistent with serial commas.
+- Avoid jargon, Latin phrases and idioms where a plain English
+  alternative exists.
+- Use numerals for numbers (10 and above; spell out below 10 except
+  measurements, dates, money and percentages).
+- Capitalization: sentence case for interface text and headlines
+  unless a product name demands otherwise.
+- Accessibility: descriptive link text, alternative text for images,
+  no text on images, heading structure, sufficient contrast.
+- Localization: keep strings short, avoid culture-bound references
+  and images of text; follow the internationalization rules for dates,
+  time, units.
+

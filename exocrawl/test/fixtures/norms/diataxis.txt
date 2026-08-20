@@ -1,0 +1,24 @@
+The Diataxis framework — digest (summary)
+Diátaxis identifies four fundamental modes of documentation:
+tutorials, how-to guides, reference material and explanation.
+
+- Tutorials: lessons that take a learner by the hand through a series
+  of steps to complete a project of relevance to them. The most
+  important thing is what the user does, not what they learn.
+- How-to guides: directions to solve a specific problem, a sequence
+  of steps, goal-oriented. They are not lessons; the reader brings
+  their own goal.
+- Reference material: technical description, the source of truth,
+  consulted when the reader needs an exact detail. Structured by the
+  subject itself, not by the reader's needs.
+- Explanation (discussion): understanding, background and context.
+  Allows the reader to deepen their knowledge, relating the thing to
+  its purpose and the wider world.
+
+Each mode answers a different need and the four modes are
+complementary; a documentation system is healthy when all four are
+present. The framework is a pattern for structuring documentation,
+not a ritual: discriminate between what the reader is doing
+(tutorial/how-to) and what the reader is seeing (reference/explanation),
+and let the material's nature decide the mode.
+

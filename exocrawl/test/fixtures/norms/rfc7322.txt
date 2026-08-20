@@ -1,0 +1,32 @@
+RFC 7322 — RFC Style Guide (digest)
+This document describes the fundamental and unique style conventions
+and editing requirements for RFCs.
+
+Structure:
+- An RFC is a complete, individually reviewable document with a fixed
+  structure: front matter (title, authors, status), body, and
+  back matter (references, appendices).
+- The title should be descriptive, specific, and as neutral as
+  possible; at most 42 characters is recommended.
+- The Status of This Memo section states the document's status
+  (Standards Track, Informational, Experimental, Best Current
+  Practice).
+- Sections are numbered; the Abstract appears before the Introduction
+  and is limited to approximately 20 lines.
+- The Introduction must set the context, motivation, and scope.
+
+Language and style:
+- Use 'must', 'may', 'should' per RFC 2119 semantics only when
+  normative.
+- Aim for complete, unambiguous sentences; avoid ambiguity and
+  unnecessary words.
+- Third person and the passive voice are commonly used, but clarity
+  wins.
+- Abbreviations and acronyms are expanded on first use.
+- Citations use the traditional RFC reference format with authors,
+  title, and RFC number.
+
+Process requirements:
+- RFCs are published by the RFC Editor and go through the IETF
+  stream's process; errata are tracked separately.
+
