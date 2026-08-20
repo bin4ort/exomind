@@ -161,6 +161,11 @@ retry, stats counters, auth, robots.txt politeness (disallow skip,
 crawl-delay spacing, per-host pace override, default-off), and
 /extract-quality numbers over the fooling corpus. ASAN-clean.
 
+The QMS gate's component-tests check runs the in-budget smoke
+`./build/exocrawl --version` (the full suite is ~17 s, over the 5 s
+audit budget; the manifest declares the smoke, the suite runs via
+`make test-exocrawl`).
+
 ## License
 
 GPL-3.0-only — see [LICENSE](../LICENSE).

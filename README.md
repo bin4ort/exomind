@@ -452,6 +452,10 @@ curl 'localhost:7654/search?q=parser'
   the index can safely be stale); `/search` stays linear.
 - **Compaction** — when the log exceeds 64 MB with >33% dead bytes, live
   records are rewritten atomically via rename.
+- **Replication** — `GET /repl?from=N` streams raw log records from byte
+  offset N (CRC-verified); a follower (`--repl <url>`) tails a primary,
+  resumes from the last applied offset after a restart, and applies each
+  record cast-once. `/stats` reports the follower's role and tail gap.
 - **Snapshot/restore** — `GET /snapshot` emits a length-prefixed plain
   dump; `POST /restore` rebuilds through temp file + fsync + rename.
 - **Vectors (exovec)** — `POST /embed` hashes the body into a fixed
@@ -478,19 +482,30 @@ root as `make test-<module>`:
 make test              # exomind: every endpoint, persistence across
                        # restarts, tombstones, TTL expiry, bearer + scoped
                        # auth, SIGKILL crash recovery, concurrent writers,
-                       # snapshot round-trips, vector recall
+                       # snapshot round-trips, vector recall, self-update
 make test-exosched test-exoflow test-exodoc test-exoqms test-exocrawl \
-     test-exocontext test-exokit
+     test-exocontext test-exokit \
+     test-exoqms-code test-exoqms-ui test-exoqms-svg
 ```
 
 The suites spawn their own private daemons and temp data and never touch
-shared instances. The QMS gate runs `./build/exomind --version` as the
-in-budget smoke command (5s audit budget; the full suites are too slow
-for it and run via `make test-<module>`).
+shared instances. Current totals (all green in the gate pass): exomind
+371 PASS, exosched 82, exoflow 139, exocrawl 68, exocontext 51, exodoc
+36, exokit 50, exoqms 160, exoqms-code 58, exoqms-ui 35, exoqms-svg 61.
+The QMS gate's component-tests check runs each manifest test command
+(`docs/stack.tsv` 5th column) under the 5 s audit budget:
+`./build/exomind --version`, `./build/exosched --version`,
+`./build/exoflow --version`, `./build/exoqms --version`,
+`./build/exocrawl --version` and `./build/exocontext --version` smokes
+for the daemons, `make test` for the two batch suites that fit the
+budget (exodoc 36, exokit 50); exocrawl's full suite (~17 s of
+mock-server wall time) exceeds the budget, so its manifest command is
+the `--version` smoke and the suite runs via `make test-exocrawl`.
 
 ## Limitations
 
-- No clustering or replication built in (single-writer log).
+- Single-writer by design: the follower (`--repl`) is a hot read-only
+  tail (cast-once replay), not a quorum.
 - Substring search (`/search`) is linear in the number of keys
   (10k keys ≈ 30 ms); only prefix listing is indexed.
 - The GUI-free, machine-first design assumes an agent or CLI operator.
@@ -513,6 +528,7 @@ Build: `make exosched` produces `exosched/build/exosched`; test with
 exosched /remind --body 'in 90s "water the plants"'   # POST; body = schedule
 exosched /timers                                      # active timers
 exosched /timer?id=<id>                               # cancel: `ok` / `missing`
+exosched /delivery?detail=1                           # delivery receipts
 exosched /ping                                        # pong
 exosched                                              # the full spec
 ```
@@ -524,6 +540,7 @@ exosched                                              # the full spec
 | POST | `/remind` | schedule a reminder (see below) |
 | GET | `/timers` | active timers (`json=1` for JSON) |
 | DELETE | `/timer?id=<id>` | cancel a timer: `ok` or `missing` |
+| GET | `/delivery` | delivery receipts: cumulative counters (`?detail=1` per-timer) |
 | GET | `/ws` | WebSocket push channel (RFC 6455; server mode only) |
 
 Errors are `error: <reason>`.
@@ -582,16 +599,32 @@ timer <id> <epoch> <message>
 Clients send nothing; close frames are answered and the socket closed,
 dead clients are purged on the next broadcast, pings get pongs.
 
-### Receipts
+### Delivery receipts
 
 Add `receipt=1` to any reminder body to request a delivery receipt:
 
     in 10m "weekly backup" receipt=1
 
-When the timer fires, exomind receives `receipt:<id>` = `fired:<epoch>:<msg>`
-(24 h TTL) in addition to the note. Agents can therefore prove a reminder
-was actually fired (checking the key exists) instead of trusting a note
-that might have been dropped during an exomind outage.
+When the timer fires, the server broadcasts `timer <id> <epoch> <message>`
+over WebSocket and waits a short ack window (500 ms); clients answer with
+the text frame `ack <id> <epoch>`. Every fire records its delivery outcome
+in exomind:
+
+- the fired note (searchable) carries the marker
+  `[delivery: acked <n>/<total> at <ts>]`;
+- a 24 h TTL key `delivery:<id>:<epoch>` = `acked <n>/<total> at <ts>`
+  (with `receipt=1` also `receipt:<id>` =
+  `fired:<epoch>:<msg>;acked:<n>:<total>@<ts>`);
+- cumulative counters under `exosched:delivery` (no expiry):
+  `fired`/`acked`/`unacked` + last timestamps.
+
+`GET /delivery` prints the counters, one `key: value` per line;
+`?detail=1` appends the per-timer receipts still inside their 24 h
+window, one `timer <id> <epoch> acked <n>/<total> at <ts>` per fired
+timer. `acked` means at least one connected client acknowledged;
+`unacked` includes fires with no client connected at all. Agents can
+therefore prove a reminder was actually fired *and delivered* instead of
+trusting a note that might have been dropped during an exomind outage.
 
 ### Design
 
@@ -621,9 +654,12 @@ Needs `curl`, `python3` (the WebSocket client) and `ss`. Coverage
 includes one-shot and recurring timers, `every` cadence (measured from
 note epochs), persistence across SIGKILL restarts, `until` semantics,
 cancel of a recurring timer, the 6-column `/timers` TSV and `json=1`
-fields, reload catch-up of overdue timers, and the reload/cancel race: a
+fields, reload catch-up of overdue timers, the reload/cancel race (a
 timer cancelled while a degraded-startup background reload is in flight
-is never resurrected by the stale snapshot.
+is never resurrected by the stale snapshot), and delivery receipts: the
+ack window, `acked`/`unacked` counters, `/delivery` + `?detail=1`,
+cumulative-counter persistence, and the drop of stale ACKs arriving
+after the window.
 
 ## exoflow — the swarm orchestrator
 
@@ -881,7 +917,7 @@ ports.
 
 ## exodoc — the documentation auditor (batch)
 
-`exodoc` v0.1.0 is a batch command-line auditor (C11, zero dependencies:
+`exodoc` v0.4.0-alpha.1 is a batch command-line auditor (C11, zero dependencies:
 libc only) that checks component documentation against the ISO 9001
 §7.5-flavored standard in `exodoc/standard.md` — the stack's quality
 gate. It reads the stack manifest `docs/stack.tsv` (one component per
@@ -967,7 +1003,7 @@ daemons); `bash exodoc/test/test.sh` runs standalone in its own temp dir.
 
 ## exoqms — the Quality Management System
 
-`exoqms` v0.2.0 is a QMS daemon (C11, zero dependencies: libc + pthread
+`exoqms` v0.4.0-alpha.1 is a QMS daemon (C11, zero dependencies: libc + pthread
 only) that turns the ISO 9000 family into running code for the exomind
 stack. It holds quality objectives, runs ISO 19011 audit programs
 against the live stack, records non-conformities (NCs) with a full
@@ -1220,6 +1256,7 @@ exocrawl /fetch?url=https://example.com&max=8000         # HTML -> clean text
 exocrawl /scrape --body "https://a.example/
 https://b.example/	4000"                               # concurrent fetch-all
 printf 'url1\nurl2\n' | exocrawl /scrape                 # body via stdin
+exocrawl /extract-quality?dir=exocrawl/test/fixtures/extract   # QA vs goldfiles
 exocrawl /stats                                          # counters
 exocrawl /ping
 exocrawl --extract page.html                             # legacy offline extraction
@@ -1231,6 +1268,7 @@ exocrawl --extract page.html                             # legacy offline extrac
 | GET | `/search?q=...&n=10&engines=ddg,mojeek,marginalia,bing,wikipedia\|all&json=1` | independent metasearch → `rank<TAB>title<TAB>url<TAB>snippet` |
 | GET | `/fetch?url=...&max=8000&links=1&images=1` | HTML → clean plain text (+ `## links` / `## images` sections) |
 | POST | `/scrape` | one URL per line `[TAB max]`, concurrent fetch-all |
+| GET | `/extract-quality?dir=<fixtures-dir>` | extraction QA vs `<name>.txt` goldfiles: per-fixture + overall precision/recall/f1, fooled fixtures flagged |
 | GET | `/stats` | counters (fetches, errors, cache_hits, bytes) |
 | GET | `/ping` | `pong` |
 
@@ -1299,7 +1337,11 @@ contract: 0 ok, 1 operation failed, 2 unknown operation.
 five engines plus a test page; asserts extraction (boilerplate removal,
 headings, links, images, entities, pre verbatim), every engine's parser,
 ad filtering, redirect decoding, /fetch caps, /scrape concurrency, 403
-retry, stats counters, auth. ASAN-clean.
+retry, stats counters, auth, and extraction quality vs the goldfiles
+(precision/recall/f1 with a pinned fooled count, catching regressions on
+ISSUE-008's corpus). ASAN-clean. The QMS gate's component-tests check
+runs the in-budget smoke `./build/exocrawl --version` (the full suite is
+~17 s, over the 5 s audit budget).
 
 ## exocontext — context continuity
 
