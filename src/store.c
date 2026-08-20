@@ -459,6 +459,30 @@ const char *store_path(const store_t *s)
     return s->path;
 }
 
+/* drop every in-memory record (buckets, vector index, prefix candidates) */
+static void clear_index(store_t *s)
+{
+    for (size_t b = 0; b < s->nbuckets; b++) {
+        entry_t *e = s->buckets[b];
+        while (e) {
+            entry_t *next = e->next;
+            free(e->key);
+            free(e);
+            e = next;
+        }
+        s->buckets[b] = NULL;
+    }
+    s->count = 0;
+    for (size_t i = 0; i < s->nvecs; i++) {
+        free(s->vecs[i]->key);
+        free(s->vecs[i]);
+    }
+    s->nvecs = 0;
+    for (size_t i = 0; i < s->nkix; i++)
+        free(s->kix[i].key);
+    s->nkix = 0;
+}
+
 void store_close(store_t *s)
 {
     if (!s)
@@ -468,25 +492,155 @@ void store_close(store_t *s)
         fprintf(stderr, "exomind: store_close: fdatasync failed: %s\n",
                 strerror(errno));
     close(s->fd);
-    for (size_t b = 0; b < s->nbuckets; b++) {
-        entry_t *e = s->buckets[b];
-        while (e) {
-            entry_t *next = e->next;
-            free(e->key);
-            free(e);
-            e = next;
-        }
-    }
+    clear_index(s);
     free(s->buckets);
-    for (size_t i = 0; i < s->nvecs; i++) {
-        free(s->vecs[i]->key);
-        free(s->vecs[i]);
-    }
     free(s->vecs);
+    free(s->kix);
     free(s->path);
     pthread_mutex_unlock(&s->mu);
     pthread_mutex_destroy(&s->mu);
     free(s);
+}
+
+/* ---------------- replication ---------------- */
+
+/* forward decls: the kix helpers are defined below the replication block */
+static void kix_insert(store_t *s, const char *key, size_t klen);
+static void kix_remove(store_t *s, const char *key, size_t klen);
+
+void store_lock(store_t *s)
+{
+    pthread_mutex_lock(&s->mu);
+}
+
+void store_unlock(store_t *s)
+{
+    pthread_mutex_unlock(&s->mu);
+}
+
+int64_t store_raw_len(store_t *s, uint64_t off)
+{
+    if (off >= s->size)
+        return 0;
+    uint8_t hdr[HDR_SIZE];
+    if (pread(s->fd, hdr, HDR_SIZE, (off_t)off) != HDR_SIZE)
+        return -1;
+    if (memcmp(hdr, MAGIC, 4) != 0)
+        return -1;
+    uint32_t klen = get_u32(hdr + 13), vlen = get_u32(hdr + 17);
+    if (klen > MAX_KEY || vlen > MAX_VAL)
+        return -1;
+    uint64_t reclen = HDR_SIZE + (uint64_t)klen + vlen;
+    if (off + reclen > s->size)
+        return -1; /* torn tail */
+    return (int64_t)reclen;
+}
+
+int store_raw_at(store_t *s, uint64_t off, void *buf, size_t cap,
+                 size_t *consumed)
+{
+    if (off >= s->size) {
+        if (consumed)
+            *consumed = 0;
+        return 0;
+    }
+    uint8_t hdr[HDR_SIZE];
+    if (pread(s->fd, hdr, HDR_SIZE, (off_t)off) != HDR_SIZE)
+        return -1;
+    if (memcmp(hdr, MAGIC, 4) != 0)
+        return -1;
+    uint32_t klen = get_u32(hdr + 13), vlen = get_u32(hdr + 17);
+    if (klen > MAX_KEY || vlen > MAX_VAL)
+        return -1;
+    uint64_t reclen = HDR_SIZE + (uint64_t)klen + vlen;
+    if (off + reclen > s->size || reclen > cap)
+        return -1;
+    if (pread(s->fd, buf, reclen, (off_t)off) != (ssize_t)reclen)
+        return -1;
+    const uint8_t *b = buf;
+    uint32_t crc = crc32_init();
+    crc32_update(&crc, b + HDR_SIZE, klen);
+    crc32_update(&crc, b + HDR_SIZE + klen, vlen);
+    if (crc32_final(crc) != get_u32(hdr + 29))
+        return -1;
+    if (consumed)
+        *consumed = (size_t)reclen;
+    return (int)reclen;
+}
+
+int store_import_raw(store_t *s, const unsigned char *rec, size_t len)
+{
+    if (len < HDR_SIZE)
+        return -1;
+    const uint8_t *hdr = rec;
+    if (memcmp(hdr, MAGIC, 4) != 0)
+        return -1;
+    uint32_t klen = get_u32(hdr + 13), vlen = get_u32(hdr + 17);
+    if (klen > MAX_KEY || vlen > MAX_VAL)
+        return -1;
+    if (len != HDR_SIZE + (uint64_t)klen + vlen)
+        return -1;
+    if ((hdr[4] & FLAG_TOMB) && vlen != 0)
+        return -1;
+    uint32_t crc = crc32_init();
+    crc32_update(&crc, rec + HDR_SIZE, klen);
+    crc32_update(&crc, rec + HDR_SIZE + klen, vlen);
+    if (crc32_final(crc) != get_u32(hdr + 29))
+        return -1;
+
+    pthread_mutex_lock(&s->mu);
+    uint64_t base = s->size;
+    if (pwrite(s->fd, rec, len, (off_t)base) != (ssize_t)len) {
+        pthread_mutex_unlock(&s->mu);
+        return -1;
+    }
+    s->size = base + len;
+    if (fdatasync(s->fd) != 0) {
+        pthread_mutex_unlock(&s->mu);
+        return -1;
+    }
+
+    const char *key = (const char *)rec + HDR_SIZE;
+    const char *val = key + klen;
+    int64_t ts = (int64_t)get_u64(hdr + 5);
+    int64_t ttl = (int64_t)get_u64(hdr + 21);
+    if (hdr[4] & FLAG_TOMB) {
+        entry_t **slot = find_slot(s, key, klen, fnv1a(key, klen));
+        if (*slot) {
+            vec_index_del(s, key, klen);
+            s->dead_bytes += HDR_SIZE + (*slot)->klen + (*slot)->vsize;
+            entry_t *e = *slot;
+            *slot = e->next;
+            free(e->key);
+            free(e);
+            s->count--;
+        }
+        kix_remove(s, key, klen);
+        s->n_deletes++;
+    } else {
+        s->dead_bytes += upsert(s, key, klen, base, vlen, ts, ttl);
+        vec_index_add(s, key, klen, val, vlen, ttl ? ts + ttl : 0);
+        kix_insert(s, key, klen);
+        s->n_writes++;
+    }
+    maybe_compact(s);
+    pthread_mutex_unlock(&s->mu);
+    return 0;
+}
+
+void store_reset(store_t *s)
+{
+    pthread_mutex_lock(&s->mu);
+    clear_index(s);
+    if (ftruncate(s->fd, 0) != 0)
+        fprintf(stderr, "exomind: store_reset: truncate failed: %s\n",
+                strerror(errno));
+    (void)fdatasync(s->fd);
+    s->size = 0;
+    s->dead_bytes = 0;
+    s->kix_dirty = 1;
+    store_load(s);
+    pthread_mutex_unlock(&s->mu);
 }
 
 /* ---------------- prefix index (sorted key candidates) ----------------

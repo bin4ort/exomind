@@ -6,6 +6,10 @@
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 void *xmalloc(size_t n)
 {
@@ -589,4 +593,155 @@ int vec_parse(const char *v, size_t vlen, uint8_t *idx, uint8_t *val,
     }
     *nnz_out = (uint8_t)nnz;
     return 0;
+}
+
+/* ---------------- replication helpers ---------------- */
+
+static const char b64tab[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+char *b64_encode(const void *data, size_t len)
+{
+    const unsigned char *in = data;
+    size_t olen = ((len + 2) / 3) * 4;
+    char *out = xmalloc(olen + 1);
+    size_t i = 0, o = 0;
+    while (i + 3 <= len) {
+        uint32_t v = ((uint32_t)in[i] << 16) | ((uint32_t)in[i + 1] << 8) |
+                     in[i + 2];
+        out[o++] = b64tab[(v >> 18) & 63];
+        out[o++] = b64tab[(v >> 12) & 63];
+        out[o++] = b64tab[(v >> 6) & 63];
+        out[o++] = b64tab[v & 63];
+        i += 3;
+    }
+    if (i + 1 == len) {
+        uint32_t v = (uint32_t)in[i] << 16;
+        out[o++] = b64tab[(v >> 18) & 63];
+        out[o++] = b64tab[(v >> 12) & 63];
+        out[o++] = '=';
+        out[o++] = '=';
+    } else if (i + 2 == len) {
+        uint32_t v = ((uint32_t)in[i] << 16) | ((uint32_t)in[i + 1] << 8);
+        out[o++] = b64tab[(v >> 18) & 63];
+        out[o++] = b64tab[(v >> 12) & 63];
+        out[o++] = b64tab[(v >> 6) & 63];
+        out[o++] = '=';
+    }
+    out[o] = 0;
+    return out;
+}
+
+static int b64tab_dtab[256];
+static pthread_once_t b64_once = PTHREAD_ONCE_INIT;
+
+static void b64_make_dtab(void)
+{
+    for (int i = 0; i < 256; i++)
+        b64tab_dtab[i] = -1;
+    for (int i = 0; b64tab[i]; i++)
+        b64tab_dtab[(unsigned char)b64tab[i]] = i;
+}
+
+unsigned char *b64_decode(const char *s, size_t *outlen)
+{
+    pthread_once(&b64_once, b64_make_dtab);
+    size_t n = strlen(s);
+    if (n == 0 || n % 4 != 0)
+        return NULL;
+    unsigned char *out = xmalloc(n / 4 * 3 + 1);
+    size_t o = 0;
+    for (size_t i = 0; i < n; i += 4) {
+        int c0 = b64tab_dtab[(unsigned char)s[i]];
+        int c1 = b64tab_dtab[(unsigned char)s[i + 1]];
+        int c2 = s[i + 2] == '=' ? 0 : b64tab_dtab[(unsigned char)s[i + 2]];
+        int c3 = s[i + 3] == '=' ? 0 : b64tab_dtab[(unsigned char)s[i + 3]];
+        if (c0 < 0 || c1 < 0 || (s[i + 2] != '=' && c2 < 0) ||
+            (s[i + 3] != '=' && c3 < 0) ||
+            (s[i + 2] == '=' && s[i + 3] != '=')) {
+            free(out);
+            return NULL;
+        }
+        uint32_t v = ((uint32_t)c0 << 18) | ((uint32_t)c1 << 12) |
+                     ((uint32_t)c2 << 6) | (uint32_t)c3;
+        out[o++] = (unsigned char)(v >> 16);
+        if (s[i + 2] != '=')
+            out[o++] = (unsigned char)(v >> 8);
+        if (s[i + 3] != '=')
+            out[o++] = (unsigned char)v;
+    }
+    out[o] = 0;
+    if (outlen)
+        *outlen = o;
+    return out;
+}
+
+/*
+ * Outbound HTTP GET, HTTP/1.0, one-shot connection. Parses the status line
+ * and splits the body after the blank line. Intentionally tiny: socket +
+ * "GET <path> HTTP/1.0" + read-all + status check.
+ */
+int http_get(const char *host, int port, const char *path,
+             char **body, size_t *blen)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0)
+        return -1;
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET;
+    a.sin_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET, host, &a.sin_addr) != 1) {
+        close(fd);
+        return -1;
+    }
+    if (connect(fd, (struct sockaddr *)&a, sizeof a) != 0) {
+        close(fd);
+        return -1;
+    }
+    char req[256 + 2048];
+    int n = snprintf(req, sizeof req,
+                     "GET %s HTTP/1.0\r\nHost: %s:%d\r\n"
+                     "Connection: close\r\n\r\n",
+                     path, host, port);
+    if (n < 0 || n >= (int)sizeof req || write(fd, req, (size_t)n) != n) {
+        close(fd);
+        return -1;
+    }
+    size_t cap = 1 << 16, len = 0;
+    char *buf = xmalloc(cap);
+    ssize_t got;
+    while ((got = read(fd, buf + len, cap - len - 1)) > 0) {
+        len += (size_t)got;
+        if (len + 1 >= cap) {
+            cap *= 2;
+            buf = xrealloc(buf, cap);
+        }
+    }
+    close(fd);
+    if (len < 12 || memcmp(buf, "HTTP/", 5) != 0) {
+        free(buf);
+        return -1;
+    }
+    int status = 0;
+    if (sscanf(buf, "HTTP/%*s %d", &status) != 1) {
+        free(buf);
+        return -1;
+    }
+    const char *sep = strstr(buf, "\r\n\r\n");
+    size_t bl = 0;
+    if (sep) {
+        bl = len - ((size_t)(sep - buf) + 4);
+        if (body) {
+            *body = xmalloc(bl + 1);
+            memcpy(*body, sep + 4, bl);
+            (*body)[bl] = 0;
+        }
+    } else if (body) {
+        *body = xstrdup("");
+    }
+    if (blen)
+        *blen = bl;
+    free(buf);
+    return status;
 }

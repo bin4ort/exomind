@@ -88,4 +88,46 @@ int store_restore(store_t *s, const kv_t *kvs, size_t n);
 int store_vec_sim(store_t *s, const uint8_t *qidx, const uint8_t *qval,
                   uint8_t qnnz, int topk, kv_t **out, size_t *n_out);
 
+/* ---------------- replication ---------------- */
+
+/* Take/release the store lock. Replication readers use this to pin the log
+ * offset space so a concurrent compaction cannot move it mid-batch. Writes
+ * and compactions already run under the same lock. */
+void store_lock(store_t *s);
+void store_unlock(store_t *s);
+
+/*
+ * Length in bytes of the complete log record starting at `off`, 0 when off
+ * is at/past the end of the log (nothing there), or -1 when the bytes at
+ * off do not form a valid record (bad magic, impossible lengths, torn
+ * tail). Safe to call with the lock held or on a private copy of the store.
+ */
+int64_t store_raw_len(store_t *s, uint64_t off);
+
+/*
+ * Copy the raw record starting at `off` into buf (cap bytes available).
+ * Returns the record length (> 0) on success with *consumed set, 0 when off
+ * is past the end of the log, or -1 for a torn/bad record (bad magic, too
+ * long for the log or for cap, or CRC mismatch). Safe to call with the
+ * store lock held or on a private copy of the store.
+ */
+int store_raw_at(store_t *s, uint64_t off, void *buf, size_t cap,
+                 size_t *consumed);
+
+/*
+ * Import one raw log record fetched from a primary: validates magic,
+ * length bounds and CRC, appends the bytes to the log verbatim
+ * (pwrite + fdatasync), then applies the record to the in-memory index
+ * exactly like log load does. A tombstone removes the key from the index
+ * and counts towards n_deletes. Returns 0 on success, -1 on a bad record.
+ */
+int store_import_raw(store_t *s, const unsigned char *rec, size_t len);
+
+/*
+ * Discard the whole store: truncate the log file and clear the in-memory
+ * index, then reload (the empty log). Used to start a replication resync
+ * from offset 0.
+ */
+void store_reset(store_t *s);
+
 #endif

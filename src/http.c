@@ -712,6 +712,7 @@ const char *http_help_text(void)
         "|--------|---------------|------------------------------------------|\n"
         "| GET    | /             | this help (the API describes itself)     |\n"
         "| GET    | /ping         | liveness: answers `pong`                 |\n"
+        "| GET    | /repl?from=N  | raw log records from byte offset N       |\n"
         "| POST   | /set          | store `key` -> `value`                   |\n"
         "| GET    | /get?key=k    | read raw value (404 body: `missing`)     |\n"
         "| POST   | /append?key=k | append body to value, newline-separated  |\n"
@@ -963,6 +964,71 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
         return;
     }
 
+    /*
+     * Replication log reader: replay raw records starting at a byte offset.
+     * The first line is the batch header, followed by one base64-encoded
+     * raw log record per line. up to 512 records or 1 MiB, whichever comes
+     * first; a torn tail stops the batch, `next` is the offset after the
+     * last complete record. When `from` itself is not a record boundary the
+     * server answers `repl error torn <off>` and the follower re-syncs.
+     */
+    if (!strcmp(path, "/repl")) {
+        if (strcmp(r->method, "GET")) {
+            *status = 405;
+            buf_puts(out, "error: use GET");
+            return;
+        }
+        char froms[64];
+        if (!qp_str(r->query, "from", froms, sizeof froms) || froms[0] == 0 ||
+            froms[0] == '-')
+            goto unknown_path; /* bad params: console exit 2 */
+        char *endp = NULL;
+        unsigned long long from = strtoull(froms, &endp, 10);
+        if (endp == froms || *endp != 0)
+            goto unknown_path;
+        enum { REPL_MAX_RECS = 512, REPL_MAX_BYTES = 1u << 20 };
+        unsigned char *rbuf = xmalloc(REPL_MAX_BYTES);
+        buf_t lines = {0};
+        uint64_t off = from, next = from;
+        size_t bytes = 0;
+        int count = 0;
+        store_lock(s);
+        while (count < REPL_MAX_RECS && bytes < REPL_MAX_BYTES) {
+            size_t consumed = 0;
+            int rc = store_raw_at(s, off, rbuf, REPL_MAX_BYTES, &consumed);
+            if (rc == 0)
+                break; /* end of log */
+            if (rc < 0) {
+                if (count == 0) {
+                    store_unlock(s);
+                    http_buf_free(&lines);
+                    free(rbuf);
+                    *status = 500;
+                    buf_printf(out, "repl error torn %llu\n",
+                               (unsigned long long)off);
+                    return;
+                }
+                break; /* stop at a torn tail */
+            }
+            char *b64 = b64_encode(rbuf, consumed);
+            buf_puts(&lines, b64);
+            buf_puts(&lines, "\n");
+            free(b64);
+            off += consumed;
+            next = off;
+            bytes += consumed;
+            count++;
+        }
+        store_unlock(s);
+        free(rbuf);
+        buf_printf(out, "repl from %llu next %llu count %d\n",
+                   (unsigned long long)from, (unsigned long long)next,
+                   count);
+        buf_put(out, lines.p, lines.len);
+        http_buf_free(&lines);
+        return;
+    }
+
     if (!strcmp(path, "/stats")) {
         uint64_t entries, log_bytes, dead_bytes, reads, writes, deletes, misses;
         int64_t opened;
@@ -978,7 +1044,8 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             buf_printf(out,
                        "{\"version\":\"%s\",\"uptime_s\":%lld,\"entries\":%llu,"
                        "\"log_bytes\":%llu,\"dead_bytes\":%llu,\"reads\":%llu,"
-                       "\"writes\":%llu,\"deletes\":%llu,\"misses\":%llu}",
+                       "\"writes\":%llu,\"deletes\":%llu,\"misses\":%llu,"
+                       "\"repl\":{\"role\":\"%s\"",
                        EXOMIND_VERSION, (long long)uptime,
                        (unsigned long long)entries,
                        (unsigned long long)log_bytes,
@@ -986,7 +1053,20 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
                        (unsigned long long)reads,
                        (unsigned long long)writes,
                        (unsigned long long)deletes,
-                       (unsigned long long)misses);
+                       (unsigned long long)misses,
+                       g_repl.enabled ? "follower" : "primary");
+            if (g_repl.enabled)
+                buf_printf(out,
+                           ",\"primary\":\"%s\",\"lag\":%llu,\"next\":%llu,"
+                           "\"last_sync\":%lld,\"errors\":%llu,"
+                           "\"resyncs\":%llu",
+                           g_repl.primary,
+                           (unsigned long long)g_repl.lag,
+                           (unsigned long long)g_repl.next,
+                           (long long)g_repl.last_sync,
+                           (unsigned long long)g_repl.errors,
+                           (unsigned long long)g_repl.resyncs);
+            buf_puts(out, "}}");
         } else {
             buf_printf(out,
                        "version: %s\nuptime_s: %lld\nentries: %llu\n"
@@ -1000,6 +1080,18 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
                        (unsigned long long)writes,
                        (unsigned long long)deletes,
                        (unsigned long long)misses);
+            if (g_repl.enabled)
+                buf_printf(out,
+                           "repl: role=follower primary=%s lag=%llu "
+                           "next=%llu last_sync=%lld errors=%llu "
+                           "resyncs=%llu\n",
+                           g_repl.primary, (unsigned long long)g_repl.lag,
+                           (unsigned long long)g_repl.next,
+                           (long long)g_repl.last_sync,
+                           (unsigned long long)g_repl.errors,
+                           (unsigned long long)g_repl.resyncs);
+            else
+                buf_puts(out, "repl: role=primary\n");
         }
         return;
     }
@@ -1997,6 +2089,8 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
         return;
     }
 
+    goto unknown_path;
+unknown_path:
     *status = 404;
     buf_puts(out, "error: unknown path");
 }

@@ -29,4 +29,24 @@ void http_set_mandate(const char *text);
 const char *http_project_root(void);
 int exo_backup_now(store_t *s, char *err, size_t errsz);
 
+/* ---------------- replication ---------------- */
+
+#define REPL_POLL_MS 2000
+
+/* shared replica state: written by main.c's follower loop, read by /stats */
+typedef struct {
+    int enabled;          /* --replicate was given (this daemon follows) */
+    int serving;          /* a listener is also bound */
+    char primary[512];    /* primary address as given, e.g. 127.0.0.1:7654 */
+    char primary_host[256];
+    int primary_port;
+    uint64_t next;        /* next byte offset the follower needs */
+    uint64_t lag;         /* bytes outstanding after the last poll */
+    int64_t last_sync;    /* epoch seconds of the last successful poll */
+    uint64_t errors;      /* failed polls / bad records */
+    uint64_t resyncs;     /* full re-syncs from offset 0 */
+} repl_state_t;
+
+extern repl_state_t g_repl;
+
 #endif

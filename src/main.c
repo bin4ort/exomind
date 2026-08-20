@@ -18,6 +18,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+repl_state_t g_repl;
+
 static volatile sig_atomic_t g_stop = 0;
 static pthread_mutex_t conn_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t conn_cv = PTHREAD_COND_INITIALIZER;
@@ -107,8 +109,12 @@ static void usage(const char *argv0)
            "  --keys <file>    key file (same format as --tokens); managed\n"
            "                   with the `keys` subcommand\n"
            "  --rate-limit <n> max requests/second (429 beyond)\n"
-           "  --log-level <error|warn|info|debug>\n"
-           "  --mcp            serve as a stdio Model Context Protocol\n"
+            "  --log-level <error|warn|info|debug>\n"
+            "  --replicate <addr>  follow a primary exomind (host:port):\n"
+            "                   poll its /repl log and apply records to this\n"
+            "                   store every 2s (env EXO_REPL_POLL_MS); never\n"
+            "                   binds a port unless --serve/--port is given\n"
+            "  --mcp            serve as a stdio Model Context Protocol\n"
            "                   server (installing as `exomind-server` does\n"
            "                   the same)\n"
 "  keys add <name[:mods]> | keys list | keys remove <name>\n"
@@ -330,6 +336,134 @@ static int console_run(const char *path, const char *body_arg,
     return 0;
 }
 
+/* ---------------- replication follower ---------------- */
+
+static uint64_t repl_from = 0; /* offset to fetch next (0 = full copy) */
+
+static void repl_parse_addr(void)
+{
+    const char *c = strrchr(g_repl.primary, ':');
+    if (!c || c == g_repl.primary) {
+        fprintf(stderr, "exomind: --replicate: bad address %s (want host:port)\n",
+                g_repl.primary);
+        exit(1);
+    }
+    size_t hl = (size_t)(c - g_repl.primary);
+    if (hl >= sizeof g_repl.primary_host)
+        hl = sizeof g_repl.primary_host - 1;
+    memcpy(g_repl.primary_host, g_repl.primary, hl);
+    g_repl.primary_host[hl] = 0;
+    g_repl.primary_port = atoi(c + 1);
+    if (g_repl.primary_port <= 0 || g_repl.primary_port > 65535) {
+        fprintf(stderr, "exomind: --replicate: bad port in %s\n",
+                g_repl.primary);
+        exit(1);
+    }
+}
+
+static void sleep_ms(long ms)
+{
+    struct timespec ts = {.tv_sec = ms / 1000,
+                          .tv_nsec = (long)(ms % 1000) * 1000000L};
+    while (nanosleep(&ts, &ts) != 0 && errno == EINTR && !g_stop)
+        ;
+}
+
+/* divergence: discard the local log and start over from offset 0 */
+static void repl_resync(store_t *s, const char *why)
+{
+    g_repl.resyncs++;
+    fprintf(stderr, "repl: %s\n", why);
+    store_reset(s);
+    repl_from = 0;
+    g_repl.next = 0;
+}
+
+static void *repl_thread(void *arg)
+{
+    store_t *s = arg;
+    long poll_ms = REPL_POLL_MS;
+    const char *pe = getenv("EXO_REPL_POLL_MS");
+    if (pe && atol(pe) > 0)
+        poll_ms = atol(pe);
+    repl_from = 0; /* first sync is always a full copy from 0 */
+    while (!g_stop) {
+        char path[256];
+        snprintf(path, sizeof path, "/repl?from=%llu",
+                 (unsigned long long)repl_from);
+        char *body = NULL;
+        size_t blen = 0;
+        int status = http_get(g_repl.primary_host, g_repl.primary_port, path,
+                              &body, &blen);
+        if (status < 0) {
+            g_repl.errors++;
+            free(body);
+            goto wait;
+        }
+        if (status != 200 || !body) {
+            g_repl.errors++;
+            if (body && strncmp(body, "repl error torn", 16) == 0)
+                repl_resync(s, "divergence (torn tail), resync");
+            free(body);
+            goto wait;
+        }
+        char *save = NULL;
+        char *line = strtok_r(body, "\n", &save);
+        unsigned long long pfrom = 0, pnext = 0;
+        int pcount = 0;
+        if (!line ||
+            sscanf(line, "repl from %llu next %llu count %d", &pfrom, &pnext,
+                   &pcount) != 3) {
+            g_repl.errors++;
+            repl_resync(s, "divergence (bad repl header), resync");
+            free(body);
+            goto wait;
+        }
+        int bad = 0;
+        for (int i = 0; i < pcount; i++) {
+            line = strtok_r(NULL, "\n", &save);
+            if (!line) {
+                g_repl.errors++;
+                repl_resync(s, "divergence (truncated response), resync");
+                bad = 1;
+                break;
+            }
+            size_t rlen = 0;
+            unsigned char *rec = b64_decode(line, &rlen);
+            if (!rec) {
+                g_repl.errors++;
+                fprintf(stderr, "repl: divergence at %llu\n",
+                        (unsigned long long)repl_from);
+                repl_resync(s, "resync");
+                bad = 1;
+                break;
+            }
+            uint64_t at = repl_from;
+            if (store_import_raw(s, rec, rlen) != 0) {
+                free(rec);
+                g_repl.errors++;
+                fprintf(stderr, "repl: divergence at %llu\n",
+                        (unsigned long long)at);
+                repl_resync(s, "resync");
+                bad = 1;
+                break;
+            }
+            free(rec);
+            repl_from += rlen;
+        }
+        free(body);
+        if (bad)
+            goto wait;
+        g_repl.next = repl_from;
+        g_repl.lag = pnext > repl_from ? pnext - repl_from : 0;
+        g_repl.last_sync = now_epoch();
+    wait:
+        for (long slept = 0; slept < poll_ms && !g_stop; slept += 100)
+            sleep_ms(100);
+    }
+    return NULL;
+}
+
 int main(int argc, char **argv)
 {
     const char *host = "127.0.0.1";
@@ -431,6 +565,11 @@ int main(int argc, char **argv)
             mandate_text = mbuf;
         } else if (!strcmp(a, "--rate-limit") && i + 1 < argc)
             rate_limit = atol(argv[++i]);
+        else if (!strcmp(a, "--replicate") && i + 1 < argc) {
+            snprintf(g_repl.primary, sizeof g_repl.primary, "%s",
+                     argv[++i]);
+            g_repl.enabled = 1;
+        }
         else if (!strcmp(a, "--body") && i + 1 < argc)
             body_arg = argv[++i];
         else if (!strcmp(a, "--log-level") && i + 1 < argc) {
@@ -487,7 +626,7 @@ int main(int argc, char **argv)
         return exo_mcp_stdio();
     }
 
-    if (!want_server) {
+    if (!g_repl.enabled && !want_server) {
         /* no HTTP listener except in server mode: run the operation
          * in-process, or show the guide (the same text GET / serves) */
         if (console_path) {
@@ -499,6 +638,8 @@ int main(int argc, char **argv)
         printf("%s", http_help_text());
         return 0;
     }
+    if (g_repl.enabled)
+        repl_parse_addr();
 
     char *dpath = xstrdup(data);
     char *slash = strrchr(dpath, '/');
@@ -604,36 +745,39 @@ int main(int argc, char **argv)
                 tokens_file);
     }
 
-    int lfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (lfd < 0) {
-        fprintf(stderr, "exomind: socket failed: %s\n", strerror(errno));
-        store_close(s);
-        return 1;
-    }
-    int one = 1;
-    setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof addr);
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons((uint16_t)port);
-    if (!inet_pton(AF_INET, host, &addr.sin_addr)) {
-        fprintf(stderr, "exomind: bad host %s\n", host);
-        close(lfd);
-        store_close(s);
-        return 1;
-    }
-    if (bind(lfd, (struct sockaddr *)&addr, sizeof addr) < 0) {
-        fprintf(stderr, "exomind: cannot bind %s:%d: %s\n", host, port,
-                strerror(errno));
-        close(lfd);
-        store_close(s);
-        return 1;
-    }
-    if (listen(lfd, 64) < 0) {
-        fprintf(stderr, "exomind: listen failed: %s\n", strerror(errno));
-        close(lfd);
-        store_close(s);
-        return 1;
+    int lfd = -1;
+    if (want_server) {
+        lfd = socket(AF_INET, SOCK_STREAM, 0);
+        if (lfd < 0) {
+            fprintf(stderr, "exomind: socket failed: %s\n", strerror(errno));
+            store_close(s);
+            return 1;
+        }
+        int one = 1;
+        setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof addr);
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons((uint16_t)port);
+        if (!inet_pton(AF_INET, host, &addr.sin_addr)) {
+            fprintf(stderr, "exomind: bad host %s\n", host);
+            close(lfd);
+            store_close(s);
+            return 1;
+        }
+        if (bind(lfd, (struct sockaddr *)&addr, sizeof addr) < 0) {
+            fprintf(stderr, "exomind: cannot bind %s:%d: %s\n", host, port,
+                    strerror(errno));
+            close(lfd);
+            store_close(s);
+            return 1;
+        }
+        if (listen(lfd, 64) < 0) {
+            fprintf(stderr, "exomind: listen failed: %s\n", strerror(errno));
+            close(lfd);
+            store_close(s);
+            return 1;
+        }
     }
 
     signal(SIGPIPE, SIG_IGN);
@@ -643,47 +787,76 @@ int main(int argc, char **argv)
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
-    fprintf(stderr, "exomind v%s listening on http://%s:%d (data: %s%s%s)\n",
-            EXOMIND_VERSION, host, port, data,
-            token ? ", auth: bearer token" : "",
-            tokens_file ? ", scoped tokens: yes" : "");
+    if (g_repl.enabled) {
+        g_repl.serving = want_server;
+        pthread_t rt;
+        if (pthread_create(&rt, NULL, repl_thread, s) != 0) {
+            fprintf(stderr, "exomind: follower thread failed: %s\n",
+                    strerror(errno));
+            store_close(s);
+            if (lfd >= 0)
+                close(lfd);
+            return 1;
+        }
+        pthread_detach(rt);
+        fprintf(stderr, "exomind: replicating %s%s%s (data: %s%s%s)\n",
+                g_repl.primary,
+                want_server ? ", also serving http://" : "",
+                want_server ? host : "",
+                data,
+                token ? ", auth: bearer token" : "",
+                tokens_file ? ", scoped tokens: yes" : "");
+    } else if (want_server) {
+        fprintf(stderr,
+                "exomind v%s listening on http://%s:%d (data: %s%s%s)\n",
+                EXOMIND_VERSION, host, port, data,
+                token ? ", auth: bearer token" : "",
+                tokens_file ? ", scoped tokens: yes" : "");
+    }
 
-    while (!g_stop) {
-        struct pollfd pfd = {.fd = lfd, .events = POLLIN};
-        if (poll(&pfd, 1, 300) < 0) {
-            if (errno == EINTR)
-                continue;
-            break;
-        }
-        if (!(pfd.revents & POLLIN))
-            continue;
-        int cfd = accept(lfd, NULL, NULL);
-        if (cfd < 0) {
-            if (errno == EINTR)
-                continue;
-            if (g_stop)
+    if (!want_server) {
+        /* follower-only daemon: the repl thread is the whole process */
+        while (!g_stop)
+            sleep_ms(300);
+    } else {
+        while (!g_stop) {
+            struct pollfd pfd = {.fd = lfd, .events = POLLIN};
+            if (poll(&pfd, 1, 300) < 0) {
+                if (errno == EINTR)
+                    continue;
                 break;
-            continue;
-        }
-        conn_args_t *a = xmalloc(sizeof *a);
-        a->fd = cfd;
-        a->s = s;
-        pthread_mutex_lock(&conn_mu);
-        g_active++;
-        pthread_mutex_unlock(&conn_mu);
-        pthread_t t;
-        if (pthread_create(&t, NULL, conn_thread, a) != 0) {
-            close(cfd);
-            free(a);
+            }
+            if (!(pfd.revents & POLLIN))
+                continue;
+            int cfd = accept(lfd, NULL, NULL);
+            if (cfd < 0) {
+                if (errno == EINTR)
+                    continue;
+                if (g_stop)
+                    break;
+                continue;
+            }
+            conn_args_t *a = xmalloc(sizeof *a);
+            a->fd = cfd;
+            a->s = s;
             pthread_mutex_lock(&conn_mu);
-            g_active--;
+            g_active++;
             pthread_mutex_unlock(&conn_mu);
-        } else {
-            pthread_detach(t);
+            pthread_t t;
+            if (pthread_create(&t, NULL, conn_thread, a) != 0) {
+                close(cfd);
+                free(a);
+                pthread_mutex_lock(&conn_mu);
+                g_active--;
+                pthread_mutex_unlock(&conn_mu);
+            } else {
+                pthread_detach(t);
+            }
         }
     }
 
-    close(lfd);
+    if (lfd >= 0)
+        close(lfd);
     struct timespec deadline;
     clock_gettime(CLOCK_REALTIME, &deadline);
     deadline.tv_sec += 3;

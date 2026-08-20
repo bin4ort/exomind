@@ -559,6 +559,121 @@ done
 assert_eq "crash no corrupt vectors" "0" "$BROKEN"
 stop_server
 
+# ---- replication: primary + follower on private ports ------------------------
+# The primary runs on $PORT ($BASE); the follower replicates from it and its
+# own reads are served on $PORT2. The primary writes BEFORE the follower starts
+# to prove the full-copy catch-up, then during, to prove the live tail.
+echo "=== session 20: replication (primary + follower) ==="
+PORT2=$((PORT + 1))
+PFB="http://127.0.0.1:$PORT2"
+rm -f "$DATA/follower.dat"
+
+start_server
+for k in repl:a repl:b repl:c; do
+    curl -s -X POST "$BASE/set?key=$k" -d "v:$k" > /dev/null
+done
+
+start_follower() {
+    env EXO_REPL_POLL_MS=400 "$BIN" --serve --port "$PORT2" \
+        --replicate "127.0.0.1:$PORT" --data "$DATA/follower.dat" \
+        --project-root "$DATA" 2>>"$DATA/server.log" &
+    FSRV=$!
+    for _ in $(seq 1 100); do
+        curl -s -o /dev/null "$PFB/ping" 2>/dev/null && return 0
+        sleep 0.05
+    done
+    echo "follower failed to start"
+    cat "$DATA/server.log"
+    exit 1
+}
+stop_follower() {
+    kill "$FSRV" 2>/dev/null
+    wait "$FSRV" 2>/dev/null
+}
+
+start_follower
+sleep 1.2
+assert_eq "repl follower initial catch-up" "v:repl:a" "$(curl -s "$PFB/get?key=repl:a")"
+assert_eq "repl follower initial catch-up 2" "v:repl:c" "$(curl -s "$PFB/get?key=repl:c")"
+
+# live tail: written on the primary after the follower is up
+curl -s -X POST "$BASE/set?key=repl:live" -d 'tailvalue' > /dev/null
+r=""
+for _ in $(seq 1 30); do
+    r=$(curl -s "$PFB/get?key=repl:live")
+    [ "$r" = "tailvalue" ] && break
+    sleep 0.2
+done
+assert_eq "repl follower live tail" "tailvalue" "$r"
+
+# tombstone propagation: /del on the primary removes the key on the follower
+curl -s -X DELETE "$BASE/del?key=repl:b" > /dev/null
+r=""
+for _ in $(seq 1 30); do
+    r=$(curl -s "$PFB/get?key=repl:b")
+    [ "$r" = "missing" ] && break
+    sleep 0.2
+done
+assert_eq "repl follower tombstone" "missing" "$r"
+
+# stats: repl section with role=primary on the plain server, role=follower here
+assert_contains "repl primary stats role" "repl: role=primary" "$(curl -s "$BASE/stats")"
+r=$(curl -s "$PFB/stats")
+assert_contains "repl follower stats role" "repl: role=follower" "$r"
+assert_contains "repl follower stats primary addr" "primary=127.0.0.1:$PORT" "$r"
+assert_contains "repl follower stats next" "next=" "$r"
+assert_contains "repl follower stats counters" "errors=" "$r"
+
+# console reads on the follower's own store
+r=$("$BIN" /get?key=repl:live --data "$DATA/follower.dat" --project-root "$DATA" 2>/dev/null)
+assert_eq "repl follower console get" "tailvalue" "$r"
+
+# restart: more writes while the follower is down; it catches up with no
+# full resync (stats keep resyncs=0 and continue from a nonzero next)
+stop_follower
+curl -s -X POST "$BASE/set?key=repl:r1" -d 'restart1' > /dev/null
+curl -s -X POST "$BASE/set?key=repl:r2" -d 'restart2' > /dev/null
+start_follower
+sleep 1.2
+assert_eq "repl follower catch-up after restart" "restart1" "$(curl -s "$PFB/get?key=repl:r1")"
+assert_eq "repl follower catch-up after restart 2" "restart2" "$(curl -s "$PFB/get?key=repl:r2")"
+r=$(curl -s "$PFB/stats")
+assert_contains "repl no resync after restart" "resyncs=0" "$r"
+NV=$(printf '%s\n' "$r" | sed -n 's/.*next=\([0-9][0-9]*\).*/\1/p')
+assert_eq "repl next advances past 0" "1" "$([ "${NV:-0}" -gt 0 ] && echo 1 || echo 0)"
+
+# torn garbage tail in the follower's own log before restart: the existing
+# load-time crash recovery truncates it and the follower re-syncs from 0
+stop_follower
+printf 'GARBAGE\x00\xffgarbage' >> "$DATA/follower.dat"
+curl -s -X POST "$BASE/set?key=repl:corrupt" -d 'aftercorrupt' > /dev/null
+start_follower
+sleep 1.2
+assert_eq "repl follower recovers after tail corruption" "pong" "$(curl -s "$PFB/ping")"
+assert_eq "repl follower synced after corruption" "aftercorrupt" "$(curl -s "$PFB/get?key=repl:corrupt")"
+assert_eq "repl follower kept pre-corruption data" "restart1" "$(curl -s "$PFB/get?key=repl:r1")"
+
+# the /repl endpoint itself
+r=$(curl -s "$BASE/repl?from=0")
+assert_contains "repl endpoint header" "repl from 0 next" "$r"
+CNT=$(printf '%s\n' "$r" | sed -n '1s/.*count \([0-9][0-9]*\).*/\1/p')
+assert_eq "repl endpoint nonempty" "1" "$([ "${CNT:-0}" -gt 0 ] && echo 1 || echo 0)"
+assert_eq "repl bad params 404" "error: unknown path" "$(curl -s "$BASE/repl?from=abc")"
+
+stop_follower
+stop_server
+
+# console op on the primary's data file (daemon stopped): exit 0 ok,
+# exit 1 torn, exit 2 bad params
+r=$("$BIN" /repl?from=0 --data "$DATA/exomind.dat" --project-root "$DATA" 2>/dev/null)
+assert_contains "console /repl header" "repl from 0 next" "$r"
+"$BIN" /repl?from=0 --data "$DATA/exomind.dat" --project-root "$DATA" >/dev/null 2>&1
+assert_eq "console /repl exit 0" "0" "$?"
+"$BIN" /repl?from=4 --data "$DATA/exomind.dat" --project-root "$DATA" >/dev/null 2>&1
+assert_eq "console /repl mid-record exit 1" "1" "$?"
+"$BIN" /repl?from=abc --data "$DATA/exomind.dat" --project-root "$DATA" >/dev/null 2>&1
+assert_eq "console /repl bad params exit 2" "2" "$?"
+
 # ---- console surface: keys subcommands --------------------------------------
 KEYS="$DATA/keys.txt"
 r=$("$BIN" keys add one:ro --keys "$KEYS")

@@ -62,4 +62,21 @@ int vec_parse(const char *v, size_t vlen, uint8_t *idx, uint8_t *val,
 
 int64_t now_epoch(void);
 
+/* ---------------- replication helpers ---------------- */
+
+/* base64 (RFC 4648) encode/decode. b64_encode returns a malloc'd
+ * NUL-terminated string (caller frees); b64_decode returns malloc'd bytes
+ * with *outlen set to the decoded length, or NULL on malformed input. */
+char *b64_encode(const void *data, size_t len);
+unsigned char *b64_decode(const char *s, size_t *outlen);
+
+/*
+ * Tiny outbound HTTP GET (no curl). Returns the HTTP status code (200 etc.)
+ * on a well-formed response, or -1 on transport/parse failure. On success
+ * *body receives a malloc'd NUL-terminated copy of the response body and
+ * *blen its length (both optional; set *body and *blen to NULL to ignore).
+ */
+int http_get(const char *host, int port, const char *path,
+             char **body, size_t *blen);
+
 #endif
