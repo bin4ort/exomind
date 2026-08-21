@@ -1,4 +1,4 @@
-# exoqms-ui
+# exoqms-ui v0.4.0-alpha.1 — the UI quality auditor
 
 **The UI quality auditor for the exomind stack.** A zero-dependency C11
 static analyzer (ISO honesty: it is an *approximate* static analysis, not
@@ -12,10 +12,10 @@ full stack reference.
 
 ```
 make exoqms-ui     # builds build/exoqms-ui (C11, -Wall -Wextra, 0 warnings)
-make test          # runs test/test.sh (28 checks, < 60s)
+make test          # runs test/test.sh (35 checks, < 60s)
 ```
 
-## usage
+## Usage
 
 ```
 exoqms-ui <target> [--json] [--no-emoji] [--emoji-allowlist <chars>]
@@ -38,7 +38,7 @@ major emoji-icon html > body > header.topbar > button.cart-btn emoji 🛒 in vis
 summary line. Exit codes: `0` no findings, `1` findings, `2` usage/IO
 error.
 
-### operation form (one console grammar for the whole stack)
+### Operation form (one console grammar for the whole stack)
 
 ```
 exoqms-ui /audit?file=<target>&json=1&no_emoji=1&emoji_allowlist=<chars>
@@ -57,7 +57,7 @@ accept off values `0`/`false`/`no`/`off`. Exit codes are the CLI form's
 (`0`/`1`/`2`). A path argument that starts with `/` but is not a known
 operation (e.g. an absolute path) is treated as a file.
 
-## the seven checks
+## The seven checks
 
 | id | severity | flags | how |
 |----|----------|-------|-----|
@@ -69,7 +69,7 @@ operation (e.g. an absolute path) is treated as a file.
 | `sdk-default` | major | interactive elements (button/a/input/select/textarea) with zero CSS rules targeting them anywhere in the stylesheet | selector matching during cascade: element, `.class`, `#id`, `*`, descendant, `>`; pseudo-classes stripped; inline `style=` does not count as a rule |
 | `contrast` | major | text vs effective background below WCAG AA: 4.5:1, or 3:1 for large text (font-size ≥ 24px) | sRGB relative luminance (WCAG formula) from hex/rgb/rgba/hsl/named colors; skipped when opacity < 1, background images are present, or any color is unresolvable |
 
-## supported input subset (honest)
+## Supported input subset (honest)
 
 **HTML**: tags, attributes (class/id/style/src/href/...), text nodes,
 nesting, self-closing tags (`/>` and void elements), comments, doctype,
@@ -89,7 +89,7 @@ visibility, border widths/colors. `@media/@import/@keyframes/@font-face`
 blocks and `[attr]`/`+`/`~` selectors are skipped and counted (a note is
 printed to stderr).
 
-## layout model limitations (honest list)
+## Layout model limitations (honest list)
 
 This is a static approximation of the CSS box model on a fixed
 1024×768 viewport. It is built to catch the seven defect classes, not
@@ -121,7 +121,7 @@ to render pixels:
 False negatives are preferred over false positives: if the model cannot
 decide, it stays silent.
 
-## fixtures (permanent QA artifact)
+## Fixtures (permanent QA artifact)
 
 - `fixtures/bad.html` + `bad.css` — deliberately defective, contains all
   seven defect classes: emoji icons (🛒 ⚙), overlapping buttons (relative
@@ -134,7 +134,7 @@ decide, it stays silent.
   interactive element styled from the `:root` palette, WCAG AA contrast
   everywhere. Expected: **0 findings**.
 
-## tests
+## Tests
 
 `test/test.sh` (own style, `make test`): audits both fixtures with
 pinned finding counts and the exact summary line, validates `--json`
@@ -144,11 +144,15 @@ crash, checks exit codes 0/1/2, `--version`/`--help`, and directory
 mode with per-file headers.
 
 ```
-=== exoqms-ui tests: 28 ok, 0 fail (0s) ===
+=== exoqms-ui tests: 35 ok, 0 fail (0s) ===
 ```
 
-## integration
+## Integration
 
 `exoqms-ui` is the batch auditor of the QMS loop: the daemon (B1) shells
 out to it, and the pipeline (B3) collects its findings. It writes no
 state of its own; findings are plain text or JSON, one per line.
+
+## License
+
+GPL-3.0-only — see [LICENSE](../../LICENSE).

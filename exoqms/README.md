@@ -1,4 +1,4 @@
-# exoqms — the Quality Management System for the AI-native stack
+# exoqms v0.4.0-alpha.1 — the Quality Management System for the AI-native stack
 
 `exoqms` v0.4.0-alpha.1 is a QMS daemon (C11, zero dependencies: libc + pthread
 only) that turns the ISO 9000 family into running code for the exomind
@@ -9,9 +9,10 @@ exomind's note feed. Its durable state lives entirely inside
 [exomind](../README.md) under `exoqms:*` keys, so the QMS itself is
 auditable and survives restarts like every other layer.
 
-The audit program runs the fifteen checks defined in
-[`standard.md`](standard.md) (the default `detect` criteria run nine of
-them), invoking [`exodoc`](../exodoc/README.md)
+The audit program runs the fifteen normative checks defined in
+[`standard.md`](standard.md) §5.3 (the dispatcher also knows the derived
+`rework` metric; the default `detect` program runs ten of them),
+invoking [`exodoc`](../exodoc/README.md)
 (the documentation auditor), [`exoqms-ui`](ui/README.md) (the UI
 quality auditor), [`exoqms-code`](code/README.md) (the code-safety
 analyzer) and [`exoqms-svg`](svg/README.md) (the asset-logic analyzer)
@@ -34,7 +35,7 @@ stack reference (this file has the complete exoqms documentation).
 | ISO 9004:2018 | sustained success over the long term | the trend verdict (`up`/`flat`/`down`) and the stagnation flag in `GET /trends` and `GET /report` |
 | ISO 19011:2018 | audit programs: planning, criteria, evidence, records | `POST /audit` — named audit programs, check criteria, per-check findings with evidence, durable records |
 
-## quickstart
+## Build
 
 Build (from the repo root; the root Makefile wires the sub-project in):
 
@@ -64,7 +65,7 @@ curl -s -X POST "http://127.0.0.1:7691/audit?target=exoqms/ui/fixtures/good.html
 # ok <audit-id> <score>%
 ```
 
-## usage
+## Usage
 
 ```
 ./exoqms/build/exoqms [--serve] [--host <addr>] [--port <n>]
@@ -86,7 +87,7 @@ without a module's binary that check reports `skip`.
 daemon; without it the binary never binds a port. With no arguments it
 prints the same spec text `GET /` serves and exits 0.
 
-### console operations
+### Console operations
 
 `argv[1]` starting with `/` runs one operation in-process through the
 same dispatcher the daemon serves, prints the response body and exits
@@ -110,7 +111,7 @@ terminal); without a body they fall back to GET (list / detail).
 the query string; other options (`--exomind`, `--repo`, `--code`,
 ...) work as in daemon mode.
 
-## endpoints
+## API
 
 | method | path | purpose |
 |--------|------|---------|
@@ -133,14 +134,14 @@ Add `json=1` to listing endpoints for JSON. Errors are
 `error: <reason>` with HTTP 4xx/5xx; request bodies are tab-separated
 fields.
 
-## objectives (ISO 9001 §6.2)
+## Objectives (ISO 9001 §6.2)
 
 `POST /objectives` body: `title<TAB>metric_key<TAB>target`, with an
 optional fourth field `period` (default `iter`). `met` means
 `value >= target` for numeric targets, equality for string targets; a
 missing metric key yields `no-data`. Answer: `ok <id>`.
 
-## non-conformities and corrective action (ISO 9001 §8.7, §10.2)
+## Non-conformities and corrective action (ISO 9001 §8.7, §10.2)
 
 `POST /nc` body: `title<TAB>severity<TAB>description`, severity is
 `major` (breach of a normative clause or regression) or `minor`.
@@ -161,7 +162,7 @@ Closure from any status requires a body of
 a fourth sets `closed_by`, default `api`); from `verify` a note alone
 is enough. Closed NCs drop out of the open count in `GET /report`.
 
-## audit programs (ISO 19011)
+## Audit programs (ISO 19011)
 
 `POST /audit` body: `name<TAB>criteria` — criteria is a comma-separated
 list of check ids (`component-tests,doc-compliance,dogfood,ui-audit,metrics,code-safety,asset-logic`;
@@ -185,7 +186,7 @@ The score is `100 * pass / (pass + fail)` rounded, `skip` not counted.
 Each check runs under a hard 5s timeout; children that overrun are
 SIGKILLed and the check fails with `timed out`.
 
-## the universal project config (iter7, v0.2.0)
+## The universal project config
 
 Any project — inside the stack or foreign — can be audited via a
 `.exoqms.json` at the repo root. The daemon loads it on startup (the
@@ -204,7 +205,7 @@ Any project — inside the stack or foreign — can be audited via a
 
 All keys optional; malformed JSON degrades to defaults with a stderr
 warning. `languages` pins the code-safety analyzer (`auto` = detect),
-`rules` toggles the new checks, `thresholds.debt` is the maximum number
+`rules` toggles the universal checks, `thresholds.debt` is the maximum number
 of `debt-*` findings that still passes, `test` runs whole-project test
 commands (5s budget each, from the repo root) when there is no stack
 manifest, `docs` names the required files for `doc-compliance` in that
@@ -223,7 +224,7 @@ The rule files live in the `--rules` directory, else `rules/` next to
 the `--code` binary, else `<repo>/exoqms/code/rules`; without them the
 checks report `skip` so a half-wired deployment degrades honestly.
 
-## the field modules
+## The field modules
 
 Three sibling quality-audit engines live under `exoqms/`, each a
 zero-dependency C11 batch binary with its own fixtures and test suite:
@@ -248,7 +249,7 @@ The daemon invokes them through the `ui-audit`, `code-safety` and
 `asset-logic` checks. Build all of them with `make exoqms` from the
 repo root (or `make qms-modules` for just code + svg).
 
-## durability (dogfooding exomind)
+## Durability (dogfooding exomind)
 
 - Every objective, NC and audit program is persisted as an
   `exoqms:obj:*`, `exoqms:nc:*` or `exoqms:audit:*` key in exomind;
@@ -262,20 +263,20 @@ repo root (or `make qms-modules` for just code + svg).
 - Records written while exomind is down are rejected (500
   `error: exomind unavailable`) rather than lost silently.
 
-## tests
+## Tests
 
 ```
 make test-exoqms   # from the repo root: exoqms suite + module suites
 ```
 
 `make -C exoqms test` runs the daemon's suite (`exoqms/test/test.sh`,
-~60s — too slow for the 5s audit budget, so the stack manifest declares
+~50s — too slow for the 5s audit budget, so the stack manifest declares
 `./build/exoqms --version` as the in-budget smoke command instead and
 `make test-exoqms` remains the full-suite gate); the module suites are
-`make -C exoqms/ui test` (28 checks), `make -C exoqms/code test` and
-`make -C exoqms/svg test` (54 checks).
+`make -C exoqms/ui test` (35 checks), `make -C exoqms/code test`
+(58 checks) and `make -C exoqms/svg test` (61 checks).
 
-## limitations
+## Limitations
 
 - The check budget is 5s per check (normative, `standard.md` §5.2):
   only test commands that fit the budget may be declared in

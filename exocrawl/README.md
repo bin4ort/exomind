@@ -1,4 +1,4 @@
-# exocrawl v0.4.0-alpha.1
+# exocrawl v0.4.0-alpha.1 — the research daemon
 
 **AI-native web research daemon — token-efficient, private, concurrent.**
 
@@ -22,7 +22,7 @@ stack reference (this file has the complete exocrawl documentation).
   Wikipedia opensearch API. No third-party aggregator (no SearXNG), no API
   keys, no accounts, no cookies; sponsored results filtered per engine.
 - **Broad scraping** — `/scrape` fetches many URLs concurrently (worker
-  pool) with per-host pacing (default 150 ms) and rotating identities;
+  pool) with per-host pacing (default 200 ms) and rotating identities;
   403/429 gets bounded retries with a different identity.
 - **200% privacy** — stateless requests, no JS, no referrer, no persistent
   state unless you opt into the exomind cache (`--cache http://127.0.0.1:7654`,
@@ -33,13 +33,13 @@ stack reference (this file has the complete exocrawl documentation).
 ## Build & run
 
 ```sh
-make exocrawl          # exocrawl v0.4.0-alpha.1/build/exocrawl (zero compile deps)
-make test-exocrawl     # hermetic suite (local mock web, 47 checks)
+make exocrawl          # produces exocrawl/build/exocrawl (zero compile deps)
+make test-exocrawl     # hermetic suite (local mock web, 68 checks)
 ./exocrawl/build/exocrawl --serve --port 7658 --cache http://127.0.0.1:7654
 ```
 
 Flags: `--serve` (the only way to run the HTTP server, together with
-`--port`), `--token`, `--concurrency` (16), `--pace-ms` (150),
+`--port`), `--token`, `--concurrency` (16), `--pace-ms` (200),
 `--cache <url>` (`exomind` alone means `http://127.0.0.1:7654`),
 `--robots [dir]` (or env `EXO_CRAWL_ROBOTS`), `--proxy http://...`.
 

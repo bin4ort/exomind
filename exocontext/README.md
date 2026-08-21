@@ -7,8 +7,6 @@ restarts (or opens a fresh context window) reconstructs its working
 state from a single `GET /context?agent=<id>` — no more re-reading a
 hundred keys by hand.
 
-**License: GPL-3.0-only** (see the repository root).
-
 Part of the [exomind stack](../README.md) — the main README is the full
 stack reference (this file has the complete exocontext documentation).
 
@@ -145,3 +143,7 @@ small sessions untouched). The QMS gate runs `./build/exocontext --version` (in-
 - The digest is a flat dump, not a summary: compression is by cap and
   truncation, not by meaning.
 - One agent namespace per request; cross-agent digests are out of scope.
+
+## License
+
+GPL-3.0-only — see [LICENSE](../LICENSE).

@@ -15,13 +15,13 @@ make exosched        # builds exosched/build/exosched (from the repo root)
 make test-exosched   # runs exosched/test/test.sh (82 checks, ~3min)
 ```
 
-## build
+## Build
 
 `make exosched` from the repo root (or `make -C exosched` directly)
 produces `exosched/build/exosched` — a single C11 binary, zero
 dependencies beyond libc + pthread.
 
-## usage
+## Usage
 
 The same binary has two lives: one-shot **console operations** and the
 **HTTP daemon**.
@@ -65,7 +65,7 @@ the WebSocket upgrade. `--rate-limit <n>` caps requests per second,
 `--version` and the `--help <name>` / `--help modules` stack help
 work as before.
 
-## endpoints
+## API
 
 | method | path                 | purpose                             |
 |--------|----------------------|-------------------------------------|
@@ -79,7 +79,7 @@ work as before.
 
 Errors are `error: <reason>` with HTTP 4xx/5xx.
 
-## scheduling
+## Scheduling
 
 `POST /remind` takes a plain-text body:
 
@@ -89,13 +89,18 @@ in 5m "stand up and stretch"
 in 2h "push the branch"
 in 3d "renew the certificate"
 at 1786740704 "fire at this unix epoch"
+every 10m "check the pipeline"
+every 30s "nudge" until 1786740704
 ```
 
-Units: `s m h d`. The message may be quoted (`\"` and `\\` escapes) or
-unquoted to the end of the body. The answer is
-`ok <id> <when-epoch>` with an id of the form `<epoch>:<8-hex>`.
+Units: `s m h d`. `every <n><unit> "msg"` schedules a RECURRING timer;
+the optional `until <epoch>` suffix (quoted messages only) stops it
+after the fire at or before that epoch; `at` in the past is rejected.
+The message may be quoted (`\"` and `\\` escapes) or unquoted to the
+end of the body. The answer is `ok <id> <when-epoch>` with an id of
+the form `<epoch>:<8-hex>`.
 
-## durability (dogfooding exomind)
+## Durability (dogfooding exomind)
 
 - Creating a timer writes exomind key `exosched:timer:<id>` with a TTL
   of fire-time + 300s, then answers.
@@ -110,7 +115,7 @@ unquoted to the end of the body. The answer is
 - The TTL is the safety net: even if exosched is down at fire time the
   key expires on its own.
 
-## websocket push
+## WebSocket push
 
 `GET /ws` performs the RFC 6455 handshake (SHA-1 + base64 accept key
 implemented by hand). The server then pushes one text frame per fired
@@ -125,7 +130,7 @@ server waits a short ack window (500ms) and records the outcome (see
 `/delivery` below). Close frames are answered and the socket closed,
 dead clients are purged on the next broadcast, pings get pongs.
 
-## delivery receipts
+## Delivery receipts
 
 Two kinds of delivery records, all durable in exomind (the only source
 of truth):
@@ -162,7 +167,11 @@ still inside its 24h window:
 timer 1786740710:1a2b3c4d 1786740710 acked 1/1 at 1786740710
 ```
 
-## design
+Add `receipt=1` to any reminder body to also write a `receipt:<id>` key
+(24 h TTL) — `fired:<epoch>:<msg>;acked:<n>:<total>@<ts>` — the classic
+single-key receipt agents can `GET` directly.
+
+## Internals
 
 - One pthread timer loop (condvar, CLOCK_MONOTONIC deadlines, 100ms
   granularity, woken on add/cancel).
@@ -171,20 +180,7 @@ timer 1786740710:1a2b3c4d 1786740710 acked 1/1 at 1786740710
 - One thread per HTTP/WS connection, like exomind.
 - No state on disk: exomind is the only source of truth.
 
-## receipt
-
-Add `receipt=1` to any reminder body to request a delivery receipt:
-
-    in 10m "weekly backup" receipt=1
-
-When the timer fires, exomind receives `receipt:<id>` =
-`fired:<epoch>:<msg>;acked:<n>:<total>@<ts>` (24 h TTL) in addition to
-the note. Agents can therefore prove a reminder was actually fired
-(checking the key exists) and whether any WS client ACKed the push,
-instead of trusting a note that might have been dropped during an
-exomind outage.
-
-## limitations
+## Limitations
 
 - exosched is a *timer* daemon, not a durable message broker: fired timers
   are pushed over WebSocket and logged to the exomind note feed, but there
@@ -195,7 +191,7 @@ exomind outage.
 - A timer whose fire is retried during an exomind outage is kept and
   retried every 5s — reliable, but a long outage can pile up pending fires.
 
-## tests
+## Tests
 
 `make test-exosched` runs the full suite; the QMS gate runs
 `./build/exosched --version`.
@@ -205,15 +201,15 @@ exomind outage.
 shared exomind. Needs `curl`, `python3` (the WebSocket client) and
 `ss`.
 
-Coverage includes the 0.2.0 recurring-timer surface: `every`
-cadence (measured from note epochs), persistence across SIGKILL
-restarts, `until` semantics (stops after the last fire, past `until`
-rejected, past `at` rejected), DELETE of a recurring timer, the
-6-column `/timers` TSV and `json=1` `repeat_s`/`until` fields, reload
-catch-up of overdue recurring timers, 0.1.0 one-shot wire values
-(`fire\tmsg`) loading and firing, and the reload/cancel race: a timer
-cancelled while a degraded-startup background reload is in flight is
-never resurrected by the stale snapshot.
+Coverage includes the recurring-timer surface: `every` cadence
+(measured from note epochs), persistence across SIGKILL restarts,
+`until` semantics (stops after the last fire, past `until` rejected,
+past `at` rejected), DELETE of a recurring timer, the 6-column
+`/timers` TSV and `json=1` `repeat_s`/`until` fields, reload catch-up
+of overdue recurring timers, legacy one-shot wire values (`fire\tmsg`)
+loading and firing, and the reload/cancel race: a timer cancelled while
+a degraded-startup background reload is in flight is never resurrected
+by the stale snapshot.
 
 The console surface is covered too: no-args prints the guide without
 binding, a one-shot `/remind` (body via `--body` and via a piped

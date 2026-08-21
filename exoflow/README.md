@@ -1,4 +1,4 @@
-# exoflow — the orchestrator for agent swarms
+# exoflow v0.4.0-alpha.1 — the orchestrator for agent swarms
 
 `exoflow` v0.4.0-alpha.1 is a dependency-graph task orchestrator for AI-agent swarms. A flow
 is a DAG of steps; an arbitrary number of agents pull work from it with
@@ -22,15 +22,17 @@ exosched (alarms) <-+      |       +-- POST /step?flow=F&id=s done
                       (audit notes into exomind)
 ```
 
-## quickstart
+## Build
 
-Build (from the repo root; the root Makefile wires the sub-project in):
+From the repo root; the root Makefile wires the sub-project in:
 
 ```
 make exomind      # build the state backend
 make exosched     # build the alarm backend
 make exoflow      # build the orchestrator
 ```
+
+## Run
 
 Run the trio as a server (each daemon binds its port only with `--serve`
 or an explicit `--port`):
@@ -51,7 +53,7 @@ Check it is alive — `GET /` is self-describing:
 curl -s localhost:7676/
 ```
 
-## console operations (no server)
+## Console operations
 
 Without `--serve`/`--port` the binary never opens a socket: running it
 with **no arguments prints the same guide `GET /` serves** (the text
@@ -76,7 +78,7 @@ response (<400), 1 on an HTTP error (>=400), 2 on a usage error.
 is loaded from exomind before each operation, so one-shot runs see (and
 write) the same state as a daemon.
 
-## a full diamond flow, by hand
+## A full diamond flow, by hand
 
 Create a 5-step diamond where `s4` joins `s2` and `s3`, with a deadline on
 `s4` (`now + 120s`):
@@ -106,7 +108,7 @@ curl -s "localhost:7676/flow?id=<flow-id>"                # TSV state
 curl -s localhost:7676/flows                              # all flows
 ```
 
-## the worker loop (`exoflow/contrib/worker.sh`)
+## The worker loop (`exoflow/contrib/worker.sh`)
 
 A simulated agent that runs the orchestration loop against any compliant
 exoflow: repeatedly `GET /next?flow=F&worker=ME` (which auto-claims one
@@ -145,7 +147,7 @@ exoflow/contrib/worker.sh -u http://127.0.0.1:7676 -f <flow-id> -w w2 -r 10 > w2
 wait
 ```
 
-## architecture
+## Internals
 
 - **State lives in exomind keys.** Every flow and step (status, deps,
   claims, deadlines) is durably stored under `exoflow:*` keys, so the
@@ -171,7 +173,7 @@ wait
   threads, no clock dependencies, survives SIGKILL. The exosched reminder
   `exoflow:loop:<id>` is feed candy; the lazy check is authoritative.
 
-## loops
+## Loops
 
 Make any flow a loop by adding an optional LAST line to the POST /flow
 body:
@@ -222,7 +224,7 @@ and looping records carry one trailing line
 `loop<TAB><interval s><TAB><max><TAB><until><TAB><iter><TAB><budget><TAB><next_run><TAB><parent><TAB><stopped>`.
 Version-1 records load as non-looping flows (both formats are read).
 
-## API reference
+## API
 
 | method | path                     | body / params            | reply |
 |--------|--------------------------|--------------------------|-------|
@@ -241,7 +243,7 @@ Version-1 records load as non-looping flows (both formats are read).
 Auth: start exoflow with `--token <secret>`; every endpoint then requires
 `Authorization: Bearer <secret>` and answers `401` without it.
 
-## limitations
+## Limitations
 
 - exoflow is a *pull* orchestrator: workers must call `GET /next`; there is
   no push of new work to idle workers.
@@ -256,7 +258,7 @@ Auth: start exoflow with `--token <secret>`; every endpoint then requires
   exosched reminder `exoflow:loop:<id>` only surfaces the due moment in
   the note feed). There is no timer-driven push.
 
-## integration tests
+## Tests
 
 `make test-exoflow` runs the full suite; the QMS gate runs
 `./build/exoflow --version`.

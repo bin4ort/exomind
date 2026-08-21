@@ -11,7 +11,8 @@ but not *logical* ones. A port (Rust+SvelteKit → C++ + vanilla JS/CSS)
 can compile cleanly and still be a different program. exokit attacks
 that at the root: the **contract is the truth, not the code**.
 
-**License: GPL-3.0-only** (see the repository root).
+**License: GPL-3.0-only** — see [LICENSE](../LICENSE) at the end of this
+file.
 
 Part of the [exomind stack](../README.md) — the main README is the full
 stack reference (this file has the complete exokit documentation).
@@ -20,7 +21,7 @@ stack reference (this file has the complete exokit documentation).
 
 ```sh
 make            # produces exokit/build/exokit
-make test       # 39 hermetic tests
+make test       # 50 hermetic tests
 ```
 
 Zero dependencies: C11, POSIX, no daemon, no server (batch tool).
@@ -44,7 +45,7 @@ exokit diff contract.a.tsv contract.b.tsv --exact
 exokit audit
 ```
 
-### operation form (one console grammar for the whole stack)
+### Operation form (one console grammar for the whole stack)
 
 The same subcommands also run through the `/op?k=v…` syntax the daemon
 modules use, so the whole stack has one console grammar:
@@ -133,3 +134,7 @@ findings, and diff semantics (missing / extra / `--exact`).
 - R4 deliver in inventory slices, each slice verified before the next.
 - R5 both implementations must pass the same examples ledger.
 - R6 the ledger is the only source of truth for behavior.
+
+## License
+
+GPL-3.0-only — see [LICENSE](../LICENSE).

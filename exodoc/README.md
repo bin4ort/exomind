@@ -1,6 +1,6 @@
-# exodoc — the documentation auditor for the AI-native stack
+# exodoc v0.4.0-alpha.1 — the documentation auditor for the AI-native stack
 
-`exodoc` v0.1.0 is a batch command-line auditor (C11, zero dependencies:
+`exodoc` v0.4.0-alpha.1 is a batch command-line auditor (C11, zero dependencies:
 libc only) that checks component documentation against the ISO 9001
 §7.5-flavored standard in [standard.md](standard.md) — the stack's quality
 gate. It reads the stack manifest `docs/stack.tsv` (one component per line:
@@ -15,7 +15,7 @@ stripped, and unreachable daemons are reported as `SKIP` (never fatal).
 Part of the [exomind stack](../README.md) — the main README is the full
 stack reference (this file has the complete exodoc documentation).
 
-## build
+## Build
 
 ```
 make exodoc        # from the repo root (root Makefile wires this in)
@@ -24,7 +24,7 @@ make exodoc        # from the repo root (root Makefile wires this in)
 
 Produces `exodoc/build/exodoc`. Requires only a C11 compiler.
 
-## usage
+## Usage
 
 ```
 ./exodoc/build/exodoc audit [--stack <manifest>] [--base <dir>]
@@ -39,7 +39,7 @@ Produces `exodoc/build/exodoc`. Requires only a C11 compiler.
 - `--live` — crawl daemons; verify version + API conformance against `GET /`
 - `--json` — machine-readable report (for the future QMS component)
 
-### operation form (one console grammar for the whole stack)
+### Operation form (one console grammar for the whole stack)
 
 ```
 ./exodoc/build/exodoc /audit?live=1&stack=docs/stack.tsv&base=.&exomind=http://127.0.0.1:7654&out=report.txt
@@ -62,7 +62,7 @@ Exit status is 0 for a completed run regardless of failures; the gate is
 the report line `=== audit: N pass, M fail (score X%) ===` — integration
 wiring greps that line for `0 fail`.
 
-## endpoints
+## API
 
 `exodoc` is a batch tool, not a daemon: it has no HTTP endpoints, no port,
 and no long-running process. Its "endpoints" are CLI subcommands:
@@ -76,7 +76,7 @@ and no long-running process. Its "endpoints" are CLI subcommands:
 | `--version` | — | print `exodoc v<X.Y.Z>` |
 | `--help` | — | print usage |
 
-## checks (implemented from standard.md)
+## Checks (implemented from standard.md)
 
 | check | clause | what it verifies |
 |-------|--------|------------------|
@@ -90,7 +90,7 @@ and no long-running process. Its "endpoints" are CLI subcommands:
 | c8 version | §2/§4 | version token present; matches daemon with `--live` |
 | c9 api-conformance | §5 | documented endpoints == live `GET /` endpoints |
 
-## design
+## Internals
 
 - One pass over the manifest, then one pass over each component's README
   (headings indexed first, sections ranged to the next same-or-higher
@@ -106,7 +106,7 @@ and no long-running process. Its "endpoints" are CLI subcommands:
   as `exodoc:audit:<ts>:<component>` and a summary line lands in the note
   feed, so doc-debt history is itself queryable.
 
-## tests
+## Tests
 
 ```
 make test-exodoc   # from the repo root: exodoc suite + live audit gate
@@ -119,7 +119,7 @@ version mismatch detection via binary and via spec, API mismatch detection,
 and garbage-doc robustness (NUL bytes, oversized lines) — `exodoc` must
 never crash on them. Needs `curl` and `python3` (the fake daemons).
 
-## limitations
+## Limitations
 
 - `--live` verifies version and endpoint sets only; it does not exercise
   every endpoint's behavior — behavioral conformance is the job of each
@@ -131,11 +131,6 @@ never crash on them. Needs `curl` and `python3` (the fake daemons).
 - A component's README version token is the FIRST `X.Y.Z` in the document;
   docs must therefore state the version before any incidental numeric
   collocation.
-
-## roadmap
-
-- Iteration 5: the Quality Management component consumes `--json` output
-  and turns doc-debt history into trend reports.
 
 ## License
 

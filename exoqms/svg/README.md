@@ -1,4 +1,4 @@
-# exoqms-svg
+# exoqms-svg v0.4.0-alpha.1 — the asset-logic analyzer
 
 **The asset-logic QMS auditor for generated SVG.** A zero-dependency C11
 static analyzer (ISO honesty: an *approximate* geometry analysis, not a
@@ -7,18 +7,18 @@ renderer — see Limitations). It reads an SVG file (or a directory of
 taste: "an AI made tree SVG, unless it's as simple as a tapered stem and
 a round crown, is almost certainly anything but an actual tree."
 Generated graphics look plausible but are structurally wrong; this
-module catches that. v0.1.0 ships the **tree** rule-set; shape kinds
-are pluggable rule-sets behind the same `audit_run` entry point.
+module catches that. v0.4.0-alpha.1 ships the **tree** rule-set; shape
+kinds are pluggable rule-sets behind the same `audit_run` entry point.
 
 Part of the [exomind stack](../../README.md) — the main README is the
 full stack reference.
 
 ```
 make exoqms-svg   # builds build/exoqms-svg (C11, -Wall -Wextra, 0 warnings)
-make test         # runs test/test.sh (54 checks, < 60s)
+make test         # runs test/test.sh (61 checks, < 60s)
 ```
 
-## usage
+## Usage
 
 ```
 exoqms-svg <target> [--shape tree|auto] [--json]
@@ -51,7 +51,7 @@ minor symmetry crown leans 4830/12841 (left/right area about trunk axis x=156.0,
 line. Exit codes: `0` no findings, `1` findings, `2` usage/IO error.
 Skipped files never produce findings in `--json` mode.
 
-### operation form (one console grammar for the whole stack)
+### Operation form (one console grammar for the whole stack)
 
 ```
 exoqms-svg /check?file=<target>&shape=tree|auto&json=1
@@ -71,7 +71,7 @@ accept off values `0`/`false`/`no`/`off`. Exit codes are the CLI form's
 starts with `/` but is not a known operation (e.g. an absolute path) is
 treated as a file.
 
-## the tree rule-set (one line per check, with the math)
+## The tree rule-set (one line per check, with the math)
 
 | id | severity | flags | how |
 |----|----------|-------|-----|
@@ -92,7 +92,7 @@ the resulting crown bbox extends below the top 70% of the total height
 inside the crown's horizontal span and do not extend below the crown
 bottom are reclassified as crown.
 
-## api (CLI surface)
+## API (CLI surface)
 
 | method | signature | purpose |
 |--------|-----------|---------|
@@ -110,7 +110,7 @@ not a CLI change. The module is a batch auditor; it writes no state of
 its own — findings are plain text or JSON, one finding per line, ready
 for the QMS daemon and pipeline to consume like `exoqms-ui`'s.
 
-## design
+## Internals
 
 Five files, no dependencies beyond libc + `-lm`: `main.c` (CLI),
 `util.c` (memory/strings/file/dir walk), `svgparse.c` (the SVG subset
@@ -125,7 +125,7 @@ perimeter points (their bbox corners are included in the samples),
 Paths are treated as filled: open subpaths are closed implicitly for
 area and cross-section, matching SVG fill semantics.
 
-## supported input subset (honest)
+## Supported input subset (honest)
 
 **Elements**: `svg`, `g` (nested, flattened), `path`, `circle`,
 `ellipse`, `rect`, `line`, `polygon`, `polyline`. **Attributes**: `id`,
@@ -144,7 +144,7 @@ input skips the element with no finding; files are truncated at 16 MiB,
 element/point counts are capped (20000 elements, 200000 points per
 element) so pathological input never exhausts memory.
 
-## layout model limitations (honest list)
+## Layout model limitations (honest list)
 
 - Union area = **sum of element areas**: overlapping crown elements are
   double-counted (convexity is clamped to 1.0, so this only errs toward
@@ -167,7 +167,7 @@ element) so pathological input never exhausts memory.
 - False negatives are preferred over false positives: when the model
   cannot decide, it stays silent.
 
-## fixtures (permanent QA artifact)
+## Fixtures (permanent QA artifact)
 
 | fixture | geometry | expected findings |
 |---------|----------|-------------------|
@@ -179,7 +179,7 @@ element) so pathological input never exhausts memory.
 | `tree-asym.svg` | crown shifted right of the trunk axis (center x=190 vs axis x=156) | `symmetry` minor only |
 | `house.svg` | rect body + triangle roof, no tree hint | `--shape auto`: skipped (exit 0); `--shape tree`: `stem-taper` + `crown-roundness` major, `proportions` minor |
 
-## tests
+## Tests
 
 `test/test.sh` (own style, `make test`): pins the finding counts and
 severities of every fixture, the exact summary line and exit codes,
@@ -193,13 +193,17 @@ checks `--version`/`--help`, unknown options, and directory mode with
 per-file headers and the exact summary.
 
 ```
-=== exoqms-svg tests: 54 ok, 0 fail (1s) ===
+=== exoqms-svg tests: 61 ok, 0 fail (1s) ===
 ```
 
-## integration
+## Integration
 
 `exoqms-svg` is the asset-logic auditor of the QMS loop: like
 `exoqms-ui` it is a batch tool the exoqms daemon shells out to; its
 findings are one per line in the same `severity check-id reason`
 vocabulary, so the pipeline can collect them identically. It writes no
 state of its own.
+
+## License
+
+GPL-3.0-only — see [LICENSE](../../LICENSE).

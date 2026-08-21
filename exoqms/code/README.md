@@ -1,10 +1,8 @@
-# exoqms-code
+# exoqms-code v0.4.0-alpha.1 — the code-safety analyzer
 
-**Multi-language QMS code-safety module** (v0.2.0): C/C++ analysis,
+**Multi-language QMS code-safety module**: C/C++ analysis,
 shell and python line-based adapters, and a generic text-rule engine —
 audits any project in any language.
-
-**Code-safety QMS module: static C analyzer for error-handling quality.**
 
 The premise (production experience): when error paths are missing, a simple
 var-rename or a dropped `fopen` result silently corrupts output and costs
@@ -31,7 +29,7 @@ Findings, one per line:
 Exit 0 = clean, 1 = findings, 2 = usage error. `--json` emits a JSON array
 `{check,severity,file,line,col,reason}` for the QMS daemon.
 
-### operation form (one console grammar for the whole stack)
+### Operation form (one console grammar for the whole stack)
 
 ```
 exoqms-code /scan?path=<file-or-dir>&rules=<dir>&lang=<l>&json=1&ignore=<glob>&allow=<file>
@@ -89,15 +87,15 @@ undeterminable (false positives are the enemy):
 - `(void)` casts, `free()`, `sizeof x`, `&x` output params, and
   `x && use(x)` / `x ? ... : ...` truthiness guards are all respected.
 
-## Test
+## Tests
 
-`make test` runs the fixture suite (24 checks): `fixtures/bad.c` fires every
+`make test` runs the fixture suite (58 checks): `fixtures/bad.c` fires every
 check id with pinned counts, `fixtures/good.c` is clean, JSON validity,
 `--ignore`, directory mode, NUL-byte / 10 MB inputs never crash.
 
-## Real-run results (iteration 6, the stack's own C code)
+## Real-run results (the stack's own C source)
 
-After calibration, `exoqms-code` over all 7 components (~20k lines C):
+After calibration, `exoqms-code` over the whole stack's C code:
 
 - **majors: 99 -> 1** (the documented branch-blindness false positive)
 - minors: 312 -> 101, all `unchecked-return` on `close()`/`fclose()`/
@@ -114,3 +112,7 @@ After calibration, `exoqms-code` over all 7 components (~20k lines C):
 - Severity rule for the QMS daemon's `code-safety` check: **pass iff 0
   major**; minor findings are reported but non-fatal (see exoqms/standard.md
   §5.3 c6).
+
+## License
+
+GPL-3.0-only — see [LICENSE](../../LICENSE).
