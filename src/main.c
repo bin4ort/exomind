@@ -155,7 +155,7 @@ static int mcp_call(const char *tool, const char *args, char *out,
 {
     char method[16] = "GET";
     char path[4096];
-    char query[4096] = "";
+    char query[8192] = "";
     char body[4096] = "";
     size_t blen = 0;
     char v[4096];
@@ -682,9 +682,9 @@ int main(int argc, char **argv)
     if (project_root) {
         char pr[4096];
         snprintf(pr, sizeof pr, "%s", project_root);
-        char prf[4096];
+        char prf[4128];
         snprintf(prf, sizeof prf, "%s/.exo/project.dat", pr);
-        char prd[4096];
+        char prd[4104];
         snprintf(prd, sizeof prd, "%s/.exo", pr);
         if (mkdir_p(prd) != 0)
             fprintf(stderr, "exomind: cannot create project memory dir %s\n",
@@ -696,7 +696,7 @@ int main(int argc, char **argv)
         char cwd[4096];
         char *found = NULL;
         if (getcwd(cwd, sizeof cwd)) {
-            char probe[4096];
+            char probe[4104];
             for (char *d = cwd;;) {
                 snprintf(probe, sizeof probe, "%s/.git", d);
                 struct stat st;
@@ -718,9 +718,9 @@ int main(int argc, char **argv)
             }
         }
         if (found) {
-            char prf[4096];
+            char prf[4128];
             snprintf(prf, sizeof prf, "%s/.exo/project.dat", found);
-            char prd[4096];
+            char prd[4104];
             snprintf(prd, sizeof prd, "%s/.exo", found);
             if (mkdir_p(prd) != 0)
                 fprintf(stderr, "exomind: cannot create project memory dir %s\n",

@@ -706,6 +706,24 @@ const char *http_help_text(void)
         "plain text optimized for LLM consumption; add `json=1` to any listing\n"
         "endpoint for machine-readable JSON. Errors are `error: <reason>`.\n"
         "\n"
+        "exomind is one module of the exomind stack. Run `exomind --help modules`\n"
+        "for the whole stack's spec (every module prints it), or run any sibling\n"
+        "binary bare for its own: `exosched` (reminders + delivery receipts),\n"
+        "`exoflow` (swarm orchestrator), `exoqms` (quality management),\n"
+        "`exocrawl` (web research), `exocontext` (context continuity), `exodoc`\n"
+        "(documentation audit, batch), `exokit` (behavioral dev kit, batch).\n"
+        "Every sibling is reachable by name from any one of them.\n"
+        "\n"
+        "## running this binary\n"
+        "\n"
+        "No arguments prints this guide and exits (nothing is bound). A first\n"
+        "argument starting with `/` runs ONE operation in-process and prints the\n"
+        "response body, e.g. `exomind /set?key=greeting --body 'hello'` or\n"
+        "`exomind /search?q=parser`. Server mode binds a port only with `--serve`\n"
+        "(or an explicit `--port`); `exomind-server` is the same binary in MCP\n"
+        "(stdio JSON-RPC) mode. `--update` fetches, rebuilds and reinstalls\n"
+        "itself from the source tree.\n"
+        "\n"
         "## endpoints\n"
         "\n"
         "| method | path          | purpose                                  |\n"
@@ -1873,7 +1891,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
         }
         char reason[512] = "";
         qp_str(r->query, "reason", reason, sizeof reason);
-        char hk[MAX_KEY + 1];
+        char hk[MAX_KEY + 16];
         snprintf(hk, sizeof hk, "history:%s", key);
         char entry[1024];
         snprintf(entry, sizeof entry, "outdated %lld %s",
@@ -1884,7 +1902,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             buf_puts(out, "error: store failure");
             return;
         }
-        char mk[MAX_KEY + 1];
+        char mk[MAX_KEY + 16];
         snprintf(mk, sizeof mk, "outdated:%s", key);
         char mv[1024];
         snprintf(mv, sizeof mv, "%lld %s", (long long)now_epoch(),
@@ -1901,7 +1919,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             buf_puts(out, "error: missing key");
             return;
         }
-        char mk[MAX_KEY + 1];
+        char mk[MAX_KEY + 16];
         snprintf(mk, sizeof mk, "outdated:%s", key);
         store_t *ts = pick_store(s, key, r->query);
         int existed = store_del(ts, mk, strlen(mk));
@@ -1916,7 +1934,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             buf_puts(out, "error: missing key");
             return;
         }
-        char mk[MAX_KEY + 1];
+        char mk[MAX_KEY + 16];
         snprintf(mk, sizeof mk, "outdated:%s", key);
         store_t *ts = pick_store(s, key, r->query);
         size_t vlen = 0;
@@ -1928,7 +1946,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
         }
         buf_printf(out, "key\t%s\nmarker\t%s\n", key, m);
         /* the history of this key */
-        char hk[MAX_KEY + 1];
+        char hk[MAX_KEY + 16];
         snprintf(hk, sizeof hk, "history:%s", key);
         char *h = store_get(ts, hk, strlen(hk), &vlen, NULL);
         if (h) {
@@ -1950,9 +1968,9 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
         }
         char rel[256] = "related";
         qp_str(r->query, "rel", rel, sizeof rel);
-        char ak[MAX_KEY + 1];
+        char ak[MAX_KEY + 16];
         snprintf(ak, sizeof ak, "assoc:%s", from);
-        char line[2048];
+        char line[MAX_KEY + 256];
         snprintf(line, sizeof line, "%s\t%s", to, rel);
         store_t *ts = pick_store(s, from, r->query);
         if (store_set(ts, ak, strlen(ak), line, strlen(line), 0, 1) != 0) {
@@ -1971,7 +1989,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             buf_puts(out, "error: missing key");
             return;
         }
-        char ak[MAX_KEY + 1];
+        char ak[MAX_KEY + 16];
         snprintf(ak, sizeof ak, "assoc:%s", key);
         store_t *ts = pick_store(s, key, r->query);
         size_t vlen = 0;
@@ -2028,7 +2046,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
             char *sn = snippet(kvs[i].val, kvs[i].vlen);
             buf_printf(out, "%s\t%s\n", kvs[i].key, sn);
             free(sn);
-            char mk[MAX_KEY + 1];
+            char mk[MAX_KEY + 16];
             snprintf(mk, sizeof mk, "outdated:%s", kvs[i].key);
             size_t vlen = 0;
             char *mark = store_get(ts, mk, strlen(mk), &vlen, NULL);
@@ -2036,7 +2054,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
                 buf_printf(out, "  outdated: %s\n", mark);
                 free(mark);
             }
-            char hk[MAX_KEY + 1];
+            char hk[MAX_KEY + 16];
             snprintf(hk, sizeof hk, "history:%s", kvs[i].key);
             char *h = store_get(ts, hk, strlen(hk), &vlen, NULL);
             if (h) {
@@ -2045,7 +2063,7 @@ static void route(req_t *r, store_t *s, buf_t *out, int *status,
                 free(h2);
                 free(h);
             }
-            char ak[MAX_KEY + 1];
+            char ak[MAX_KEY + 16];
             snprintf(ak, sizeof ak, "assoc:%s", kvs[i].key);
             char *a = store_get(ts, ak, strlen(ak), &vlen, NULL);
             if (a) {
