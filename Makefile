@@ -3,10 +3,12 @@ CFLAGS  ?= -O2 -g
 CFLAGS  += -std=c11 -Wall -Wextra -pthread -D_POSIX_C_SOURCE=200809L
 CFLAGS  += -D_XOPEN_SOURCE=700
 CFLAGS  += -DEXO_REPO_DIR_DEFAULT=\"$(CURDIR)\"
+CFLAGS  += -MMD -MP
 LDFLAGS ?= -pthread
 
-SRC := src/main.c src/http.c src/store.c src/util.c src/router.c src/update.c common/exo.c
-OBJ := $(SRC:src/%.c=build/%.o)
+SRC := src/main.c src/http.c src/store.c src/util.c src/router.c src/update.c
+OBJ := $(SRC:src/%.c=build/%.o) build/exo_common.o
+DEP := $(OBJ:.o=.d)
 BIN := build/exomind
 
 all: $(BIN)
@@ -17,8 +19,13 @@ build:
 $(BIN): $(OBJ)
 	$(CC) $(CFLAGS) -o $@ $(OBJ) $(LDFLAGS)
 
-build/%.o: src/%.c src/util.h src/store.h src/http.h src/version.h src/update.h | build
+build/%.o: src/%.c | build
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+build/exo_common.o: common/exo.c common/exo.h | build
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+-include $(DEP)
 
 test: $(BIN)
 	bash test/test.sh
@@ -50,7 +57,7 @@ test-exocontext: all
 exokit:
 	$(MAKE) -C exokit
 
-test-exokit: all
+test-exokit: exokit exoflow
 	$(MAKE) -C exokit test
 	@if [ -f exoflow/test/test-integration.sh ]; then \
 		bash exoflow/test/test-integration.sh; \
@@ -72,7 +79,7 @@ qms-modules:
 	@if [ -d exoqms/code ]; then $(MAKE) -C exoqms/code; else echo "exoqms/code not present (module branch not merged); skipped"; fi
 	@if [ -d exoqms/svg ]; then $(MAKE) -C exoqms/svg; else echo "exoqms/svg not present (module branch not merged); skipped"; fi
 
-test-exoqms: all
+test-exoqms: exoqms
 	$(MAKE) -C exoqms test
 	$(MAKE) -C exoqms/ui test
 	@if [ -d exoqms/code ]; then $(MAKE) -C exoqms/code test; else echo "exoqms/code suite skipped (module branch not merged)"; fi
@@ -161,7 +168,7 @@ clean:
 # as long as every DOC check (purpose, sections, version token, honesty)
 # passes. If a FAIL appears while the daemons are unreachable we re-run the
 # offline doc audit as a cross-check before failing the build.
-test-exodoc: all
+test-exodoc: exodoc
 	$(MAKE) -C exodoc test
 	@if [ -f docs/stack.tsv ]; then \
 		echo "== exodoc live audit (doc-debt gate) =="; \
@@ -187,7 +194,10 @@ test-exodoc: all
 		fi; \
 	fi
 
-.PHONY: all test clean exosched test-exosched exoflow test-exoflow exodoc test-exodoc exoqms qms-modules test-exoqms audit-stack qms-universal-test exocrawl test-exocrawl exocontext test-exocontext exokit test-exokit
+.PHONY: all all-stack test clean exosched test-exosched exoflow test-exoflow exodoc test-exodoc exoqms qms-modules test-exoqms audit-stack qms-universal-test exocrawl test-exocrawl exocontext test-exocontext exokit test-exokit install
+
+# build every module of the stack (parallel-safe: make -j all-stack)
+all-stack: all exosched exoflow exodoc exoqms exocrawl exocontext exokit qms-modules
 
 # install all modules as `exo<name>` console binaries + `<name>-server`
 # symlinks (MCP mode) + batch tools. Usage:

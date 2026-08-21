@@ -1,9 +1,11 @@
 CC      ?= cc
 CFLAGS  ?= -O2
 CFLAGS  += -std=c11 -Wall -Wextra -D_POSIX_C_SOURCE=200809L
+CFLAGS  += -MMD -MP
 
 SRC := src/main.c src/util.c src/geom.c src/svgparse.c src/checks.c
 OBJ := $(SRC:src/%.c=build/%.o)
+DEP := $(OBJ:.o=.d)
 BIN := build/exoqms-svg
 
 all: exoqms-svg
@@ -16,8 +18,10 @@ build:
 $(BIN): $(OBJ)
 	$(CC) $(CFLAGS) -o $@ $(OBJ) -lm
 
-build/%.o: src/%.c src/svg.h | build
+build/%.o: src/%.c | build
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+-include $(DEP)
 
 test: exoqms-svg
 	bash test/test.sh
