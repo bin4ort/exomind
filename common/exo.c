@@ -222,31 +222,46 @@ static const exo_help_t EXO_SIBLINGS[] = {
      "       [--log-level lv] [--mcp]\n"
      "subcommands: keys add|list|remove; --help [modules]\n"},
     {"exosched",
-     "# exosched - the alarm clock for AI agents\n"
-     "usage: exosched --exomind <url> [--host addr] [--port 7655]\n"
-     "       [--token t | --keys file] [--rate-limit n] [--log-level lv]\n"},
+     "# exosched - the alarm clock for AI agents (reminders + WebSocket push)\n"
+     "usage: exosched --exomind <url> [--port 7655] [--token t]\n"
+     "endpoints: GET / /ping /timers /delivery /ws | POST /remind |\n"
+     "           DELETE /timer?id=<id>\n"
+     "console: exosched /remind --body 'in 5m \"stand up\"' ; durable\n"
+     "         state lives in exomind (exosched:timer:* keys)\n"},
     {"exoflow",
-     "# exoflow - swarm orchestrator\n"
-     "usage: exoflow --exomind <url> [--host addr] [--port 7656]\n"
-     "       [--token t | --keys file] [--rate-limit n] [--log-level lv]\n"},
+     "# exoflow - swarm orchestrator (dependency-graph flows; one claim per\n"
+     "#            step; loop flows spawn iterations lazily)\n"
+     "usage: exoflow --exomind <url> [--port 7656] [--token t]\n"
+     "endpoints: POST /flow /step /flow?id=&action= | GET /flows /loops\n"
+     "           /flow?id= /next /ping\n"
+     "console: exoflow /flows ; state lives in exomind (exoflow:* keys)\n"},
     {"exodoc",
-     "# exodoc - documentation auditor (ISO 9001 7.5)\n"
-     "usage: exodoc audit --live --stack <manifest>\n"},
+     "# exodoc - documentation auditor (ISO 9001 7.5); batch, no daemon\n"
+     "usage: exodoc audit [--live] --stack docs/stack.tsv [--base .] [--json]\n"
+     "gate: the report line '=== audit: N pass, M fail (score S%) ==='\n"},
     {"exoqms",
-     "# exoqms - universal QMS\n"
-     "usage: exoqms --port 7657 --exomind <url> [--code path] [--kit path]\n"
-     "       [--rate-limit n] [--log-level lv]\n"},
+     "# exoqms - universal QMS (ISO 9000: objectives, NCs, audit programs)\n"
+     "usage: exoqms --exomind <url> [--port 7657] [--code path] [--kit path]\n"
+     "endpoints: GET / /ping /objectives /nc /audits /audit?id= /issues\n"
+     "           /report /trends | POST /objectives /nc /audit\n"
+     "           /nc?id=<id>&action=analyse|correct|verify|close\n"
+     "console: exoqms /audit --body 'name<TAB>criteria<TAB>agents'\n"
+     "         ; state lives in exomind (exoqms:* keys)\n"},
     {"exocrawl",
-     "# exocrawl - AI-native research daemon\n"
-     "usage: exocrawl [--host addr] [--port 7658] [--proxy url] [--robots]\n"
-     "       [--token t | --keys file] [--rate-limit n] [--log-level lv]\n"},
+     "# exocrawl - AI-native research daemon (metasearch + HTML->text)\n"
+     "usage: exocrawl [--port 7658] [--token t] [--robots] [--cache <url>]\n"
+     "endpoints: GET / /search /fetch /stats /ping /extract-quality |\n"
+     "           POST /scrape\n"
+     "console: exocrawl /search?q=... ; optional cache in exomind\n"
+     "         (exocrawl:cache:* keys, 24h TTL)\n"},
     {"exocontext",
-     "# exocontext - context continuity\n"
-     "usage: exocontext --exomind <url> [--host addr] [--port 7659]\n"
-     "       [--token t | --keys file] [--rate-limit n] [--log-level lv]\n"},
+     "# exocontext - context continuity (bounded digest of an agent's state)\n"
+     "usage: exocontext --exomind <url> [--port 7659] [--token t]\n"
+     "endpoints: GET / /ping /context?agent=<id>[&budget=<n>] | POST /context\n"
+     "console: exocontext /context?agent=b2&budget=2000\n"},
     {"exokit",
-     "# exokit - behavioral development kit\n"
-     "usage: exokit init|extract|verify|diff|audit\n"},
+     "# exokit - behavioral development kit (contract + ledger + runner shims)\n"
+     "usage: exokit init|extract|verify|diff|audit [--kit <dir>]\n"},
 };
 
 void exo_help_add_siblings(void)
