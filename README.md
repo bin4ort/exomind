@@ -23,6 +23,53 @@ exits. No module binds a port unless it is explicitly told to serve.
 **Status: Early Alpha** — the first packaged release is `v0.4.0-alpha.1`
 (pacman + apt packages, see [Releasing](packaging/release.sh)).
 
+## Getting Started
+
+### Quick Start
+
+```sh
+# 1. Install
+make && make install PREFIX=~/.local
+
+# 2. Store a value
+exomind /set?key=project:my-project:version --body '1.0.0'
+
+# 3. Create a reminder
+exosched /remind --body 'in 90s "water the plants"'
+
+# 4. Start the servers
+exomind --serve
+exosched --serve
+exoflow --serve
+exoqms --serve
+```
+
+### Tutorials
+
+```sh
+# Show the getting started guide
+exomind --getting-started
+
+# Run specific tutorials
+exomind --tutorial memory_basics
+exomind --tutorial workflow_basics
+exoqms --tutorial qms_basics
+exosched --tutorial scheduling_basics
+```
+
+### Help
+
+```sh
+# View help for each module
+exomind --help
+exoqms --help
+exosched --help
+
+# See available commands
+exomind --completion exo
+exoqms --completion exo
+```
+
 ## The stack
 
 | component | role | server-mode port | README |
@@ -666,6 +713,27 @@ both the module test suites and this audit gate green.
 - **ISSUES.md** — the issue log (mirrored as `issue:*` keys)
 - Every merged change lands with tests, the doc gate green, and the QMS
   audit at 100%.
+
+## CLI Ergonomics
+
+The CLI is designed for human usability:
+
+- **Tab completion**: `exoqms --completion <prefix>` enables tab completion
+- **Command history**: Commands are saved to `$HOME/.exomind_history`
+- **Error messages**: User-friendly with actionable guidance
+- **Progress indicators**: Progress bars and spinners for long operations
+- **Caching**: Results are cached to avoid redundant operations
+
+```sh
+# Enable tab completion
+source <(exomind --completion <prefix>)
+
+# View command history
+cat $HOME/.exomind_history
+
+# Clear cache
+exomind --completion clear
+```
 
 ## License
 

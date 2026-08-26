@@ -4,6 +4,7 @@
 #include "store.h"
 #include "util.h"
 #include "version.h"
+#include "../common/exo_cli.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -110,36 +111,41 @@ static void usage(const char *argv0)
            "  --keys <file>    key file (same format as --tokens); managed\n"
            "                   with the `keys` subcommand\n"
            "  --rate-limit <n> max requests/second (429 beyond)\n"
-            "  --log-level <error|warn|info|debug>\n"
-            "  --replicate <addr>  follow a primary exomind (host:port):\n"
-            "                   poll its /repl log and apply records to this\n"
-            "                   store every 2s (env EXO_REPL_POLL_MS); never\n"
-            "                   binds a port unless --serve/--port is given\n"
-            "  --mcp            serve as a stdio Model Context Protocol\n"
-           "                   server (installing as `exomind-server` does\n"
-           "                   the same)\n"
-           "  --update         fetch, rebuild and reinstall into the running\n"
-           "                   binary's own prefix (no sudo for user\n"
-           "                   installs); env EXO_UPDATE_DIR (source tree),\n"
-           "                   EXO_UPDATE_PREFIX (install prefix),\n"
-           "                   EXO_UPDATE_BRANCH, EXO_UPDATE_CHECK=0 to kill\n"
-           "                   the startup version notice (stderr only)\n"
+             "  --log-level <error|warn|info|debug>\n"
+             "  --replicate <addr>  follow a primary exomind (host:port):\n"
+             "                   poll its /repl log and apply records to this\n"
+             "                   store every 2s (env EXO_REPL_POLL_MS); never\n"
+             "                   binds a port unless --serve/--port is given\n"
+             "  --mcp            serve as a stdio Model Context Protocol\n"
+             "                   server (installing as `exomind-server` does\n"
+             "                   the same)\n"
+             "  --update         fetch, rebuild and reinstall into the running\n"
+             "                   binary's own prefix (no sudo for user\n"
+             "                   installs); env EXO_UPDATE_DIR (source tree),\n"
+             "                   EXO_UPDATE_PREFIX (install prefix),\n"
+             "                   EXO_UPDATE_BRANCH, EXO_UPDATE_CHECK=0 to kill\n"
+             "                   the startup version notice (stderr only)\n"
 "  keys add <name[:mods]> | keys list | keys remove <name>\n"
-            "  <operation>      run ONE API operation directly, no server:\n"
-            "                   exomind /set?key=k (body = value, from\n"
-            "                   --body <text> or stdin), /get?key=k,\n"
-            "                   /search?q=..., /list?prefix=..., /note ...\n"
-            "  --serve          the only way to run the HTTP server\n"
-            "                   (with --host/--port); without it the\n"
-            "                   binary never binds a port\n"
-            "  --body <text>    request body for the operation, instead\n"
-            "                   of reading stdin\n"
-            "  --help [modules] show this guide, or the whole stack's\n"
-           "  --version        show version\n"
-           "env: EXOMIND_TOKEN same as --token\n"
-           "the daemon serves its API at / and /exoexomind on the bound\n"
-           "address; GET / is the base usage information\n",
-           argv0);
+             "  <operation>      run ONE API operation directly, no server:\n"
+             "                   exomind /set?key=k (body = value, from\n"
+             "                   --body <text> or stdin), /get?key=k,\n"
+             "                   /search?q=..., /list?prefix=..., /note ...\n"
+             "  --serve          the only way to run the HTTP server\n"
+             "                   (with --host/--port); without it the\n"
+             "                   binary never binds a port\n"
+             "  --body <text>    request body for the operation, instead\n"
+             "                   of reading stdin\n"
+             "  --help [modules] show this guide, or the whole stack's\n"
+             "  --version        show version\n"
+             "  --completion <prefix> tab completion support\n"
+             "  --tutorial <name> show a tutorial (name: getting_started, memory_basics, workflow_basics)\n"
+             "  --getting-started  show the getting started guide\n"
+             "env: EXOMIND_TOKEN same as --token\n"
+             "tab completion: enable with `source <(exomind --completion <prefix>)`\n"
+             "command history: commands are saved to $HOME/.exomind_history\n"
+             "the daemon serves its API at / and /exoexomind on the bound\n"
+             "address; GET / is the base usage information\n",
+            argv0);
 }
 
 /* whole-stack usage registry: siblings from common, own spec here */
@@ -272,6 +278,16 @@ static int stack_call(const char *tool, const char *args, char *out,
         if (!strcmp(tool, MCP_TOOLS[i].name))
             return mcp_call(tool, args, out, cap);
     return exo_router_call(tool, args, out, cap);
+}
+
+/* Register exomind as a CLI module for tab completion */
+static void register_cli_modules(void)
+{
+    static exo_cli_module_t exomind_mod = {
+        .name = "exomind",
+        .spec = NULL, /* filled at runtime */
+    };
+    exo_cli_register(&exomind_mod, 1);
 }
 
 /* returns nonzero when the binary is invoked as <module>-server */
@@ -493,8 +509,33 @@ int main(int argc, char **argv)
     exo_help_add_siblings();
     exo_help_add(EXO_SELF, sizeof EXO_SELF / sizeof EXO_SELF[0]);
 
+    /* Register CLI modules for tab completion */
+    register_cli_modules();
+
     /* console subcommands run before the daemon starts */
     if (argc >= 2 && !strcmp(argv[1], "keys")) {
+        /* Write command history */
+        {
+            size_t blen = 0;
+            char cmd[4096];
+            size_t clen = strlen(argv[0]);
+            if (clen < sizeof cmd)
+                memcpy(cmd, argv[0], clen);
+            else
+                memcpy(cmd, argv[0], sizeof cmd - 1);
+            blen = clen;
+            for (int ci = 1; ci < argc; ci++) {
+                size_t aslen = strlen(argv[ci]);
+                if (blen + 1 + aslen < sizeof cmd) {
+                    cmd[blen++] = ' ';
+                    if (aslen < sizeof cmd - blen)
+                        memcpy(cmd + blen, argv[ci], aslen);
+                    blen += aslen;
+                }
+            }
+            cmd[blen] = 0;
+            exo_cli_history_write(cmd);
+        }
         const char *keys_file = NULL;
         for (int i = 2; i < argc; i++)
             if (!strcmp(argv[i], "--keys") && i + 1 < argc)
@@ -531,6 +572,10 @@ int main(int argc, char **argv)
                 "mods: ro, scope=<prefix>* (same as --tokens lines)\n");
         return 1;
     }
+
+    /* Check for tab completion first */
+    if (exo_cli_handle_completion(argc, argv))
+        return 0;
 
     /* a leading /operation is a one-shot console op: run it directly */
     const char *console_path = (argc >= 2 && argv[1][0] == '/') ? argv[1]
@@ -594,6 +639,30 @@ int main(int argc, char **argv)
         } else if (!strcmp(a, "--mcp")) {
             mcp_mode = 1;
         } else if (!strcmp(a, "--help") || !strcmp(a, "-h")) {
+            /* Write command history */
+            {
+                size_t blen = 0;
+                char cmd[4096];
+                size_t clen = strlen(argv[0]);
+                if (clen > 0) {
+                    if (clen < sizeof cmd)
+                        memcpy(cmd, argv[0], clen);
+                    else
+                        memcpy(cmd, argv[0], sizeof cmd - 1);
+                    blen = clen;
+                }
+                for (int ci = 1; ci < argc; ci++) {
+                    size_t aslen = strlen(argv[ci]);
+                    if (blen + 1 + aslen < sizeof cmd) {
+                        cmd[blen++] = ' ';
+                        if (aslen < sizeof cmd - blen)
+                            memcpy(cmd + blen, argv[ci], aslen);
+                        blen += aslen;
+                    }
+                }
+                cmd[blen] = 0;
+                exo_cli_history_write(cmd);
+            }
             if (i + 1 < argc && !strcmp(argv[i + 1], "modules")) {
                 exo_help_print_all();
                 return 0;
@@ -605,7 +674,40 @@ int main(int argc, char **argv)
             usage(argv[0]);
             return 0;
         } else if (!strcmp(a, "--version") || !strcmp(a, "-v")) {
+            /* Write command history */
+            {
+                size_t blen = 0;
+                char cmd[4096];
+                size_t clen = strlen(argv[0]);
+                if (clen < sizeof cmd)
+                    memcpy(cmd, argv[0], clen);
+                else
+                    memcpy(cmd, argv[0], sizeof cmd - 1);
+                blen = clen;
+                for (int ci = 1; ci < argc; ci++) {
+                    size_t aslen = strlen(argv[ci]);
+                    if (blen + 1 + aslen < sizeof cmd) {
+                        cmd[blen++] = ' ';
+                        if (aslen < sizeof cmd - blen)
+                            memcpy(cmd + blen, argv[ci], aslen);
+                        blen += aslen;
+                    }
+                }
+                cmd[blen] = 0;
+                exo_cli_history_write(cmd);
+            }
             printf("exomind v%s\n", EXOMIND_VERSION);
+            return 0;
+        } else if (!strcmp(a, "--tutorial")) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "exomind: --tutorial requires a tutorial name\n");
+                fprintf(stderr, "Available tutorials: getting_started, memory_basics, workflow_basics\n");
+                return 1;
+            }
+            exo_cli_show_tutorial(argv[++i]);
+            return 0;
+        } else if (!strcmp(a, "--getting-started")) {
+            exo_cli_show_getting_started();
             return 0;
         } else {
             fprintf(stderr, "exomind: unknown argument %s\n", a);
@@ -644,6 +746,47 @@ int main(int argc, char **argv)
         /* no HTTP listener except in server mode: run the operation
          * in-process, or show the guide (the same text GET / serves) */
         if (console_path) {
+            /* Write command history */
+            {
+                size_t blen = 0;
+                char cmd[4096];
+                size_t clen = strlen(argv[0]);
+                if (clen < sizeof cmd)
+                    memcpy(cmd, argv[0], clen);
+                else
+                    memcpy(cmd, argv[0], sizeof cmd - 1);
+                blen = clen;
+                if (blen + 1 + strlen(console_path) < sizeof cmd) {
+                    cmd[blen++] = ' ';
+                    size_t cplen = strlen(console_path);
+                    if (cplen < sizeof cmd - blen)
+                        memcpy(cmd + blen, console_path, cplen);
+                    blen += cplen;
+                }
+                if (body_arg[0] && blen + 8 + strlen(body_arg) < sizeof cmd) {
+                    cmd[blen++] = ' ';
+                    cmd[blen++] = '-';
+                    cmd[blen++] = '-';
+                    cmd[blen++] = ' ';
+                    cmd[blen++] = 'b';
+                    cmd[blen++] = 'o';
+                    cmd[blen++] = 'b';
+                    cmd[blen++] = 'y';
+                    cmd[blen++] = ' ';
+                    cmd[blen++] = '"';
+                    size_t blenlen = strlen(body_arg);
+                    if (blen + blenlen < sizeof cmd) {
+                        memcpy(cmd + blen, body_arg, blenlen);
+                        blen += blenlen;
+                    }
+                    if (blen < sizeof cmd)
+                        cmd[blen++] = '"';
+                }
+                cmd[blen] = 0;
+                exo_cli_history_write(cmd);
+            }
+            /* suppress startup chatter in console mode (FEEDBACK.md friction) */
+            store_set_quiet(1);
             g_store = store_open(data);
             int rc = console_run(console_path, body_arg, g_store);
             store_close(g_store);

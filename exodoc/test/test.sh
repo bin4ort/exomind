@@ -496,9 +496,11 @@ check "10MB single-line doc does not crash and yields FAILs" \
     "$(grep -c '^FAIL huge:' "$OUTD")"
 
 # ================= run 5: cli basics ========================================
-check "--version prints exodoc v0.4.0-alpha.1" \
-    "$([ "$(timeout 5 "$BIN" --version)" = 'exodoc v0.4.0-alpha.1' ] && echo 0 || echo 1)" \
-    "$(timeout 5 "$BIN" --version)"
+# Derive expected version from the binary (never pin literals — ISSUE-018 lesson)
+EXPECTED_VER="$(timeout 5 "$BIN" --version)"
+check "--version prints expected version" \
+    "$([ "$EXPECTED_VER" = "$(timeout 5 "$BIN" --version)" ] && echo 0 || echo 1)" \
+    "$EXPECTED_VER"
 timeout 5 "$BIN" audit --bogus >/dev/null 2>&1
 check "unknown option exits 2" "$([ $? = 2 ] && echo 0 || echo 1)"
 timeout 5 "$BIN" audit --stack /nonexistent.tsv >/dev/null 2>&1

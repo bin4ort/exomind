@@ -5,7 +5,7 @@ CFLAGS  += -MMD -MP
 LDFLAGS ?= -pthread
 
 SRC := src/main.c src/http.c src/util.c src/exomind.c src/model.c src/checks.c src/project.c
-OBJ := $(SRC:src/%.c=build/%.o) build/exo_common.o
+OBJ := $(SRC:src/%.c=build/%.o) build/exo_common.o build/exo_cli.o
 DEP := $(OBJ:.o=.d)
 BIN := build/exoqms
 
@@ -21,6 +21,9 @@ build/%.o: src/%.c | build
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 build/exo_common.o: ../common/exo.c ../common/exo.h | build
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+build/exo_cli.o: ../common/exo_cli.c ../common/exo_cli.h | build
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 -include $(DEP)

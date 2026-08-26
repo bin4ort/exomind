@@ -28,7 +28,7 @@ validpgpkeys=()
 
 build() {
     cd "$srcdir"/exomind-*/
-    make
+    make qms-modules
 }
 
 check() {

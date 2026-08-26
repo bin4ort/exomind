@@ -169,3 +169,30 @@ before any final answer.
 - [idea] robots pace-merging (max of --pace-ms/robots-delay/per-host
   pace) proved itself on mixed hosts; a `robots:index` summary key
   would make site policy visible at `/list`.
+
+## Completion wave — 2026-08-23 (this session)
+
+- [fixed] ISSUE-028: `make install` now deploys `exoqms-code`, `exoqms-ui`,
+  `exoqms-svg` binaries to `$(PREFIX)/bin`. The `install` target depends on
+  `qms-modules`, iterates the three binaries, and prints a WARN when a module
+  dir is absent (module branch not merged). `PKGBUILD` build() calls
+  `make qms-modules` so the Arch package includes them.
+- [fixed] ISSUE-025: 5 modules missing `standard.md` now have one each
+  (`exosched/standard.md`, `exoflow/standard.md`, `exocrawl/standard.md`,
+  `exocontext/standard.md`, `exokit/standard.md`). Each contains: purpose,
+  API surface table, build/run, internals/durability, tests, limitations,
+  version token (c8), and the required sections (build, run, api, state,
+  tests, honesty). Doc-debt gate: 70 pass, 0 fail (score 100%).
+- [fixed] ISSUE-018 follow-up: version pins in `exodoc/test/test.sh` and
+  `exokit/test/test.sh` had hardcoded version literals (`v0.4.0-alpha.1`).
+  Fixed: `exodoc` now derives the expected version from the binary's
+  `--version` output; `exokit` checks the version string is non-empty
+  (never pin literals — per ISSUE-018 lesson).
+- [fix] console-mode startup chatter: `store.c`'s "loaded N entries from
+  path" message now respects `store_quiet` (set via `store_set_quiet(1)`).
+  `main.c` calls `store_set_quiet(1)` before `store_open()` in console
+  mode, matching the FEEDBACK.md friction about chatty stderr for
+  scripting consumers.
+- [verified] all 8 test suites green: exomind 371, exosched 82, exoflow
+  139, exoqms 160, exocrawl 68, exocontext 51, exodoc 36, exokit 50.
+  Doc-debt gate: 70 pass, 0 fail. Clean build with `-Wall -Wextra`.

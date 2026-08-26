@@ -3,6 +3,7 @@
  * exoqms-ui as child processes. */
 #include "exoqms.h"
 #include "../../common/exo.h"
+#include "../../common/exo_cli.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -85,7 +86,11 @@ static void usage(const char *argv0)
            "  --token <t>        require 'Authorization: Bearer <t>'\n"
            "  --help             show this help\n"
            "  --version          show version\n"
-           "env: EXOQMS_TOKEN same as --token\n",
+           "  --tutorial <name>  show a tutorial (name: getting_started, qms_basics)\n"
+           "  --getting-started  show the getting started guide\n"
+           "env: EXOQMS_TOKEN same as --token\n"
+           "tab completion: enable with `source <(exoqms --completion <prefix>)`\n"
+           "command history: commands are saved to $HOME/.exoqms_history\n",
            argv0, argv0);
 }
 
@@ -252,7 +257,20 @@ int main(int argc, char **argv)
 
     /* a leading /operation is a one-shot console op: run it directly */
     const char *console_path = (argc >= 2 && argv[1][0] == '/') ? argv[1]
-                                                                : NULL;
+                                                                 : NULL;
+
+    /* Register exoqms as a CLI module for tab completion */
+    {
+        static exo_cli_module_t exoqms_mod = {
+            .name = "exoqms",
+            .spec = NULL,
+        };
+        exo_cli_register(&exoqms_mod, 1);
+    }
+
+    /* Check for tab completion first */
+    if (exo_cli_handle_completion(argc, argv))
+        return 0;
 
     for (int i = console_path ? 2 : 1; i < argc; i++) {
         const char *a = argv[i];
@@ -324,6 +342,17 @@ int main(int argc, char **argv)
             return 0;
         } else if (!strcmp(a, "--version") || !strcmp(a, "-v")) {
             printf("exoqms v%s\n", EXOQMS_VERSION);
+            return 0;
+        } else if (!strcmp(a, "--tutorial")) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "exoqms: --tutorial requires a tutorial name\n");
+                fprintf(stderr, "Available tutorials: getting_started, qms_basics\n");
+                return 1;
+            }
+            exo_cli_show_tutorial(argv[++i]);
+            return 0;
+        } else if (!strcmp(a, "--getting-started")) {
+            exo_cli_show_getting_started();
             return 0;
         } else {
             fprintf(stderr, "exoqms: unknown argument %s\n", a);

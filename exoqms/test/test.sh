@@ -44,10 +44,11 @@ fi
 cc -O2 -std=c11 -Wall -Wextra -pthread -D_POSIX_C_SOURCE=200809L \
     -D_XOPEN_SOURCE=700 \
     ../src/main.c ../src/http.c ../src/store.c ../src/util.c \
-    ../src/router.c ../src/update.c ../common/exo.c -o "$TDIR/exomind" 2>/dev/null \
+    ../src/router.c ../src/update.c ../common/exo.c ../common/exo_cli.c -o "$TDIR/exomind" 2>/dev/null \
  || cc -O2 -std=c11 -Wall -Wextra -pthread -D_POSIX_C_SOURCE=200809L \
     -D_XOPEN_SOURCE=700 \
-    src/main.c src/http.c src/store.c src/util.c src/router.c src/update.c \
+    ../src/main.c ../src/http.c ../src/store.c ../src/util.c \
+    ../src/router.c ../src/update.c ../common/exo.c ../common/exo_cli.c \
     -o "$TDIR/exomind"
 
 # ---------- fixtures --------------------------------------------------------

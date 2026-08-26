@@ -149,3 +149,18 @@ Freely-available international norms, extracted by exocrawl into
   it means the work landed on main with tests and the QMS gate green.
 - Long-running agent work must set exosched reminders (`agent:<id>:` in
   the message) — the freeze detector depends on it.
+- [x] **Packaging: QMS field modules in `make install`** — DONE: `install`
+      target depends on `qms-modules`, installs `exoqms-code`, `exoqms-ui`,
+      `exoqms-svg` to `$(PREFIX)/bin` with WARN for missing modules;
+      `PKGBUILD` build() calls `make qms-modules`. Fixes ISSUE-021/028.
+- [x] **Docs coverage: standard.md for exosched, exoflow, exocrawl,
+      exocontext, exokit** — DONE: 5 `standard.md` files added with full
+      sections (purpose, API, build, internals, tests, limitations,
+      version). Doc-debt gate: 70 pass, 0 fail. Fixes ISSUE-025.
+- [x] **Version pin cleanup in test suites** — DONE: `exodoc/test` and
+      `exokit/test` no longer hardcode version literals. Fixes ISSUE-018
+      lesson.
+- [x] **Console-mode startup message suppression** — DONE: `store_quiet`
+      flag added to `store.c`; `store_set_quiet(1)` called before
+      `store_open()` in console mode. Reduces stderr chatter for
+      scripting consumers.

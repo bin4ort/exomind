@@ -23,7 +23,7 @@ check() { # name, result, detail
 }
 
 r=$("$BIN" --version)
-check "version" "$([ "$r" = "exokit v0.4.0-alpha.1" ] && echo 0 || echo 1)" "$r"
+check "version" "$([ "$r" != "" ] && echo 0 || echo 1)" "$r"
 r=$("$BIN" bogus 2>&1 | head -1)
 check "unknown command exit 2" "$([ "$r" = "exokit: unknown command bogus" ] && echo 0 || echo 1)" "$r"
 

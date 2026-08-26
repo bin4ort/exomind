@@ -13,3 +13,5 @@ exodoc	exodoc			make test
 exocrawl	exocrawl	7658		./build/exocrawl --version
 exocontext	exocontext	7659		./build/exocontext --version
 exokit	exokit			make test
+exogit	exogit	7660		./exogit/test/test.sh	./exogit/exogit --version
+exogpl	exogpl	7661		./exogpl/test/test.sh	./exogpl/exogpl --version

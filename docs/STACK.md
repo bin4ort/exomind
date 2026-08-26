@@ -10,12 +10,12 @@ each directory's README; this page is the map.
 
 | component | version | port  | role |
 |-----------|---------|-------|------|
-| [exomind](../README.md) | 0.3.0 | 7654 | durable long-term memory |
-| [exosched](../exosched/README.md) | 0.2.0 | 7655 | scheduled reminders + push |
-| [exoflow](../exoflow/README.md) | 0.1.0 | 7656 | dependency-graph orchestrator |
-| [exoqms](../exoqms/README.md) | 0.2.0 | 7657 | quality management system |
-| [exocrawl](../exocrawl/README.md) | 0.1.0 | 7658 | AI-native research: private metasearch + text extraction |
-| [exodoc](../exodoc/README.md) | 0.1.0 | — (batch) | documentation auditor |
+| [exomind](../README.md) | 0.4.0-alpha.1 | 7654 | durable long-term memory |
+| [exosched](../exosched/README.md) | 0.4.0-alpha.1 | 7655 | scheduled reminders + push |
+| [exoflow](../exoflow/README.md) | 0.4.0-alpha.1 | 7656 | dependency-graph orchestrator |
+| [exoqms](../exoqms/README.md) | 0.4.0-alpha.1 | 7657 | quality management system |
+| [exocrawl](../exocrawl/README.md) | 0.4.0-alpha.1 | 7658 | AI-native research: private metasearch + text extraction |
+| [exodoc](../exodoc/README.md) | 0.4.0-alpha.1 | — (batch) | documentation auditor |
 
 ## Why this stack exists: the AI-native philosophy
 

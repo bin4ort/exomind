@@ -19,6 +19,8 @@ typedef struct {
 } kv_t;
 
 /* open (or create) the data file; exits on fatal error */
+/* store_set_quiet(1) suppresses the "loaded N entries" startup message */
+void store_set_quiet(int q);
 store_t *store_open(const char *path);
 void store_close(store_t *s);
 

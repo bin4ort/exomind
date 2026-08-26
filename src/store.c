@@ -432,6 +432,11 @@ static void maybe_compact(store_t *s)
     compact(s);
 }
 
+/* suppress informational startup messages (set before store_open) */
+static int store_quiet = 0;
+
+void store_set_quiet(int q) { store_quiet = q; }
+
 /* ---------------- public API ---------------- */
 
 store_t *store_open(const char *path)
@@ -449,8 +454,9 @@ store_t *store_open(const char *path)
     s->nbuckets = 64;
     s->buckets = xcalloc(64, sizeof(entry_t *));
     store_load(s);
-    fprintf(stderr, "exomind: loaded %zu entries (%llu bytes) from %s\n",
-            s->count, (unsigned long long)s->size, path);
+    if (!store_quiet)
+        fprintf(stderr, "exomind: loaded %zu entries (%llu bytes) from %s\n",
+                s->count, (unsigned long long)s->size, path);
     return s;
 }
 

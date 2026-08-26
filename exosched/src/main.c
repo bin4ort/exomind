@@ -1,6 +1,7 @@
 /* exosched: the alarm clock for AI agents. Durable state lives in exomind. */
 #include "exosched.h"
 #include "../../common/exo.h"
+#include "../../common/exo_cli.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -53,25 +54,30 @@ static void usage(const char *argv0)
            "an operation (path starting with /) runs ONE API call in-process\n"
            "and prints the answer; no server and no socket is opened:\n"
 "  /remind          schedule: body from --body or stdin (POST)\n"
-            "  /timers          list active timers (GET)\n"
-            "  /timer?id=<id>   cancel a timer (POST)\n"
-            "  /delivery        delivery receipts stats (GET; ?detail=1 for\n"
-            "                   the per-timer receipt list)\n"
-           "the daemon binds a port only with --serve (or an explicit\n"
-           "--port); with no arguments the API guide is printed\n"
-           "  --host <addr>      bind address (default 127.0.0.1)\n"
-           "  --port <n>         port (default 7655)\n"
-           "  --serve            run as the HTTP daemon\n"
-           "  --body <text>      request body for the operation, instead\n"
-           "                     of reading stdin\n"
-           "  --exomind <url>    storage backend (default http://127.0.0.1:7654)\n"
-           "  --token <t>        require 'Authorization: Bearer <t>'\n"
-           "  --rate-limit <n>   max requests/second (429 beyond)\n"
-           "  --log-level <error|warn|info|debug>\n"
-           "  --help             show this help\n"
-           "  --version          show version\n"
-           "env: EXOSCHED_TOKEN same as --token\n",
-           argv0, argv0);
+             "  /timers          list active timers (GET)\n"
+             "  /timer?id=<id>   cancel a timer (POST)\n"
+             "  /delivery        delivery receipts stats (GET; ?detail=1 for\n"
+             "                   the per-timer receipt list)\n"
+            "the daemon binds a port only with --serve (or an explicit\n"
+            "--port); with no arguments the API guide is printed\n"
+            "  --host <addr>      bind address (default 127.0.0.1)\n"
+            "  --port <n>         port (default 7655)\n"
+            "  --serve            run as the HTTP daemon\n"
+            "  --body <text>      request body for the operation, instead\n"
+            "                     of reading stdin\n"
+            "  --exomind <url>    storage backend (default http://127.0.0.1:7654)\n"
+            "  --token <t>        require 'Authorization: Bearer <t>'\n"
+            "  --rate-limit <n>   max requests/second (429 beyond)\n"
+            "  --log-level <error|warn|info|debug>\n"
+            "  --help             show this help\n"
+            "  --version          show version\n"
+            "  --completion <prefix> tab completion support\n"
+            "  --tutorial <name>  show a tutorial (name: getting_started, scheduling_basics)\n"
+            "  --getting-started  show the getting started guide\n"
+            "env: EXOSCHED_TOKEN same as --token\n"
+            "tab completion: enable with `source <(exosched --completion <prefix>)`\n"
+            "command history: commands are saved to $HOME/.exomind_history\n",
+            argv0, argv0);
 }
 
 /* keeps retrying the startup reload until exomind answers; runs detached so
@@ -155,6 +161,10 @@ int main(int argc, char **argv)
     const char *body_arg = "";
     int want_server = 0; /* --serve or an explicit --port requested */
 
+    /* Check for tab completion first */
+    if (exo_cli_handle_completion(argc, argv))
+        return 0;
+
     /* a leading /operation is a one-shot console op: run it in-process */
     const char *console_path = (argc >= 2 && argv[1][0] == '/') ? argv[1]
                                                                 : NULL;
@@ -202,6 +212,17 @@ int main(int argc, char **argv)
             return 0;
         } else if (!strcmp(a, "--version") || !strcmp(a, "-v")) {
             printf("exosched v%s\n", EXOSCHED_VERSION);
+            return 0;
+        } else if (!strcmp(a, "--tutorial")) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "exosched: --tutorial requires a tutorial name\n");
+                fprintf(stderr, "Available tutorials: getting_started, scheduling_basics\n");
+                return 1;
+            }
+            exo_cli_show_tutorial(argv[++i]);
+            return 0;
+        } else if (!strcmp(a, "--getting-started")) {
+            exo_cli_show_getting_started();
             return 0;
         } else {
             fprintf(stderr, "exosched: unknown argument %s\n", a);

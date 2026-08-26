@@ -7,7 +7,7 @@ CFLAGS  += -MMD -MP
 LDFLAGS ?= -pthread
 
 SRC := src/main.c src/http.c src/store.c src/util.c src/router.c src/update.c
-OBJ := $(SRC:src/%.c=build/%.o) build/exo_common.o
+OBJ := $(SRC:src/%.c=build/%.o) build/exo_common.o build/exo_cli.o
 DEP := $(OBJ:.o=.d)
 BIN := build/exomind
 
@@ -23,6 +23,9 @@ build/%.o: src/%.c | build
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 build/exo_common.o: common/exo.c common/exo.h | build
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+build/exo_cli.o: common/exo_cli.c common/exo_cli.h | build
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 -include $(DEP)
@@ -54,6 +57,12 @@ exocontext:
 test-exocontext: all
 	$(MAKE) -C exocontext test
 
+exogit:
+	$(MAKE) -C exogit
+
+test-exogit: exogit
+	$(MAKE) -C exogit test
+
 exokit:
 	$(MAKE) -C exokit
 
@@ -62,6 +71,12 @@ test-exokit: exokit exoflow
 	@if [ -f exoflow/test/test-integration.sh ]; then \
 		bash exoflow/test/test-integration.sh; \
 	fi
+
+exogpl:
+	$(MAKE) -C exogpl
+
+test-exogpl: exogpl
+	$(MAKE) -C exogpl test
 
 exodoc:
 	$(MAKE) -C exodoc
@@ -194,17 +209,17 @@ test-exodoc: exodoc
 		fi; \
 	fi
 
-.PHONY: all all-stack test clean exosched test-exosched exoflow test-exoflow exodoc test-exodoc exoqms qms-modules test-exoqms audit-stack qms-universal-test exocrawl test-exocrawl exocontext test-exocontext exokit test-exokit install
+.PHONY: all all-stack test clean exosched test-exosched exoflow test-exoflow exodoc test-exodoc exoqms qms-modules test-exoqms audit-stack qms-universal-test exocrawl test-exocrawl exocontext test-exocontext exogit test-exogit exogpl test-exogpl exokit test-exokit install
 
 # build every module of the stack (parallel-safe: make -j all-stack)
-all-stack: all exosched exoflow exodoc exoqms exocrawl exocontext exokit qms-modules
+all-stack: all exosched exoflow exodoc exoqms exocrawl exocontext exogit exogpl exokit qms-modules
 
 # install all modules as `exo<name>` console binaries + `<name>-server`
 # symlinks (MCP mode) + batch tools. Usage:
 #   make install PREFIX=~/.local     (default /usr/local)
-install: all exosched exoflow exodoc exoqms exocrawl exocontext exokit
+install: all exosched exoflow exodoc exoqms exocrawl exocontext exogit exogpl exokit qms-modules
 	install -d $(DESTDIR)$(PREFIX)/bin
-	for b in exomind exosched exoflow exodoc exoqms exocrawl exocontext exokit; do \
+	for b in exomind exosched exoflow exodoc exoqms exocrawl exocontext exogit exokit; do \
 		case "$$b" in \
 			exomind) src=build/exomind ;; \
 			exosched) src=exosched/build/exosched ;; \
@@ -213,10 +228,25 @@ install: all exosched exoflow exodoc exoqms exocrawl exocontext exokit
 			exoqms) src=exoqms/build/exoqms ;; \
 			exocrawl) src=exocrawl/build/exocrawl ;; \
 			exocontext) src=exocontext/build/exocontext ;; \
+			exogit) src=exogit/exogit ;; \
+			exogpl) src=exogpl/exogpl ;; \
 			exokit) src=exokit/build/exokit ;; \
 		esac; \
 		install -m 0755 "$$src" "$(DESTDIR)$(PREFIX)/bin/$$b"; \
 		ln -sf "$$b" "$(DESTDIR)$(PREFIX)/bin/$$b-server"; \
 	done
-	@echo "installed to $(DESTDIR)$(PREFIX)/bin (console: exo<name>, MCP: <name>-server)"
+	# QMS field modules (code-safety, ui-audit, asset-logic analyzers)
+	for b in exoqms-code exoqms-ui exoqms-svg; do \
+		case "$$b" in \
+			exoqms-code) src=exoqms/code/build/exoqms-code ;; \
+			exoqms-ui) src=exoqms/ui/build/exoqms-ui ;; \
+			exoqms-svg) src=exoqms/svg/build/exoqms-svg ;; \
+		esac; \
+		if [ -x "$$src" ]; then \
+			install -m 0755 "$$src" "$(DESTDIR)$(PREFIX)/bin/$$b"; \
+		else \
+			echo "WARN: $$src not found (module branch not merged), skipping $$b"; \
+		fi; \
+	done
+	@echo "installed to $(DESTDIR)$(PREFIX)/bin (console: exo<name>, MCP: <name>-server, QMS field: exoqms-code/ui/svg)"
 

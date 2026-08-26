@@ -1,0 +1,11 @@
+it would be great if the release packages were directly uploaded to the github without human intervention, because some times the work is fully remote, and manual upload is just not possible now, but would otherwise need days/weeks to for example bring out an update to fix a critical security issue
+
+
+got an idea about how to improve code quality
+
+the idea is to add another scraper tool, but for github/gitlab specificaly, reason being, the Agent writes much better and more proffesional code, if it uses the code of simmilar applications written by others.
+for example specific features may be very efficiently implemented, but the Agent cant one shot it, but when scraping for that implementation on github, the agent can also analyze the commits and the evolution of the code from the moment it was introduced to the working implementation, it allows the agent to understand the thoughts of the developer, and allows to do simmilar decisions, and if the agent discovers multiple instances of the implementation of such or a very simmilar function, it scales dramaticaly, allowing to sometimes 20x-50x performance, in rare cases even 100x.
+
+since its a search and analyse type of tool, it should also like the web scraper, remove all unnecesery graphical wraping and leave out only the nessesery pices of code, to save tokens, it also may be sensible to use the web scraper as a base
+
+this software should be able to extract information based on the prompt, allowing the agent to narrow down the search, and when narrowed enough, it should be able to extract all commits and stripp them of the unnecesery parts (for example, from the base code, adding only the changed parts with each commit, instead of the whole code base, since it does not make much sense if in a 2000 line code only 10 lines were changed to 7 lines, why bother with the other aprox 1990 lines if there were no changes to them?) and finaly deliver the key elements to the aggent so it can digest and think it over

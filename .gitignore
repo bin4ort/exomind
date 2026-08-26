@@ -6,3 +6,6 @@ build/
 # release artifacts (built by packaging/release.sh, shipped via GitHub releases)
 dist/
 packaging/*.tar.gz
+
+# module-level build artifacts
+*.so
