@@ -866,8 +866,13 @@ assert_contains "mandate ack instruction" "agent:<your-id>:ready" "$r"
 # update pipeline (fetch -> pull -> make -> make install) is exercised
 # without network or a full rebuild.
 R="$(cd "$(dirname "$0")/.." && pwd)"
-UPDT=$(mktemp -d)
-git clone -q --shared "$R" "$UPDT/work" 2>/dev/null
+# Skip update tests if source is not a git repo (e.g., extracted from
+# tarball in makepkg — git archive strips .git/)
+if ! git -C "$R" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "SKIP update: source $R is not a git repo (tarball/extracted)"
+else
+    UPDT=$(mktemp -d)
+    git clone -q --shared "$R" "$UPDT/work" 2>/dev/null
 git init -q --bare "$UPDT/bare.git"
 git -C "$UPDT/work" config user.email updt@test
 git -C "$UPDT/work" config user.name updt
@@ -938,7 +943,8 @@ if echo "$BANNER_ERR" | grep -q "update available"; then
 else
     echo "SKIP update: banner tests (no newer version found / offline)"
 fi
-rm -rf "$UPDT"
+    rm -rf "$UPDT"
+fi
 
 if [ "$FAILS" -ne 0 ]; then
     cp "$DATA/server.log" /tmp/opencode/fail-server.log 2>/dev/null
