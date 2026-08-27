@@ -160,6 +160,38 @@ static int update_prefix(char *buf, size_t bufsz, const char *argv0)
     return 0;
 }
 
+static int cmp_version(const char *a, const char *b)
+{
+    if (!a || !b)
+        return 1;
+    int va[3] = {0}, vb[3] = {0};
+    sscanf(a, "%d.%d.%d", &va[0], &va[1], &va[2]);
+    sscanf(b, "%d.%d.%d", &vb[0], &vb[1], &vb[2]);
+    for (int i = 0; i < 3; i++) {
+        if (va[i] < vb[i]) return -1;
+        if (va[i] > vb[i]) return 1;
+    }
+    return 0;
+}
+
+static int get_binary_version(char *buf, size_t bufsz)
+{
+    char rp[4096];
+    ssize_t n = readlink("/proc/self/exe", rp, sizeof rp - 1);
+    if (n <= 0)
+        return -1;
+    rp[n] = '\0';
+    char cmd[EXO_CMD_CAP];
+    snprintf(cmd, sizeof cmd,
+             "strings '%s' 2>/dev/null | grep -oE 'exomind v?[0-9]+\\.[0-9]+\\.[0-9]+(-alpha\\.[0-9]+)?' | tail -1 | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+(-alpha\\.[0-9]+)?' | head -1",
+             rp);
+    char tmp[64];
+    if (sh_out(cmd, tmp, sizeof tmp) != 0 || !tmp[0])
+        return -1;
+    snprintf(buf, bufsz, "%s", tmp);
+    return 0;
+}
+
 int exo_update_self(const char *argv0)
 {
     const char *src = update_src();
@@ -208,8 +240,24 @@ int exo_update_self(const char *argv0)
     const char *bin = strrchr(argv0, '/');
     bin = bin ? bin + 1 : argv0;
     if (!strcmp(old, remote)) {
-        printf("exomind: up to date (v%s at %s)\n", EXOMIND_VERSION, old);
-        return 0;
+        char bver[64] = {0};
+        if (get_binary_version(bver, sizeof bver) == 0) {
+            int vcmp = cmp_version(bver, EXOMIND_VERSION);
+            if (vcmp == 0) {
+                printf("exomind: up to date (v%s at %s)\n",
+                       EXOMIND_VERSION, old);
+                return 0;
+            }
+            if (vcmp < 0) {
+                printf("exomind: binary version %s < source v%s, rebuilding\n",
+                       bver, EXOMIND_VERSION);
+            } else {
+                printf("exomind: binary version %s != source v%s, rebuilding\n",
+                       bver, EXOMIND_VERSION);
+            }
+        } else {
+            printf("exomind: cannot read binary version, rebuilding\n");
+        }
     }
     char ahead[64] = {0}, cnt[64] = {0};
     int ahead_cnt = 0;
@@ -274,5 +322,68 @@ int exo_update_self(const char *argv0)
     printf("exomind: restart '%s' to apply (hint: systemctl --user restart "
            "exo-exomind)\n",
            bin);
+    return 0;
+}
+
+static const char *detect_pm(void)
+{
+    if (access("/usr/bin/pacman", X_OK) == 0)
+        return "pacman";
+    if (access("/usr/bin/apt-get", X_OK) == 0)
+        return "apt";
+    if (access("/usr/bin/yum", X_OK) == 0)
+        return "yum";
+    if (access("/usr/bin/dnf", X_OK) == 0)
+        return "dnf";
+    if (access("/usr/bin/paru", X_OK) == 0)
+        return "paru";
+    if (access("/usr/bin/yay", X_OK) == 0)
+        return "yay";
+    return NULL;
+}
+
+static int pm_install(const char *pm, const char *pkg)
+{
+    if (!strcmp(pm, "pacman"))
+        return sh("sudo pacman -Sy --noconfirm %s 2>/dev/null", pkg);
+    if (!strcmp(pm, "paru") || !strcmp(pm, "yay"))
+        return sh("sudo %s -Sy --noconfirm %s 2>/dev/null", pm, pkg);
+    if (!strcmp(pm, "apt") || !strcmp(pm, "apt-get"))
+        return sh("sudo apt-get update -qq >/dev/null 2>&1 && sudo apt-get install -y %s 2>/dev/null",
+                  pkg);
+    if (!strcmp(pm, "yum"))
+        return sh("sudo yum install -y %s 2>/dev/null", pkg);
+    if (!strcmp(pm, "dnf"))
+        return sh("sudo dnf install -y %s 2>/dev/null", pkg);
+    return -1;
+}
+
+int exo_update_prebuilt(const char *argv0)
+{
+    const char *pm = detect_pm();
+    if (!pm) {
+        fprintf(stderr,
+                "exomind: error: no supported package manager found (need "
+                "pacman, apt, yum, dnf, paru, or yay)\n");
+        return 1;
+    }
+    const char *pkg = getenv("EXO_PREBUILT_PKG");
+    if (!pkg || !*pkg)
+        pkg = "exomind";
+    char ver[64];
+    snprintf(ver, sizeof ver, "exomind-%s", EXOMIND_VERSION);
+    printf("exomind: installing %s v%s via %s ...\n", pkg, EXOMIND_VERSION,
+           pm);
+    if (pm_install(pm, pkg) != 0) {
+        fprintf(stderr,
+                "exomind: error: %s install of '%s' failed — "
+                "try manually or use --update to build from source\n",
+                pm, pkg);
+        return 1;
+    }
+    printf("exomind: %s v%s installed via %s\n", pkg, EXOMIND_VERSION, pm);
+    printf("exomind: restart '%s' to apply (hint: systemctl --user restart "
+           "exo-exomind)\n",
+           strrchr(argv0, '/') ? strrchr(argv0, '/') + 1 : argv0);
     return 0;
 }

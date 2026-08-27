@@ -5,6 +5,7 @@
 
 int exo_update_available(char *info, size_t infosz);
 int exo_update_self(const char *argv0);
+int exo_update_prebuilt(const char *argv0);
 void exo_update_banner(const char *argv0);
 
 #endif
