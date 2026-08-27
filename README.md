@@ -1,4 +1,4 @@
-# exomind v0.4.0-alpha.1 — the AI-native software stack
+# exomind v0.4.1 — the AI-native software stack
 
 A software stack designed for, built by, and used by AI agents — with
 humans welcome as reviewers and operators. Eight components, zero
@@ -20,7 +20,7 @@ Each `exo<module> <path-and-query>` runs ONE API operation in-process and
 exits. No module binds a port unless it is explicitly told to serve.
 
 **License: GPL-3.0-only** (see [LICENSE](LICENSE)).
-**Status: Early Alpha** — the first packaged release is `v0.4.0-alpha.1`
+**Status: Early Alpha** — the first packaged release is `v0.4.1`
 (pacman + apt packages, see [Releasing](packaging/release.sh)).
 
 ## Getting Started
@@ -128,12 +128,12 @@ an `<name>-server` symlink. The `exomind-server` symlink is the stack-wide
 MCP server (see below); sibling `-server` symlinks exist for naming
 parity.
 
-Packaged (Early Alpha `v0.4.0-alpha.1`, built by `packaging/release.sh`):
+Packaged (Early Alpha `v0.4.1`, built by `packaging/release.sh`):
 
-- **pacman/Arch**: download `exomind-0.4.0alpha1-1-x86_64.pkg.tar.zst` from
+- **pacman/Arch**: download `exomind-0.4.1-1-x86_64.pkg.tar.zst` from
   the GitHub release and `pacman -U` it (or `makepkg -i` in `packaging/`).
-- **apt/Debian-Ubuntu**: download `exomind_0.4.0~alpha1-1_amd64.deb` and
-  `sudo apt install ./exomind_0.4.0~alpha1-1_amd64.deb` (or build with
+- **apt/Debian-Ubuntu**: download `exomind_0.4.1-1_amd64.deb` and
+  `sudo apt install ./exomind_0.4.1-1_amd64.deb` (or build with
   `dpkg-buildpackage`).
 - or the source tarball + SHA256SUMS from the release, verified with
   `sha256sum -c`.
@@ -149,10 +149,10 @@ everything (it needs `git`, `make`, and, when present, `makepkg` and
 ```
 dist/exomind-<version>.tar.gz      # source tarball for GitHub
 dist/SHA256SUMS                    # checksums
-dist/exomind-0.4.0alpha1.tar.gz    # Arch source (pkgver-named)
-packaging/exomind-0.4.0alpha1.tar.gz
+dist/exomind-0.4.1.tar.gz          # source tarball (also used by Arch)
+packaging/exomind-0.4.1.tar.gz     # copy next to PKGBUILD
 packaging/exomind.SRCINFO          # pacman/AUR metadata (makepkg-generated)
-dist/exomind_0.4.0~alpha.1-1_amd64.deb
+dist/exomind_0.4.1-1_amd64.deb     # Debian/Ubuntu package
 ```
 
 If you run `makepkg` directly, the source tarball must be named
@@ -328,7 +328,7 @@ a human-only, terminal action and is deliberately invisible to agents:
 ```sh
 exomind-server --update
 
-# exomind: updated e35b77d -> 4463ea1 (2 commits, v0.4.0-alpha.1)
+# exomind: updated e35b77d -> 4463ea1 (2 commits, v0.4.1)
 # exomind: binaries installed into /home/you/.local/bin
 # exomind: restart 'exomind-server' to apply (hint: systemctl --user
 #           restart exo-exomind)
@@ -346,7 +346,7 @@ daemon itself; the hint does a `systemctl --user restart` .
 only when updates exist — prints a notice to **stderr**:
 
 ```
-exomind-server v0.4.0-alpha.1: update available (git e35b77d -> 4463ea1, 2 commits behind origin/main)
+exomind-server v0.4.1: update available (git e35b77d -> 4463ea1, 2 commits behind origin/main)
   run 'exomind-server --update' to fetch, rebuild and reinstall into /home/you/.local/bin
   (EXO_UPDATE_CHECK=0 silences this notice)
 ```
@@ -371,7 +371,7 @@ and cannot be nudged into updating mid-work. Notes:
 ```sh
 $ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
     | exomind-server
-{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"exomind-server","version":"0.4.0-alpha.1"}}}
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"exomind-server","version":"0.4.1"}}}
 ```
 
 `tools/list` returns the 20 tools (13 own + 7 siblings). A call to an

@@ -11,9 +11,9 @@
 set -u
 cd "$(dirname "$0")/.."
 
-VERSION="${VERSION:-0.4.0-alpha.1}"
-PKGVER_PACMAN="$(printf '%s' "$VERSION" | sed 's/-alpha\./alpha/')" # 0.4.0alpha1
-PKGVER_DEB="$(printf '%s' "$VERSION" | tr '-' '~')"                    # 0.4.0~alpha1
+VERSION="${VERSION:-0.4.1}"
+PKGVER_PACMAN="$(printf '%s' "$VERSION" | sed 's/-alpha\./alpha/')" # 0.4.1
+PKGVER_DEB="$(printf '%s' "$VERSION" | tr '-' '~')"                    # 0.4.1
 DIST=dist/exomind-$VERSION
 mkdir -p dist
 

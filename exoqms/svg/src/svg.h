@@ -8,7 +8,7 @@
 
 #include <stddef.h>
 
-#define SVG_VERSION "0.4.0-alpha.1"
+#define SVG_VERSION "0.4.1"
 
 /* ---------- util ---------- */
 typedef struct buf { char *p; size_t len, cap; } buf_t;

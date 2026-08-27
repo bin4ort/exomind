@@ -1,4 +1,4 @@
-# exosched v0.4.0-alpha.1 — the alarm clock for AI agents
+# exosched v0.4.1 — the alarm clock for AI agents
 
 A scheduled-reminders + WebSocket-push daemon (C11, zero dependencies:
 libc + pthread only). Its durable state lives entirely inside

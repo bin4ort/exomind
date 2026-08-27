@@ -1,4 +1,4 @@
-# exocrawl standard v0.4.0-alpha.1 — the research standard for the AI-native stack
+# exocrawl standard v0.4.1 — the research standard for the AI-native stack
 
 Normative document. This standard defines the requirements for the
 `exocrawl` daemon — AI-native web research with private metasearch,
@@ -20,7 +20,7 @@ concurrent scraping with per-host pacing, and opt-in robots.txt politeness.
   `exocrawl` followed by a non-empty first paragraph describing its
   purpose (AI-native web research daemon).
 - **c8 version** — the document contains a version token matching `v?X.Y.Z`
-  (the first such token: `v0.4.0-alpha.1`).
+  (the first such token: `v0.4.1`).
 
 ## 3. API surface
 

@@ -1,4 +1,4 @@
-# exocrawl v0.4.0-alpha.1 — the research daemon
+# exocrawl v0.4.1 — the research daemon
 
 **AI-native web research daemon — token-efficient, private, concurrent.**
 

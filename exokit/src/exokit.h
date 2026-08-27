@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define EXOKIT_VERSION "0.4.0-alpha.1"
+#define EXOKIT_VERSION "0.4.1"
 #define MAX_LINE (64u * 1024u)
 #define MAX_FN 256
 #define MAX_EXAMPLES 2000

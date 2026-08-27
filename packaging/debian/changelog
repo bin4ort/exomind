@@ -1,4 +1,4 @@
-exomind (0.4.0~alpha1-1) unstable; urgency=medium
+exomind (0.4.1-1) unstable; urgency=medium
 
   * Early Alpha release: console + MCP server surface, project memory,
     backups, memory associations (outdate/link/history/recall), mandate,

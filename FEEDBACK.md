@@ -15,7 +15,7 @@ before any final answer.
 
 ## Journal
 
-### 2026-08-18 — v0.4.0-alpha.1 system-wide switch session
+### 2026-08-18 — v0.4.1 system-wide switch session
 - [friction] `pkill -f 'pattern'` matched the invoking shell itself and
   killed the session (pattern appears in the bash -c cmdline). Fix used:
   `[x]` bracket self-exclusion. Idea: a shared swarm rule doc entry exists
@@ -95,7 +95,7 @@ before any final answer.
 - [bug] exocrawl `--cache <arg>` was parsed but hard-coded to
   127.0.0.1:7654; now parses host[:port]/URL (fixed by crawl agent).
 - [bug] exocrawl/exocontext GET / spec strings pinned v0.1.0 while the
-  version header says v0.4.0-alpha.1 (fixed in this session; sweeps
+  version header says v0.4.1 (fixed in this session; sweeps
   found zero remaining stale version literals in sources).
 - [friction] exocrawl handler signature churn (http_out->dout_t) when
   extracting dispatch; a stack-wide http_dispatch-
@@ -184,7 +184,7 @@ before any final answer.
   version token (c8), and the required sections (build, run, api, state,
   tests, honesty). Doc-debt gate: 70 pass, 0 fail (score 100%).
 - [fixed] ISSUE-018 follow-up: version pins in `exodoc/test/test.sh` and
-  `exokit/test/test.sh` had hardcoded version literals (`v0.4.0-alpha.1`).
+  `exokit/test/test.sh` had hardcoded version literals (`v0.4.1`).
   Fixed: `exodoc` now derives the expected version from the binary's
   `--version` output; `exokit` checks the version string is non-empty
   (never pin literals — per ISSUE-018 lesson).

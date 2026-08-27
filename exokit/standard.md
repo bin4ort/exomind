@@ -1,4 +1,4 @@
-# exokit standard v0.4.0-alpha.1 — the development-kit standard for the AI-native stack
+# exokit standard v0.4.1 — the development-kit standard for the AI-native stack
 
 Normative document. This standard defines the requirements for the
 `exokit` tool — the behavioral development kit that makes any software
@@ -20,7 +20,7 @@ software. The contract is the source of truth for behavior, not the code.
   `exokit` followed by a non-empty first paragraph describing its
   purpose (behavioral development kit: contract-first development).
 - **c8 version** — the document contains a version token matching `v?X.Y.Z`
-  (the first such token: `v0.4.0-alpha.1`).
+  (the first such token: `v0.4.1`).
 
 ## 3. Operations
 

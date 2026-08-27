@@ -1,4 +1,4 @@
-# exoqms-code v0.4.0-alpha.1 — the code-safety analyzer
+# exoqms-code v0.4.1 — the code-safety analyzer
 
 **Multi-language QMS code-safety module**: C/C++ analysis,
 shell and python line-based adapters, and a generic text-rule engine —

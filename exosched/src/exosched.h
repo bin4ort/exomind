@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define EXOSCHED_VERSION "0.4.0-alpha.1"
+#define EXOSCHED_VERSION "0.4.1"
 #define EXO_KEY_PREFIX "exosched:timer:"
 #define TIMER_ID_MAX 40
 #define MAX_MSG (64u * 1024u)

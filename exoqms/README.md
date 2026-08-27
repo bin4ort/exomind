@@ -1,6 +1,6 @@
-# exoqms v0.4.0-alpha.1 — the Quality Management System for the AI-native stack
+# exoqms v0.4.1 — the Quality Management System for the AI-native stack
 
-`exoqms` v0.4.0-alpha.1 is a QMS daemon (C11, zero dependencies: libc + pthread
+`exoqms` v0.4.1 is a QMS daemon (C11, zero dependencies: libc + pthread
 only) that turns the ISO 9000 family into running code for the exomind
 stack. It holds quality objectives, runs ISO 19011 audit programs
 against the live stack, records non-conformities (NCs) with a

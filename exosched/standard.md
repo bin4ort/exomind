@@ -1,4 +1,4 @@
-# exosched standard v0.4.0-alpha.1 — the scheduling standard for the AI-native stack
+# exosched standard v0.4.1 — the scheduling standard for the AI-native stack
 
 Normative document. This standard defines the requirements for the `exosched`
 daemon — scheduled reminders with WebSocket push — covering its API surface,
@@ -19,7 +19,7 @@ time for agents — the swarm's alarm clock.
   `exosched` followed by a non-empty first paragraph describing its
   purpose (scheduled reminders + WebSocket push, state in exomind).
 - **c8 version** — the document contains a version token matching `v?X.Y.Z`
-  (the first such token is the documented version: `v0.4.0-alpha.1`).
+  (the first such token is the documented version: `v0.4.1`).
 
 ## 3. API surface
 

@@ -1,4 +1,4 @@
-# exocontext standard v0.4.0-alpha.1 — the context-continuity standard for the AI-native stack
+# exocontext standard v0.4.1 — the context-continuity standard for the AI-native stack
 
 Normative document. This standard defines the requirements for the
 `exocontext` daemon — context continuity that compresses an agent's
@@ -21,7 +21,7 @@ reconstruct its working state from a single HTTP call.
   `exocontext` followed by a non-empty first paragraph describing its
   purpose (context continuity: bounded recency-ranked digest).
 - **c8 version** — the document contains a version token matching `v?X.Y.Z`
-  (the first such token: `v0.4.0-alpha.1`).
+  (the first such token: `v0.4.1`).
 
 ## 3. API surface
 

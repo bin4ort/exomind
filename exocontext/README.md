@@ -1,4 +1,4 @@
-# exocontext v0.4.0-alpha.1 — context continuity for AI agents
+# exocontext v0.4.1 — context continuity for AI agents
 
 A tiny daemon that compresses an agent's durable state into a bounded,
 recency-ranked digest: everything under `agent:<id>:*` plus the notes

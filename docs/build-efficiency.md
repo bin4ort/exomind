@@ -96,7 +96,7 @@ before/after evidence.
 - `touch common/exo.h; make -C exosched -n` before: *"Nothing to be
   done"* · after: rebuilds `main.o`, `http.o`, `exo_common.o` + relink.
 - Clean parallel: `make -j8 all-stack` → 3.9 s, 11 binaries, all
-  `--version` = `v0.4.0-alpha.1`.
+  `--version` = `v0.4.1`.
 - Suites after the change: exomind ALL TESTS PASSED (371), exosched
   82/0, exoflow 139/0, exoqms 160/0, exocrawl 68/0, exocontext 51/0,
   exodoc 36/0, exokit 50/0, exoqms-ui 35/0, exoqms-code 58/0,

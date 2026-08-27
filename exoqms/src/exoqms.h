@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <pthread.h>
 
-#define EXOQMS_VERSION "0.4.0-alpha.1"
+#define EXOQMS_VERSION "0.4.1"
 #define OBJ_KEY_PREFIX "exoqms:obj:"
 #define NC_KEY_PREFIX "exoqms:nc:"
 #define AUDIT_KEY_PREFIX "exoqms:audit:"

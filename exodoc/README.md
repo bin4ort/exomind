@@ -1,6 +1,6 @@
-# exodoc v0.4.0-alpha.1 — the documentation auditor for the AI-native stack
+# exodoc v0.4.1 — the documentation auditor for the AI-native stack
 
-`exodoc` v0.4.0-alpha.1 is a batch command-line auditor (C11, zero dependencies:
+`exodoc` v0.4.1 is a batch command-line auditor (C11, zero dependencies:
 libc only) that checks component documentation against the ISO 9001
 §7.5-flavored standard in [standard.md](standard.md) — the stack's quality
 gate. It reads the stack manifest `docs/stack.tsv` (one component per line:

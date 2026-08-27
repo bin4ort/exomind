@@ -1,4 +1,4 @@
-# exoflow standard v0.4.0-alpha.1 — the orchestrator standard for the AI-native stack
+# exoflow standard v0.4.1 — the orchestrator standard for the AI-native stack
 
 Normative document. This standard defines the requirements for the `exoflow`
 daemon — a dependency-graph task orchestrator for agent swarms — covering
@@ -19,7 +19,7 @@ with `POST /step`. All durable state lives in `exomind`.
   `exoflow` followed by a non-empty first paragraph describing its
   purpose (dependency-graph task orchestrator for AI-agent swarms).
 - **c8 version** — the document contains a version token matching `v?X.Y.Z`
-  (the first such token: `v0.4.0-alpha.1`).
+  (the first such token: `v0.4.1`).
 
 ## 3. API surface
 

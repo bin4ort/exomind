@@ -907,8 +907,10 @@ git -C "$UPDT/work" commit -q --allow-empty -m "local ahead"
 out=$(EXO_UPDATE_DIR="$UPDT/work" EXO_UPDATE_PREFIX="$UPDT/prefix" \
     "$BIN" --update 2>/dev/null); rc=$?
 assert_eq "update: local ahead exit 0" "0" "$rc"
-assert_contains "update: local ahead line" "local" "$out"
-assert_contains "update: local ahead nothing to pull" "nothing to pull" "$out"
+assert_contains "update: local ahead rebased" "updated" "$out"
+assert_eq "update: local ahead rebased onto remote" \
+    "$(git -C "$UPDT/work" rev-parse origin/$UBR)" \
+    "$(git -C "$UPDT/work" merge-base origin/$UBR HEAD)"
 
 out=$(EXO_UPDATE_DIR=/nonexistent "$BIN" --update 2>&1); rc=$?
 assert_eq "update: missing source dir exit 1" "1" "$rc"

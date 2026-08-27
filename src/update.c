@@ -211,24 +211,37 @@ int exo_update_self(const char *argv0)
         printf("exomind: up to date (v%s at %s)\n", EXOMIND_VERSION, old);
         return 0;
     }
-    char ahead[64];
+    char ahead[64] = {0}, cnt[64] = {0};
+    int ahead_cnt = 0;
+    int stash_ok = sh("git -C '%s' stash push --include-untracked -m exomind-update >/dev/null 2>&1",
+                      sqdir) == 0;
     if (sh_out("git -C '%s' rev-list --count origin/%s..HEAD 2>/dev/null",
-               ahead, sizeof ahead, sqdir, branch) == 0 && ahead[0] &&
-        strcmp(ahead, "0")) {
-        printf("exomind: local %s is %s commit%s ahead of origin/%s — "
-               "nothing to pull\n",
-               branch, ahead, strcmp(ahead, "1") ? "s" : "", branch);
-        return 0;
-    }
-    char cnt[64];
+               ahead, sizeof ahead, sqdir, branch) != 0)
+        ahead[0] = '\0';
+    ahead_cnt = ahead[0] ? atoi(ahead) : 0;
     if (sh_out("git -C '%s' rev-list --count HEAD..origin/%s 2>/dev/null",
-               cnt, sizeof cnt, sqdir, branch) != 0)
+                cnt, sizeof cnt, sqdir, branch) != 0)
         snprintf(cnt, sizeof cnt, "?");
-    if (sh("git -C '%s' pull --ff-only --quiet origin %s >/dev/null 2>&1",
-           sqdir, branch) != 0) {
+    int pull_rc;
+    if (ahead_cnt) {
+        pull_rc = sh("git -C '%s' pull --rebase --quiet origin %s >/dev/null 2>&1",
+                      sqdir, branch);
+    } else {
+        pull_rc = sh("git -C '%s' pull --ff-only --quiet origin %s >/dev/null 2>&1",
+                      sqdir, branch);
+    }
+    if (stash_ok) {
+        if (sh("git -C '%s' stash pop --index >/dev/null 2>&1", sqdir) != 0) {
+            fprintf(stderr,
+                    "exomind: warning: could not restore stashed changes "
+                    "(conflict during pop) — run 'git stash pop' in %s to recover\n",
+                    src);
+        }
+    }
+    if (pull_rc != 0) {
         fprintf(stderr,
-                "exomind: error: git pull failed (uncommitted local "
-                "changes?) — resolve in %s and re-run\n",
+                "exomind: error: git pull failed (conflicts or "
+                "uncommitted changes?) — resolve in %s and re-run\n",
                 src);
         return 1;
     }

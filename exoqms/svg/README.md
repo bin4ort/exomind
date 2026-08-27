@@ -1,4 +1,4 @@
-# exoqms-svg v0.4.0-alpha.1 — the asset-logic analyzer
+# exoqms-svg v0.4.1 — the asset-logic analyzer
 
 **The asset-logic QMS auditor for generated SVG.** A zero-dependency C11
 static analyzer (ISO honesty: an *approximate* geometry analysis, not a
@@ -7,7 +7,7 @@ renderer — see Limitations). It reads an SVG file (or a directory of
 taste: "an AI made tree SVG, unless it's as simple as a tapered stem and
 a round crown, is almost certainly anything but an actual tree."
 Generated graphics look plausible but are structurally wrong; this
-module catches that. v0.4.0-alpha.1 ships the **tree** rule-set; shape
+module catches that. v0.4.1 ships the **tree** rule-set; shape
 kinds are pluggable rule-sets behind the same `audit_run` entry point.
 
 Part of the [exomind stack](../../README.md) — the main README is the

@@ -103,7 +103,7 @@ timeout 30 "$BIN" "$TDIR/missing.html" > /dev/null 2>&1
 check "missing target: exit 2" "$([ $? -eq 2 ] && echo 0 || echo 1)" ""
 timeout 30 "$BIN" --bogus 2>/dev/null
 check "unknown option: exit 2" "$([ $? -eq 2 ] && echo 0 || echo 1)" ""
-timeout 30 "$BIN" --version | grep -q "exoqms-ui 0.4.0-alpha.1"
+timeout 30 "$BIN" --version | grep -q "exoqms-ui 0.4.1"
 check "--version" "$([ $? -eq 0 ] && echo 0 || echo 1)" ""
 timeout 30 "$BIN" --help | grep -q "usage:"
 check "--help" "$([ $? -eq 0 ] && echo 0 || echo 1)" ""

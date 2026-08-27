@@ -1,6 +1,6 @@
-# exoflow v0.4.0-alpha.1 — the orchestrator for agent swarms
+# exoflow v0.4.1 — the orchestrator for agent swarms
 
-`exoflow` v0.4.0-alpha.1 is a dependency-graph task orchestrator for AI-agent swarms. A flow
+`exoflow` v0.4.1 is a dependency-graph task orchestrator for AI-agent swarms. A flow
 is a DAG of steps; an arbitrary number of agents pull work from it with
 `GET /next`, execute, and report back with `POST /step`. exoflow guarantees
 that every step is claimed by exactly one worker and only becomes runnable

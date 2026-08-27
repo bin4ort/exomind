@@ -1,4 +1,4 @@
-# exoqms-ui v0.4.0-alpha.1 — the UI quality auditor
+# exoqms-ui v0.4.1 — the UI quality auditor
 
 **The UI quality auditor for the exomind stack.** A zero-dependency C11
 static analyzer (ISO honesty: it is an *approximate* static analysis, not

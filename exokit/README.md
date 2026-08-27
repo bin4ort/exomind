@@ -1,4 +1,4 @@
-# exokit v0.4.0-alpha.1 — the behavioral development kit
+# exokit v0.4.1 — the behavioral development kit
 
 Every software carries its own development kit: a `kit/` directory that
 is the software's SDK-for-itself. Not a library, not a framework — a
