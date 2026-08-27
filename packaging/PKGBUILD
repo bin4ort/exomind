@@ -33,6 +33,8 @@ build() {
 
 check() {
     cd "$srcdir"/exomind-*/
+    # Skip network-dependent update banner tests in isolated build environments
+    export EXO_UPDATE_SKIP=1
     if ! make test > test.log 2>&1; then
         echo "check() failed — last test output:"
         tail -30 test.log
