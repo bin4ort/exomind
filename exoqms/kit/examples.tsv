@@ -1,0 +1,13 @@
+# fn<TAB>args<TAB>expected<TAB>desc<TAB>err(0/1)
+# args use '|' to separate sub-fields (never appears inside a valid token).
+ci_prefix	GET /x|GET	1	line starts with prefix
+ci_prefix	POST /x|GET	0	line does not start with prefix
+ci_prefix	hello world|HELLO	1	case-insensitive match
+esc_line	a\b	a\\b	escape a backslash
+unesc_line	a\\b	a\b	inverse of esc_line
+unesc_line	a\\tb	a\tb	unescape a backslash-t (round-trips esc_line)
+json_escape	a"b	a\"b	JSON-escape a quote
+json_field	{"name":"x"}|name	x	extract string field
+json_field	{"age":5}|age	5	extract numeric field (as text)
+json_arr_strings	["a","b"]	a,b	two-element string array
+json_arr_strings	["one","two","three"]	one,two,three	three-element string array

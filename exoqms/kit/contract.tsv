@@ -1,0 +1,10 @@
+# fn<TAB>sig<TAB>pure(0/1)<TAB>side_effects<TAB>notes
+# exoqms/src/util.c — the module's self-SDK surface (rule R1). Only the
+# deterministic, protocol-friendly pure functions are curated here (no
+# clock/rand-based or tab/newline-dependent helpers).
+ci_prefix	int ci_prefix(const char *line, const char *prefix)	1		case-insensitive line-prefix test
+esc_line	char *esc_line(const char *s, size_t n)	1		returns malloc'd shell-escaped string
+unesc_line	char *unesc_line(const char *s)	1		returns malloc'd unescaped string (inverse of esc_line)
+json_escape	char *json_escape(const char *s, size_t n)	1		returns malloc'd JSON-escaped string
+json_field	char *json_field(const char *json, size_t len, const char *field)	1		returns malloc'd value of a JSON field
+json_arr_strings	char **json_arr_strings(const char *elem, size_t elen, size_t *n)	1		returns malloc'd NULL-terminated array of JSON string values

@@ -30,7 +30,7 @@ build/exo_cli.o: common/exo_cli.c common/exo_cli.h | build
 
 -include $(DEP)
 
-test: $(BIN) kit kit-exogit kit-exosched kit-exoflow kit-exodoc kit-exocrawl kit-exocontext
+test: $(BIN) kit kit-exogit kit-exosched kit-exoflow kit-exodoc kit-exocrawl kit-exocontext kit-exoqms
 	bash test/test.sh
 
 exosched:
@@ -119,7 +119,11 @@ kit-exocontext: exokit
 	$(MAKE) -C exocontext/kit verify
 	$(MAKE) -C exocontext/kit audit
 
-test-kit: kit kit-exogit kit-exosched kit-exoflow kit-exodoc kit-exocrawl kit-exocontext
+kit-exoqms: exokit
+	$(MAKE) -C exoqms/kit verify
+	$(MAKE) -C exoqms/kit audit
+
+test-kit: kit kit-exogit kit-exosched kit-exoflow kit-exodoc kit-exocrawl kit-exocontext kit-exoqms
 
 exogpl:
 	$(MAKE) -C exogpl

@@ -9,3 +9,6 @@ packaging/*.tar.gz
 
 # module-level build artifacts
 *.so
+
+# compiled exokit kit runners (built by make kit-*)
+**/kit/runners/c/run

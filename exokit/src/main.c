@@ -302,7 +302,7 @@ int cmd_init(int argc, char **argv)
               "# exokit kit config\n"
               "# runner<TAB><command>: executed per example; reads one line\n"
               "#   `fn<TAB>args` on stdin, prints one result line on stdout\n"
-              "runner\t./kit/runners/c/run\n"
+              "runner\trunners/c/run\n"
               "# max_examples<TAB><n>: audit cap (default 50)\n"
               "max_examples\t50\n");
     snprintf(p, sizeof p, "%s/contract.tsv", sub);

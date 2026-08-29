@@ -600,6 +600,7 @@ make kit-exoflow   # exoflow flow_id_ok/safe_token: 15 examples
 make kit-exodoc    # exodoc ver_eq/range_str/word_char/is_ws_char: 20 examples
 make kit-exocrawl  # exocrawl resolve_url/strip_html: 10 examples
 make kit-exocontext # exocontext utf8_decode/ci_prefix/esc_line/...: 19 examples
+make kit-exoqms    # exoqms pure helpers (util.c): ci_prefix/esc_line/json_field/...: 11 examples
 # or directly with the STABLE system exokit while developing the next version:
 exokit verify --kit exoflow/kit
 exokit audit  --kit exocrawl/kit
@@ -607,7 +608,7 @@ exokit audit  --kit exocrawl/kit
 
 The runners `#include` the component sources so the verified functions are the
 ones actually shipped. `make test` runs every kit and the functional suites;
-the full stack is **112 behavioral examples, all green, all audits passing**.
+the full stack is **123 behavioral examples, all green, all audits passing**.
 
 When developing the next version, the kits are scaffolded and verified with the
 **system-wide exokit** (`~/.local/bin/exokit`, the previous release) via
