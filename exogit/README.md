@@ -1,10 +1,13 @@
-# exogit v0.1.0 — AI-native code-research daemon (GitHub / GitLab)
+# exogit v0.1.0 — AI-native GitHub content analyzer (GitLab too)
 
-A code-research daemon for GitHub and GitLab: search source code, fetch
-individual files, list repository trees, and extract design evolution
-from commit diffs. It runs with zero external dependencies (C11 + libc
-only) and stores no state — it is a stateless research tool that can
-serve as a console operation or an HTTP daemon.
+**Primary purpose: analyze GitHub content efficiently** — search source code,
+fetch individual files, map a repository's whole tree, and extract how a file
+evolved from commit diffs. GitLab is supported as a secondary provider. Local
+/ console use is a convenience, not the mission.
+
+exogit runs with zero external dependencies (C11 + libc only) and stores no
+state — it is a stateless research tool that can serve as a console operation
+or an HTTP daemon.
 
 Part of the [exomind stack](../README.md) — the main README is the full
 stack reference (this file has the complete exogit documentation).
@@ -67,7 +70,8 @@ stack help work as before.
 | GET    | /ping                                   | liveness: `pong`                     |
 | GET    | /search?q=<terms>[&lang=c][&n=10]       | search code on GitHub/GitLab         |
 | GET    | /file?url=<url>[&linenos=1][&max=60000] | fetch ONE source file                |
-| GET    | /repo?repo=<o/r>[&branch=main][&path=]  | list repository tree                 |
+| GET    | /tree?repo=<o/r>[&branch=auto]          | the WHOLE repo file map (1 request)  |
+| GET    | /repo?repo=<o/r>[&branch=main][&path=]  | list ONE directory                   |
 | GET    | /commits?repo=<o/r>&path=<file>         | design evolution (diff-only commits) |
 
 Errors are `error: <reason>` with HTTP 4xx/5xx.
@@ -96,12 +100,28 @@ truncated at `max` bytes (default 60000, configurable). Token-efficient
 by default.
 
 ```
-GET /file?url=https://github.com/str4y4ok/exomind/blob/main/src/main.c
+GET /file?url=https://github.com/octocat/Hello-World/blob/main/src/main.c
 GET /file?repo=exomind&path=src/main.c&branch=main&linenos=0
 ```
 
 Accepts GitHub raw URLs, GitHub blob URLs, GitLab blob URLs, and the
 `repo/path/branch` parameter form. `linenos=0` drops line numbers.
+
+### /tree — Whole-Repository File Map
+
+**The GitHub-first entry point.** One recursive request lists the *entire*
+repository tree (type + size + path) — the map an agent needs before
+deciding which files to `/file`. It beats the paginated `/repo` contents API
+(which caps at 100 entries per directory) and auto-detects the default branch
+when `branch=` is omitted.
+
+```
+GET /tree?repo=octocat/Hello-World
+GET /tree?repo=octocat/Hello-World&branch=master
+```
+
+Returns one line per entry: `<type> <size> <path>`. If GitHub truncates a very
+large tree it says so; narrow with `path=` (a subdirectory) in that case.
 
 ### /repo — Repository Listing
 
@@ -109,7 +129,7 @@ List a repository tree (or subdirectory) showing file/directory names
 and types (f for file, d for directory).
 
 ```
-GET /repo?repo=exomind&path=src&branch=main
+GET /repo?repo=octocat/Hello-World&path=src
 GET /repo?repo=https://github.com/octocat/Hello-World
 ```
 
@@ -155,13 +175,16 @@ The binary can run a single API operation and exit — no daemon needed:
 ./exogit/exogit /search?q=exomind+memory&lang=c
 
 # Fetch a file
-./exogit/exogit /file?url=https://github.com/str4y4ok/exomind/blob/main/src/main.c
+./exogit/exogit /file?url=https://github.com/octocat/Hello-World/blob/main/src/main.c
 
-# List a repo tree
-./exogit/exogit /repo?repo=exomind&path=src
+# Map a whole repo (the GitHub-first entry point)
+./exogit/exogit /tree?repo=octocat/Hello-World
+
+# List a repo directory
+./exogit/exogit /repo?repo=octocat/Hello-World&path=src
 
 # Extract design evolution
-./exogit/exogit /commits?repo=exomind&path=src/main.c
+./exogit/exogit /commits?repo=octocat/Hello-World&path=README.md
 ```
 
 Perfect for scripting, CI pipelines, and one-off research.

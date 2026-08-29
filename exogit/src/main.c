@@ -20,7 +20,9 @@
 const char *exogit_spec(void)
 {
     return
-"exogit v" EXO_VERSION " - AI-native code-research daemon (GitHub / GitLab)\n"
+"exogit v" EXO_VERSION " - AI-native GitHub content analyzer (GitLab too)\n"
+"PRIMARY PURPOSE: analyze GitHub content efficiently — find code, read files,\n"
+"map a repo's tree, trace how a file evolved. Local/console use is secondary.\n"
 "plain text, lowercase ok/error replies, token-efficient\n"
 "GET / - this specification\n\n"
 "GET /search?q=<terms>[&lang=c][&n=10]\n"
@@ -30,18 +32,21 @@ const char *exogit_spec(void)
 "GET /file?url=<raw-or-repo-url>  (or repo=<o/r>&path=<file>&branch=)\n"
 "  fetch ONE source file. Line-numbered, truncated at max= bytes (default\n"
 "  60000). Add linenos=0 to drop line numbers. Token-efficient by default.\n\n"
+"GET /tree?repo=<o/r>[&branch=main]\n"
+"  the repo FILE MAP: one recursive request lists the ENTIRE tree (type +\n"
+"  size + path). Use this before /file to pick what to read.\n\n"
 "GET /repo?repo=<o/r>[&branch=main][&path=dir]\n"
-"  list a repository (or subdirectory) tree: name + type.\n\n"
+"  list ONE directory's contents (name + type).\n\n"
 "GET /commits?repo=<o/r>&path=<file>[&branch=main][&n=10]\n"
 "  THE DESIGN-EVOLUTION EXTRACTOR. Returns the commit history of ONE file,\n"
 "  each commit with its message and the diff STRIPPED to only the changed\n"
 "  lines (context dropped). Lets an agent read how a feature evolved from\n"
 "  'introduced' to 'working' without wading through unchanged code.\n\n"
-"console: exogit /search?q=... | /file?... | /repo?... | /commits?...\n"
+"console: exogit /search?q=... | /file?... | /tree?... | /repo?... | /commits?...\n"
 "  one op, one process, no port bound (body on --body or stdin).\n"
 "server: only with --serve (or --port <n>); opt-in.\n\n"
 "auth: EXOGIT_TOKEN (GitHub/GitLab PAT) raises API rate limits and enables\n"
-"structured /search. Set it via env or --token. No cookies, no JS, no accts.\n";
+"structured /search + /tree. Set it via env or --token. No cookies, no JS, no accts.\n";
 }
 
 /* ---------------- dout ---------------- */
@@ -136,6 +141,8 @@ static void dispatch(const char *path, const char *query, net_t *net,
         exogit_file(d, net, query);
     else if (strcmp(path, "/repo") == 0)
         exogit_repo(d, net, query);
+    else if (strcmp(path, "/tree") == 0)
+        exogit_tree(d, net, query);
     else if (strcmp(path, "/commits") == 0)
         exogit_commits(d, net, query);
     else {

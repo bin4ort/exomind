@@ -159,7 +159,7 @@ void exogit_file(dout_t *d, net_t *net, const char *query)
 {
     char url[8192], branch[256], owner[256], repo[256], host[256], path[256];
     int is_gl = 0;
-    char rawurl[9000] = {0};
+    char rawurl[16384] = {0};
     int have_url = qp(query, "url", url, sizeof url);
     if (have_url) {
         if (!parse_repo_ref(url, host, sizeof host, owner, sizeof owner,
@@ -201,10 +201,10 @@ void exogit_file(dout_t *d, net_t *net, const char *query)
     if (!rawurl[0]) {
         if (!branch[0])
             snprintf(branch, sizeof branch, "main");
-        char encpath[9000];
+        char encpath[4096];
         url_encode(path, encpath, sizeof encpath);
         if (is_gl) {
-            char encr[9000];
+            char encr[4096];
             url_encode_slash(repo, encr, sizeof encr);
             snprintf(rawurl, sizeof rawurl,
                      "https://gitlab.com/api/v4/projects/%s/repository/files/%s/raw?ref=%s",
@@ -237,26 +237,60 @@ void exogit_file(dout_t *d, net_t *net, const char *query)
         resp_free(&r);
         return;
     }
-    /* token-efficient output: line numbers, truncate at max bytes */
+    /* token-efficient output: line numbers, truncate AT max bytes (no
+     * overshoot beyond the cap) */
     size_t shown = 0;
     unsigned long lnno = 0;
     const char *p = r.body;
     const char *end = r.body + r.blen;
-    while (p < end && shown < (size_t)max) {
+    while (p < end) {
         const char *eol = memchr(p, '\n', (size_t)(end - p));
         size_t llen = eol ? (size_t)(eol - p) : (size_t)(end - p);
+        size_t overhead = (linenos ? 7 : 0) + 1;
+        if (shown + llen + overhead > (size_t)max)
+            break;
         lnno++;
         if (linenos)
             buf_printf(&d->body, "%5lu  ", lnno);
         buf_putsn(&d->body, p, llen);
         buf_puts(&d->body, "\n");
-        shown += llen + (linenos ? 7 : 0) + 1;
+        shown += llen + overhead;
         p = eol ? eol + 1 : end;
     }
     if (p < end)
         buf_printf(&d->body, "... (%lu more lines truncated at %ld bytes)\n",
                    (unsigned long)(end - p), max);
     resp_free(&r);
+}
+
+/* ---- default-branch resolution (so repo-mapping needs no branch arg) ---- */
+
+static void resolve_default_branch(net_t *net, const char *repo, int is_gl,
+                                   char *branch, size_t bcap)
+{
+    if (branch[0])
+        return;
+    char api[16384];
+    if (is_gl) {
+        char encr[4096];
+        url_encode_slash(repo, encr, sizeof encr);
+        snprintf(api, sizeof api, "https://gitlab.com/api/v4/projects/%s",
+                 encr);
+    } else {
+        snprintf(api, sizeof api, "https://api.github.com/repos/%s", repo);
+    }
+    resp_t r;
+    char err[256];
+    if (net_fetch(net, api, &r, err, sizeof err) == 0 && r.status == 200 &&
+        r.body) {
+        char db[256];
+        if (json_str_in(r.body, 0, r.blen, "default_branch", db,
+                        sizeof db) &&
+            db[0])
+            snprintf(branch, bcap, "%s", db);
+        resp_free(&r);
+    }
+    /* on any failure branch stays empty -> caller falls back to "main" */
 }
 
 /* ---- /repo : list a repository tree ---- */
@@ -278,19 +312,20 @@ void exogit_repo(dout_t *d, net_t *net, const char *query)
                        &is_gl);
     }
     qp(query, "branch", branch, sizeof branch);
+    resolve_default_branch(net, repo, is_gl, branch, sizeof branch);
     if (!branch[0])
         snprintf(branch, sizeof branch, "main");
-    char api[9000];
+    char api[16384];
     if (is_gl) {
-        char encr[9000];
+        char encr[4096];
         url_encode_slash(repo, encr, sizeof encr);
-        char encp[9000];
+        char encp[4096];
         url_encode(path, encp, sizeof encp);
         snprintf(api, sizeof api,
                  "https://gitlab.com/api/v4/projects/%s/repository/tree?ref=%s&path=%s&per_page=100",
                  encr, branch, encp);
     } else {
-        char encp[9000];
+        char encp[4096];
         url_encode(path, encp, sizeof encp);
         snprintf(api, sizeof api,
                  "https://api.github.com/repos/%s/contents/%s?ref=%s",
@@ -320,6 +355,79 @@ void exogit_repo(dout_t *d, net_t *net, const char *query)
     }
     if (n == 0)
         buf_printf(&d->body, "(empty or rate-limited; status %d)\n", r.status);
+    resp_free(&r);
+}
+
+/* ---- /tree : full repository file listing (GitHub recursive git tree) ----
+ * One request yields the entire repo's file inventory — the map an agent
+ * needs before deciding which files to /file or /commits. Recursive beats
+ * the paginated contents API (which caps at 100 per dir). */
+
+void exogit_tree(dout_t *d, net_t *net, const char *query)
+{
+    char repo[1024], branch[256], owner[256], host[256], path[256];
+    int is_gl = 0;
+    if (!qp(query, "repo", repo, sizeof repo) &&
+        !qp(query, "url", repo, sizeof repo)) {
+        d->status = 400;
+        buf_puts(&d->body, "error: need repo=<o/r> or url=<\n");
+        return;
+    }
+    if (strstr(repo, "/") && strstr(repo, "."))
+        parse_repo_ref(repo, host, sizeof host, owner, sizeof owner, repo,
+                       sizeof repo, branch, sizeof branch, path, sizeof path,
+                       &is_gl);
+    qp(query, "branch", branch, sizeof branch);
+    resolve_default_branch(net, repo, is_gl, branch, sizeof branch);
+    if (!branch[0])
+        snprintf(branch, sizeof branch, "main");
+
+    char api[16384];
+    if (is_gl) {
+        char encr[4096];
+        url_encode_slash(repo, encr, sizeof encr);
+        snprintf(api, sizeof api,
+                 "https://gitlab.com/api/v4/projects/%s/repository/tree?"
+                 "ref=%s&recursive=true&per_page=100",
+                 encr, branch);
+    } else {
+        snprintf(api, sizeof api,
+                 "https://api.github.com/repos/%s/git/trees/%s?recursive=1",
+                 repo, branch);
+    }
+    resp_t r;
+    char err[256];
+    if (net_fetch(net, api, &r, err, sizeof err) != 0 || r.status != 200 ||
+        !r.body) {
+        d->status = 502;
+        buf_printf(&d->body, "error: tree failed (%s)\n",
+                   err[0] ? err : "no body");
+        resp_free(&r);
+        return;
+    }
+    /* GitHub nests the array under "tree"; GitLab returns it top-level. */
+    size_t ts = 0, te = r.blen;
+    json_find_slice(r.body, 0, r.blen, "tree", &ts, &te);
+    size_t cur = 0, s, e;
+    int n = 0;
+    while (json_array_object(r.body + ts, &cur, &s, &e)) {
+        size_t as = ts + s, ae = ts + e;
+        char name[2048], type[64], size[32];
+        if (!json_str_in(r.body, as, ae, "path", name, sizeof name))
+            json_str_in(r.body, as, ae, "name", name, sizeof name);
+        if (!json_str_in(r.body, as, ae, "type", type, sizeof type))
+            type[0] = 0;
+        json_str_in(r.body, as, ae, "size", size, sizeof size);
+        buf_printf(&d->body, "%-5s %-10s %s\n", type, size, name);
+        n++;
+    }
+    if (n == 0)
+        buf_printf(&d->body, "(empty or rate-limited; status %d)\n", r.status);
+    char trunc[16];
+    if (json_str_in(r.body, 0, r.blen, "truncated", trunc, sizeof trunc) &&
+        trunc[0] == 't')
+        buf_puts(&d->body,
+                 "(note: listing truncated by GitHub; narrow with path=)\n");
     resp_free(&r);
 }
 
@@ -380,17 +488,17 @@ void exogit_commits(dout_t *d, net_t *net, const char *query)
     }
 
     /* 1) list commits touching this file */
-    char listapi[9000];
+    char listapi[16384];
     if (is_gl) {
-        char encr[9000];
+        char encr[4096];
         url_encode_slash(repo, encr, sizeof encr);
-        char encp[9000];
+        char encp[4096];
         url_encode(path, encp, sizeof encp);
         snprintf(listapi, sizeof listapi,
                  "https://gitlab.com/api/v4/projects/%s/repository/commits?path=%s&ref_name=%s&per_page=%d",
                  encr, encp, branch, n);
     } else {
-        char encp[9000];
+        char encp[4096];
         url_encode(path, encp, sizeof encp);
         snprintf(listapi, sizeof listapi,
                  "https://api.github.com/repos/%s/commits?path=%s&per_page=%d",
@@ -429,9 +537,9 @@ void exogit_commits(dout_t *d, net_t *net, const char *query)
         buf_printf(&d->body, "\n### commit %s\n%s\n", sha, msg);
 
         /* 2) fetch the commit detail to get the diff for THIS file */
-        char detail[9000];
+        char detail[16384];
         if (is_gl) {
-            char encr[9000];
+            char encr[4096];
             url_encode_slash(repo, encr, sizeof encr);
             snprintf(detail, sizeof detail,
                      "https://gitlab.com/api/v4/projects/%s/repository/commits/%s/diff",
@@ -451,9 +559,9 @@ void exogit_commits(dout_t *d, net_t *net, const char *query)
                 size_t dc = 0, ds, de;
                 int found = 0;
                 while (json_array_object(det.body + fs, &dc, &ds, &de)) {
-                    /* ds/de are relative to det.body+fs; convert */
-                    size_t abs = (size_t)(det.body + fs - det.body) + ds;
-                    size_t abe = (size_t)(det.body + fs - det.body) + de;
+                    /* ds/de are offsets within det.body+fs; make absolute */
+                    size_t abs = fs + ds;
+                    size_t abe = fs + de;
                     char fname[2048], patch[1 << 16], status[32];
                     json_str_in(det.body, abs, abe, "filename", fname,
                                 sizeof fname);
@@ -524,9 +632,9 @@ void exogit_search(dout_t *d, net_t *net, const char *query)
         if (n < 1) n = 1;
         if (n > 50) n = 50;
     }
-    char encq[9000];
+    char encq[4096];
     url_encode(q, encq, sizeof encq);
-    char encLang[256];
+    char encLang[512];
     if (lang[0]) {
         char tl[256];
         url_encode(lang, tl, sizeof tl);
@@ -535,7 +643,7 @@ void exogit_search(dout_t *d, net_t *net, const char *query)
 
     if (net->token && net->token[0]) {
         /* authenticated API search (clean, structured) */
-        char api[9000];
+        char api[16384];
         snprintf(api, sizeof api,
                  "https://api.github.com/search/code?q=%s%s&per_page=%d",
                  encq, encLang, n);
@@ -567,7 +675,7 @@ void exogit_search(dout_t *d, net_t *net, const char *query)
     }
 
     /* unauthenticated: scrape the web search page, best-effort */
-    char web[9000];
+    char web[16384];
     snprintf(web, sizeof web,
              "https://github.com/search?q=%s%s&type=code&n=%d", encq, encLang,
              n);

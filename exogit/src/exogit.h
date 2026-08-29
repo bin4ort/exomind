@@ -1,15 +1,15 @@
 /*
- * exogit: AI-native code-research daemon for GitHub / GitLab.
+ * exogit: AI-native GitHub content analyzer (GitLab supported too).
  *
- * Purpose (from deployment feedback): let an agent research how similar
- * software is built by other people, efficiently. The agent writes far
- * better code when it can read real implementations — and, crucially, the
- * evolution of that code: the commits that took a feature from "introduced"
- * to "working". exogit extracts exactly that, token-efficiently:
+ * PURPOSE (primary): analyze GitHub content efficiently so an agent can read
+ * how similar software is built — and, crucially, how it evolved. Local /
+ * console use is secondary to that mission.
  *
  *   - /search  : find code on GitHub/GitLab (narrow the prompt)
  *   - /file    : fetch one source file (raw), line-numbered, capped
- *   - /repo    : list a repository's tree
+ *   - /tree    : the whole-repo FILE MAP in one recursive request (type +
+ *                size + path) — pick what to read before calling /file
+ *   - /repo    : list ONE directory's contents (name + type)
  *   - /commits : the commit history of ONE file, with the diffs stripped
  *                down to only the changed lines (context dropped) so the
  *                agent receives the design decisions, not 2000 unchanged
@@ -106,6 +106,7 @@ void dout_free(dout_t *d);
 void exogit_search(dout_t *d, net_t *net, const char *query);
 void exogit_file(dout_t *d, net_t *net, const char *query);
 void exogit_repo(dout_t *d, net_t *net, const char *query);
+void exogit_tree(dout_t *d, net_t *net, const char *query);
 void exogit_commits(dout_t *d, net_t *net, const char *query);
 
 /* shared spec text (GET / and the no-arg guide) */
