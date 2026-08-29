@@ -314,6 +314,7 @@ if (token)
 
     timers_init();
     ws_init();
+    register_aggressive_reminders(&exo);
     int loaded = 0;
     for (int attempt = 0; attempt < 10; attempt++) {
         if (timers_reload(&exo) == 0) {

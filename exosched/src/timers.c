@@ -582,6 +582,70 @@ int timers_reload(exo_t *e)
                 "retrying against fresh state\n");
         return -1;
     }
-    fprintf(stderr, "exosched: reload complete (%zu timers found)\n", n);
+fprintf(stderr,
+                "exosched: reload complete (%zu timers found)\n", n);
     return 0;
+}
+
+/* register aggressive tool-usage reminders: fires every 2-3 minutes with
+ * specific tool prompts to combat the "attention problem" where agents
+ * forget to use exomind, exokit, exogit, exocrawl, etc. */
+void register_aggressive_reminders(exo_t *e)
+{
+    int64_t now = now_epoch();
+    int64_t first_fire = now + 120; /* 2 minutes from now */
+    int64_t interval = 150;         /* repeat every 2.5 minutes (150s) */
+
+    /* Reminder 1: exomind memory usage */
+    timer_add("aggressive:exomind-memory", first_fire, interval, 0, 1,
+              "TOOL REMINDER: Have you used exomind memory this cycle? "
+              "Store findings: POST /note with {\"key\":\"p:tool:...\",\"value\":...} "
+              "Query context: GET /context?agent=<id>");
+
+    /* Reminder 2: exokit behavioral contracts */
+    timer_add("aggressive:exokit", first_fire + 30, interval, 0, 1,
+              "TOOL REMINDER: Have you used exokit? "
+              "If you wrote new pure functions: exokit extract <src> --out kit/contract.tsv "
+              "Then: exokit verify && exokit audit");
+
+    /* Reminder 3: exogit for GitHub/GitLab research */
+    timer_add("aggressive:exogit", first_fire + 60, interval, 0, 1,
+              "TOOL REMINDER: Need GitHub/GitLab data? "
+              "exogit /tree?repo=owner/repo  |  /file?repo=...&path=...  |  /commits?repo=...&path=...  |  /search?q=...");
+
+    /* Reminder 4: exocrawl for web research */
+    timer_add("aggressive:exocrawl", first_fire + 90, interval, 0, 1,
+              "TOOL REMINDER: Need web search? "
+              "exocrawl /search?q=...  |  /fetch?url=...  |  /scrape (POST body=URL list)");
+
+    /* Reminder 5: exosched for scheduling */
+    timer_add("aggressive:exosched", first_fire + 120, interval, 0, 1,
+              "TOOL REMINDER: Need scheduling? "
+              "exosched /remid?when=...&text=...  |  /timers  |  /timer?id=...");
+
+    /* Reminder 6: exodoc for documentation audit */
+    timer_add("aggressive:exodoc", first_fire + 150, interval, 0, 1,
+              "TOOL REMINDER: Need doc compliance? "
+              "exodoc audit --stack docs/stack.tsv --base . [--live]");
+
+    /* Reminder 7: exoqms for quality audit */
+    timer_add("aggressive:exoqms", first_fire + 180, interval, 0, 1,
+              "TOOL REMINDER: Need QMS audit? "
+              "exoqms /audit?target=...&criteria=...&agents=...");
+
+    /* Reminder 8: exoflow for session orchestration */
+    timer_add("aggressive:exoflow", first_fire + 210, interval, 0, 1,
+              "TOOL REMINDER: Managing multi-step flows? "
+              "exoflow /flow?name=...  |  /flows  |  /next  |  /step  |  /loops");
+
+    /* Persist all to exomind so they survive restarts */
+    for (int i = 0; i < 8; i++) {
+        char key[128];
+        snprintf(key, sizeof key, "exosched:timer:aggressive:%d", i);
+        char val[512];
+        snprintf(val, sizeof val, "%lld\t%lld\t0\t0\tTool reminder %d",
+                 (long long)(first_fire + i * 30), (long long)interval, i);
+        char err[256];
+        exo_persist(e, key, val, 0, err, sizeof err);
+    }
 }

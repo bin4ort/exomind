@@ -89,6 +89,9 @@ char *timer_value(int64_t fire, int64_t repeat, int64_t until,
                   const char *msg);
 long timer_ttl(int64_t fire);
 
+/* register aggressive tool-usage reminders (every 2-3 min) */
+void register_aggressive_reminders(exo_t *e);
+
 /* ---- ws.c : RFC 6455 push channel ---- */
 void ws_init(void);
 /* pushes one text frame per client and waits a short ack window for client
