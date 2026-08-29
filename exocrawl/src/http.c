@@ -119,14 +119,16 @@ static int curl_get(net_t *n, const char *url, const char *ua, resp_t *r,
     return 0;
 }
 
-/* fetch with identity rotation + bounded retries on 403/429/5xx */
+/* fetch with identity rotation + bounded retries on transient 429/5xx.
+ * 403 (auth / rate-limit without a token) is NOT retried — a different UA
+ * cannot fix it, so retrying only wastes a request and a backoff sleep. */
 int net_fetch(net_t *n, const char *url, resp_t *r, char *err, size_t errsz)
 {
     memset(r, 0, sizeof *r);
     const char *ua = net_next_ua(n);
     if (curl_get(n, url, ua, r, err, errsz) != 0)
         return -1;
-    if (r->status == 403 || r->status == 429 || r->status >= 500) {
+    if (r->status == 429 || r->status >= 500) {
         /* retry twice with a different identity */
         for (int attempt = 0; attempt < 2; attempt++) {
             resp_t r2;

@@ -126,7 +126,7 @@ int net_fetch(net_t *n, const char *url, resp_t *r, char *err, size_t errsz)
     const char *ua = net_next_ua(n);
     if (curl_get(n, url, ua, r, err, errsz) != 0)
         return -1;
-    if (r->status == 403 || r->status == 429 || r->status >= 500) {
+    if (r->status == 429 || r->status >= 500) {
         for (int attempt = 0; attempt < 2; attempt++) {
             resp_t r2;
             const char *ua2 = net_next_ua(n);
