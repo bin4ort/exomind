@@ -82,6 +82,19 @@ static void url_encode_slash(const char *in, char *out, size_t cap)
     out[w] = 0;
 }
 
+/* gitlab's project id is owner%2Frepo (its API rejects a bare repo name).
+ * repo is stored split from owner by parse_repo_ref, so rejoin them here. */
+static void gl_proj(const char *owner, const char *repo, char *out, size_t cap)
+{
+    char joined[2048];
+    snprintf(joined, sizeof joined, "%s/%s", owner, repo);
+    url_encode_slash(joined, out, cap);
+}
+
+static void resolve_default_branch(net_t *net, const char *owner,
+                                    const char *repo, int is_gl, char *branch,
+                                    size_t bcap);
+
 /* ---- repo ref parser ---- */
 
 int parse_repo_ref(const char *raw, char *host, size_t hostcap, char *owner,
@@ -177,6 +190,9 @@ void exogit_file(dout_t *d, net_t *net, const char *query)
                 return;
             }
         }
+        /* allow explicit path=/branch= to supplement or override the URL */
+        qp(query, "branch", branch, sizeof branch);
+        qp(query, "path", path, sizeof path);
     } else {
         if (!qp(query, "repo", repo, sizeof repo) ||
             !qp(query, "path", path, sizeof path)) {
@@ -199,13 +215,15 @@ void exogit_file(dout_t *d, net_t *net, const char *query)
         is_gl = strstr(repo, "gitlab") != NULL;
     }
     if (!rawurl[0]) {
+        resolve_default_branch(net, owner, repo, is_gl, branch,
+                               sizeof branch);
         if (!branch[0])
             snprintf(branch, sizeof branch, "main");
         char encpath[4096];
         url_encode(path, encpath, sizeof encpath);
         if (is_gl) {
             char encr[4096];
-            url_encode_slash(repo, encr, sizeof encr);
+            gl_proj(owner, repo, encr, sizeof encr);
             snprintf(rawurl, sizeof rawurl,
                      "https://gitlab.com/api/v4/projects/%s/repository/files/%s/raw?ref=%s",
                      encr, encpath, branch);
@@ -265,15 +283,16 @@ void exogit_file(dout_t *d, net_t *net, const char *query)
 
 /* ---- default-branch resolution (so repo-mapping needs no branch arg) ---- */
 
-static void resolve_default_branch(net_t *net, const char *repo, int is_gl,
-                                   char *branch, size_t bcap)
+static void resolve_default_branch(net_t *net, const char *owner,
+                                    const char *repo, int is_gl, char *branch,
+                                    size_t bcap)
 {
     if (branch[0])
         return;
     char api[16384];
     if (is_gl) {
         char encr[4096];
-        url_encode_slash(repo, encr, sizeof encr);
+        gl_proj(owner, repo, encr, sizeof encr);
         snprintf(api, sizeof api, "https://gitlab.com/api/v4/projects/%s",
                  encr);
     } else {
@@ -307,18 +326,20 @@ void exogit_repo(dout_t *d, net_t *net, const char *query)
     }
     if (strstr(repo, "/") && strstr(repo, ".")) {
         /* looks like a URL */
-        parse_repo_ref(repo, host, sizeof host, owner, sizeof owner, repo,
+        char raw[2048];
+        snprintf(raw, sizeof raw, "%s", repo);
+        parse_repo_ref(raw, host, sizeof host, owner, sizeof owner, repo,
                        sizeof repo, branch, sizeof branch, path, sizeof path,
                        &is_gl);
     }
     qp(query, "branch", branch, sizeof branch);
-    resolve_default_branch(net, repo, is_gl, branch, sizeof branch);
+    resolve_default_branch(net, owner, repo, is_gl, branch, sizeof branch);
     if (!branch[0])
         snprintf(branch, sizeof branch, "main");
     char api[16384];
     if (is_gl) {
         char encr[4096];
-        url_encode_slash(repo, encr, sizeof encr);
+        gl_proj(owner, repo, encr, sizeof encr);
         char encp[4096];
         url_encode(path, encp, sizeof encp);
         snprintf(api, sizeof api,
@@ -373,19 +394,22 @@ void exogit_tree(dout_t *d, net_t *net, const char *query)
         buf_puts(&d->body, "error: need repo=<o/r> or url=<\n");
         return;
     }
-    if (strstr(repo, "/") && strstr(repo, "."))
-        parse_repo_ref(repo, host, sizeof host, owner, sizeof owner, repo,
+    if (strstr(repo, "/") && strstr(repo, ".")) {
+        char raw[2048];
+        snprintf(raw, sizeof raw, "%s", repo);
+        parse_repo_ref(raw, host, sizeof host, owner, sizeof owner, repo,
                        sizeof repo, branch, sizeof branch, path, sizeof path,
                        &is_gl);
+    }
     qp(query, "branch", branch, sizeof branch);
-    resolve_default_branch(net, repo, is_gl, branch, sizeof branch);
+    resolve_default_branch(net, owner, repo, is_gl, branch, sizeof branch);
     if (!branch[0])
         snprintf(branch, sizeof branch, "main");
 
     char api[16384];
     if (is_gl) {
         char encr[4096];
-        url_encode_slash(repo, encr, sizeof encr);
+        gl_proj(owner, repo, encr, sizeof encr);
         snprintf(api, sizeof api,
                  "https://gitlab.com/api/v4/projects/%s/repository/tree?"
                  "ref=%s&recursive=true&per_page=100",
@@ -467,7 +491,9 @@ void exogit_commits(dout_t *d, net_t *net, const char *query)
         return;
     }
     if (strstr(repo, "/") && strstr(repo, ".")) {
-        parse_repo_ref(repo, host, sizeof host, owner, sizeof owner, repo,
+        char raw[2048];
+        snprintf(raw, sizeof raw, "%s", repo);
+        parse_repo_ref(raw, host, sizeof host, owner, sizeof owner, repo,
                        sizeof repo, branch, sizeof branch, path, sizeof path,
                        &is_gl);
     }
@@ -491,7 +517,7 @@ void exogit_commits(dout_t *d, net_t *net, const char *query)
     char listapi[16384];
     if (is_gl) {
         char encr[4096];
-        url_encode_slash(repo, encr, sizeof encr);
+        gl_proj(owner, repo, encr, sizeof encr);
         char encp[4096];
         url_encode(path, encp, sizeof encp);
         snprintf(listapi, sizeof listapi,
@@ -540,7 +566,7 @@ void exogit_commits(dout_t *d, net_t *net, const char *query)
         char detail[16384];
         if (is_gl) {
             char encr[4096];
-            url_encode_slash(repo, encr, sizeof encr);
+            gl_proj(owner, repo, encr, sizeof encr);
             snprintf(detail, sizeof detail,
                      "https://gitlab.com/api/v4/projects/%s/repository/commits/%s/diff",
                      encr, sha);
