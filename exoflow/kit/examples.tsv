@@ -1,0 +1,15 @@
+flow_id_ok	abc123	1	valid id	0
+flow_id_ok	flow-1	1	hyphen allowed	0
+flow_id_ok	a.b_c	1	dot/underscore allowed	0
+flow_id_ok		0	empty rejected	0
+flow_id_ok	has space	0	space rejected	0
+flow_id_ok	has,comma	0	comma rejected	0
+flow_id_ok	aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa	0	len==FLOW_ID_MAX(40) rejected (boundary edge)	0
+flow_id_ok	aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa	1	len==39 accepted (boundary edge)	0
+safe_token	abc|64	1	valid token	0
+safe_token	a.b_c-1|64	1	alnum/dot/under/dash	0
+safe_token	ab cd|64	0	space rejected	0
+safe_token	x!y|64	0	bang rejected	0
+safe_token	a|1	0	len>=max rejected	0
+safe_token	abc|2	0	len>=max rejected	0
+safe_token	ok|64	1	valid	0

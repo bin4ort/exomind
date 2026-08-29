@@ -4,7 +4,7 @@ LDFLAGS ?= -pthread
 BUILD := build
 OBJS := $(BUILD)/main.o $(BUILD)/util.o $(BUILD)/net.o $(BUILD)/json.o $(BUILD)/github.o
 
-.PHONY: all test clean
+.PHONY: all test clean kit test-kit
 
 all: exogit
 
@@ -31,6 +31,16 @@ $(BUILD)/github.o: src/github.c src/exogit.h | $(BUILD)
 
 test: exogit
 	./test/test.sh
+
+# Behavioral-contract verification of exogit's pure functions (kit/).
+# Builds the C runner shim (which #includes the REAL exogit sources and
+# dispatches the actual implementations), then runs exokit verify + audit.
+kit:
+	$(MAKE) -C kit all
+	$(MAKE) -C kit verify
+	$(MAKE) -C kit audit
+
+test-kit: kit
 
 clean:
 	rm -rf $(BUILD) exogit

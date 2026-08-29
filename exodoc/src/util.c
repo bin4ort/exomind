@@ -134,13 +134,6 @@ void lc(char *s)
         *s = (char)tolower((unsigned char)*s);
 }
 
-/* is c a word character (alnum)? non-ASCII bytes are not words */
-static int word_char(unsigned char c)
-{
-    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
-           (c >= 'A' && c <= 'Z');
-}
-
 static int is_digit(unsigned char c)
 {
     return c >= '0' && c <= '9';

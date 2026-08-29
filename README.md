@@ -217,13 +217,40 @@ printf 'url1\nurl2\n' | exocrawl /scrape
   module's full spec (the same text the daemon serves at `GET /`) and
   exits 0. The software describes itself; `GET /` on a serving module
   does the same.
-- **Exit codes** (the stack-wide contract):
-  - `0` — the operation succeeded
-  - `1` — the operation failed (an API error, HTTP >= 400)
-  - `2` — usage error or unknown operation
-- Every module also accepts the `/exo<module>` prefix on paths
-  (`/exoexomind/ping`, `/exoexosched/timers`), matching the server-mode
-  mount points.
+ - **Exit codes** (the stack-wide contract):
+   - `0` — the operation succeeded
+   - `1` — the operation failed (an API error, HTTP >= 400)
+   - `2` — usage error or unknown operation
+ - Every module also accepts the `/exo<module>` prefix on paths
+   (`/exoexomind/ping`, `/exoexosched/timers`), matching the server-mode
+   mount points.
+ - **Quote the whole path.** The `&` in a query string is a shell
+   background operator; unquoted, the shell splits your op and background it.
+   Always single-quote the `/operation?...` argument:
+   ```sh
+   exomind '/link?from=project:exomind&to=exokit:verifier'   # correct
+   exomind /link?from=a&to=b                                   # WRONG: backgrounds 'to=b'
+   ```
+   Likewise, a `?` or spaces in the query must be quoted. The `--body`
+   payload with single quotes is fine because it is a separate argument.
+ - **`--method`** forces the HTTP verb for a one-shot op, overriding the
+   path-derived default (`GET`/`POST`/`DELETE`). It may appear before or
+   after the path:
+   ```sh
+   exomind --method POST '/set?key=k' --body v
+   exomind '/set?key=k' --method POST --body v
+   ```
+ - **`mem`** is a friendlier, positional front-end to the memory ops (no
+   URL-encoding/quoting needed):
+   ```sh
+   exomind mem set project:exomind "multi-agent stack"
+   exomind mem get project:exomind
+   exomind mem link project:exomind exokit:verifier
+   exomind mem search verifier
+   exomind mem list project:
+   exomind mem embed project:exomind "text to vectorize"
+   exomind mem note "a free-form note"
+   ```
 
 ### Server mode is opt-in
 
@@ -551,11 +578,46 @@ The QMS gate's component-tests check runs each manifest test command
 `./build/exoflow --version`, `./build/exoqms --version`,
 `./build/exocrawl --version` and `./build/exocontext --version` smokes
 for the daemons, `make test` for the two batch suites that fit the
-budget (exodoc 36, exokit 50); exocrawl's full suite (~17 s of
-mock-server wall time) exceeds the budget, so its manifest command is
-the `--version` smoke and the suite runs via `make test-exocrawl`.
+ budget (exodoc 36, exokit 50); exocrawl's full suite (~17 s of
+ mock-server wall time) exceeds the budget, so its manifest command is
+ the `--version` smoke and the suite runs via `make test-exocrawl`.
+
+## Behavioral-contract verification (exokit)
+
+Each component carries an `exokit` kit: a curated function inventory
+(`contract.tsv`), a behavioral ledger (`examples.tsv`), and a runner shim
+that **dispatches the real implementation** — not a stub. `exokit verify`
+forks the runner once per example and compares byte-exact output; `exokit
+audit` enforces completeness (every contract entry has an example,
+including an edge/error case) and ledger fidelity. This is the anti-drift
+gate: a green ledger means the documented contract matches the code.
+
+```sh
+make kit           # exomind core (kit/): 20 examples, real update.c
+make kit-exogit    # exogit pure functions (exogit/kit/): 17 examples
+make kit-exosched  # exosched parse_duration/parse_schedule: 11 examples
+make kit-exoflow   # exoflow flow_id_ok/safe_token: 15 examples
+make kit-exodoc    # exodoc ver_eq/range_str/word_char/is_ws_char: 20 examples
+make kit-exocrawl  # exocrawl resolve_url/strip_html: 10 examples
+make kit-exocontext # exocontext utf8_decode/ci_prefix/esc_line/...: 19 examples
+# or directly with the STABLE system exokit while developing the next version:
+exokit verify --kit exoflow/kit
+exokit audit  --kit exocrawl/kit
+```
+
+The runners `#include` the component sources so the verified functions are the
+ones actually shipped. `make test` runs every kit and the functional suites;
+the full stack is **112 behavioral examples, all green, all audits passing**.
+
+When developing the next version, the kits are scaffolded and verified with the
+**system-wide exokit** (`~/.local/bin/exokit`, the previous release) via
+`exokit init <dir>` + `exokit extract <src>` + `exokit verify`/`audit` — the
+stable toolchain is used as the development tool, never modified. (`exokit init`
+is non-destructive: it skips files that already exist, so a curated runner or
+contract survives a re-init.)
 
 ## Limitations
+
 
 - Single-writer by design: the follower (`--repl`) is a hot read-only
   tail (cast-once replay), not a quorum.

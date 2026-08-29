@@ -269,6 +269,13 @@ static int run_example(const char *cmd, const example_t *e, buf_t *out,
 
 static void write_tpl(const char *path, const char *content)
 {
+    /* non-destructive: never clobber a file the developer already edited
+     * (e.g. a curated runner shim or contract) on a re-run of `exokit init`. */
+    struct stat st;
+    if (stat(path, &st) == 0) {
+        fprintf(stderr, "exokit: skip existing %s\n", path);
+        return;
+    }
     FILE *f = fopen(path, "w");
     if (f) {
         fputs(content, f);

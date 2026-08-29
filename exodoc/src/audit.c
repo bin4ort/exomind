@@ -32,12 +32,6 @@ static int64_t now_ms(void)
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-static int word_char(unsigned char c)
-{
-    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
-           (c >= 'A' && c <= 'Z');
-}
-
 static int is_ws_char(char c)
 {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n';

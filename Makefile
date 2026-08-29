@@ -30,7 +30,7 @@ build/exo_cli.o: common/exo_cli.c common/exo_cli.h | build
 
 -include $(DEP)
 
-test: $(BIN)
+test: $(BIN) kit kit-exogit kit-exosched kit-exoflow kit-exodoc kit-exocrawl kit-exocontext
 	bash test/test.sh
 
 exosched:
@@ -71,6 +71,55 @@ test-exokit: exokit exoflow
 	@if [ -f exoflow/test/test-integration.sh ]; then \
 		bash exoflow/test/test-integration.sh; \
 	fi
+
+# Behavioral-contract verification of the exomind core (kit/).
+# Builds the C runner shim, then runs exokit verify (ledger green) and
+# audit (QMS gate). The runner dispatches the REAL update.c functions for
+# pure/deterministic entries, so this is genuine anti-drift coverage.
+kit: exokit
+	$(MAKE) -C kit all
+	$(MAKE) -C kit verify
+	$(MAKE) -C kit audit
+
+kit-exogit: exokit
+	$(MAKE) -C exogit kit
+
+# Behavioral-contract verification of exosched (exosched/kit/). Curated from
+# `exokit extract exosched/src`, the C runner #includes the REAL exosched
+# sources (schedule.c/util.c) and dispatches parse_duration/parse_schedule.
+kit-exosched: exokit
+	$(MAKE) -C exosched/kit verify
+	$(MAKE) -C exosched/kit audit
+
+# Behavioral-contract verification of exoflow (exoflow/kit/). Scaffolded with
+# the SYSTEM exokit (exokit init + extract); the runner #includes the REAL
+# exoflow sources (flows.c/util.c) and dispatches flow_id_ok/safe_token.
+kit-exoflow: exokit
+	$(MAKE) -C exoflow/kit verify
+	$(MAKE) -C exoflow/kit audit
+
+# Behavioral-contract verification of exodoc (exodoc/kit/). Scaffolded with the
+# SYSTEM exokit; the runner #includes the REAL exodoc source (audit.c) and
+# dispatches ver_eq/range_str/word_char/is_ws_char.
+kit-exodoc: exokit
+	$(MAKE) -C exodoc/kit verify
+	$(MAKE) -C exodoc/kit audit
+
+# Behavioral-contract verification of exocrawl (exocrawl/kit/). Scaffolded with
+# the SYSTEM exokit; the runner #includes the REAL exocrawl sources
+# (html.c/util.c/search.c) and dispatches resolve_url/strip_html.
+kit-exocrawl: exokit
+	$(MAKE) -C exocrawl/kit verify
+	$(MAKE) -C exocrawl/kit audit
+
+# Behavioral-contract verification of exocontext (exocontext/kit/). Scaffolded
+# with the SYSTEM exokit; the runner #includes the REAL exocontext source
+# (util.c) and dispatches utf8_decode/ci_prefix/esc_line/unesc_line/json_escape.
+kit-exocontext: exokit
+	$(MAKE) -C exocontext/kit verify
+	$(MAKE) -C exocontext/kit audit
+
+test-kit: kit kit-exogit kit-exosched kit-exoflow kit-exodoc kit-exocrawl kit-exocontext
 
 exogpl:
 	$(MAKE) -C exogpl

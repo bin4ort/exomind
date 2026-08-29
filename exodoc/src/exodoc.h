@@ -83,6 +83,14 @@ int ci_prefix(const char *line, const char *prefix);
 void lc(char *s);
 size_t scan_version(const char *s, size_t n, char *out, size_t outsz);
 
+/* small pure helpers: defined inline so every TU shares one implementation
+ * (previously duplicated as static in both util.c and audit.c) */
+static inline int word_char(unsigned char c)
+{
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+           (c >= 'A' && c <= 'Z');
+}
+
 /* ---- http.c ---- */
 int http_get(const char *host, int port, const char *path, char **body,
              size_t *blen, int *status, char *err, size_t errsz);

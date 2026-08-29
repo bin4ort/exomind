@@ -1,0 +1,9 @@
+# exoflow behavioral contract (curated pure functions).
+# Inventory generated with the SYSTEM exokit (`~/.local/bin/exokit extract
+# exoflow/src`), then narrowed to the deterministic, side-effect-free surface.
+# The C runner #includes the REAL exoflow sources (flows.c/util.c) and stubs
+# the exomind-client calls that flow_id_ok/safe_token never reach, so this is
+# genuine anti-drift coverage of the validation logic in the next version.
+# fn	sig	pure	side_effects	notes
+flow_id_ok	static int flow_id_ok(const char *s)	1		flow id validator (no tab/space/comma, 0<len<FLOW_ID_MAX=40)
+safe_token	static int safe_token(const char *s, size_t max)	1		token validator (alnum/./_/-, 0<len<max)

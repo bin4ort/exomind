@@ -1,0 +1,15 @@
+# exodoc behavioral contract (curated pure functions).
+# Inventory generated with the SYSTEM exokit (`~/.local/bin/exokit extract
+# exodoc/src`), then narrowed to the deterministic, side-effect-free surface.
+# The C runner #includes the REAL exodoc source (audit.c, which holds all four
+# curated functions) and stubs the util.c helpers that other audit.c functions
+# reference — the curated functions never call them, so this is genuine
+# anti-drift coverage of exodoc's validation logic in the next version.
+# NOTE: word_char was previously duplicated in both util.c and audit.c; it is
+# now a single static inline in exodoc.h (fixed during next-version dev). The
+# runner includes audit.c, which picks up the shared definition.
+# fn	sig	pure	side_effects	notes
+ver_eq	static int ver_eq(const char *a, const char *b)	1		version equality (strips leading v/V)
+range_str	static int range_str(const char *buf, size_t start, size_t end, const char *needle)	1		substring search in [start,end)
+word_char	static int word_char(unsigned char c)	1		alnum classifier
+is_ws_char	static int is_ws_char(char c)	1		whitespace classifier

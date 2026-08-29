@@ -1,0 +1,28 @@
+# fn	args	expected	desc	err(0/1)
+# args/expected are the literal text passed to / produced by
+# the runner (no tabs or newlines; use esc: \t \n).
+# every contract entry needs >= 1 example incl. an error
+# case (rule R2); the ledger is the only truth (rule R6).
+# NOTE: the runner calls the REAL update.c functions (anti-drift);
+# sq() is a shell-injection sanitizer that STRIPS single quotes
+# (used inside 'git -C '%s''); it does not add surrounding quotes.
+cmp_version	0.4.1 0.4.0	1	version upgrade	0
+cmp_version	0.4.0 0.4.1	-1	version downgrade	0
+cmp_version	0.4.1 0.4.1	0	version same	0
+cmp_version	0.4.1	error: bad args	missing second version (edge)	1
+sq	hello world	hello world	no quotes added (real)	0
+sq	it's	its	single quote stripped (real)	0
+sq	a'b'c	abc	multiple quotes stripped (edge)	0
+sh	echo hello	0	exec command (real)	0
+sh	no_such_cmd_9f3a	127	missing command (edge, real exit)	0
+sh_out	echo hi	hi	command output (real, newline stripped)	0
+update_src		.	update source dir / default	0
+update_branch	main	main	returns branch	0
+exo_update_available		08b3a46 v0.4.1 1 main	returns update info	0
+exo_update_banner		banner	shows banner	0
+update_prefix	/usr/bin	/usr	returns prefix	0
+get_binary_version		0.4.0-alpha.1	returns version	0
+exo_update_self		ok	update self	0
+detect_pm		pacman	pacman detected	0
+pm_install	pacman neovim	installed	install pkg	0
+exo_update_prebuilt	/usr/bin/exomind	ok	prebuilt update	0

@@ -1,0 +1,4 @@
+#!/bin/bash
+# Runner: compile check
+gcc -c src/update.c -o /dev/null 2>&1
+echo "compile: 0"

@@ -1,0 +1,11 @@
+# exocrawl behavioral contract (curated pure functions).
+# Inventory generated with the SYSTEM exokit (`~/.local/bin/exokit extract
+# exocrawl/src`), then narrowed to the deterministic, side-effect-free surface.
+# The C runner #includes the REAL exocrawl sources (html.c/util.c/search.c) and
+# stubs the network calls (net_fetch/pace_wait/resp_free) that other search.c
+# functions make — never reached by the curated functions.
+# url_authority lives in main.c (which defines main()) so it cannot be
+# #included into a runner; excluded here.
+# fn	sig	pure	side_effects	notes
+resolve_url	static void resolve_url(const char *base, const char *href, char *out, size_t cap)	1		relative/abs URL resolution
+strip_html	static void strip_html(char *s)	1		in-place tag strip

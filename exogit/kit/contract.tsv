@@ -1,0 +1,13 @@
+# exogit behavioral contract (pure, deterministic functions).
+# These are the exokit-verifiable surface; network operations (exogit_*)
+# are excluded (they need live GitHub/GitLab).
+# fn	sig	pure	side_effects	notes
+qp	static int qp(const char *query, const char *name, char *out, size_t cap)	1		URL-decoding query-param extractor
+url_encode	static void url_encode(const char *in, char *out, size_t cap)	1		percent-encode (keeps /)
+url_encode_slash	static void url_encode_slash(const char *in, char *out, size_t cap)	1		percent-encode with / -> %2F (gitlab)
+parse_repo_ref	int parse_repo_ref(const char *raw, char *host, size_t hostcap, char *owner, size_t ownercap, char *repo, size_t repocap, char *branch, size_t branchcap, char *path, size_t pathcap, int *is_gitlab)	1		owner/repo (+branch) + path parser
+json_str	int json_str(const char *doc, const char *key, char *out, size_t cap)	1		flat JSON string extractor
+json_find_value	static int json_find_value(const char *doc, size_t start, size_t end, const char *key, size_t *vs, size_t *ve)	1		nested object-value slice finder
+match_close	static size_t match_close(const char *doc, size_t open)	1		brace/bracket matcher
+html_to_text	size_t html_to_text(const char *html, size_t hlen, char *out, size_t cap)	1		HTML -> text (entity decode)
+strip_diff_context	static void strip_diff_context(const char *patch, buf_t *out)	1		drop unchanged diff context lines

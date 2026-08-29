@@ -1,0 +1,10 @@
+resolve_url	http://ex.com/a/b|c	http://ex.com/a/c	relative under dir	0
+resolve_url	http://ex.com/a/b|/x	http://ex.com/x	absolute path on host	0
+resolve_url	http://ex.com/a/b|http://other.com/y	http://other.com/y	already-absolute href	0
+resolve_url	http://ex.com/a/b|		empty href -> empty out	0
+resolve_url	http://ex.com/a/b?q=1|c	http://ex.com/a/c	query in base ignored for dir	0
+resolve_url	http://ex.com|page	http://page	relative against bare host (edge: no trailing slash)	0
+strip_html	<b>hi</b> there	hi there	tag stripped	0
+strip_html	a<b>x</b>c	axc	nested tag stripped	0
+strip_html	no tags	no tags	no tags passthrough	0
+strip_html	<a href='x'>t</a>	t	anchor stripped	0

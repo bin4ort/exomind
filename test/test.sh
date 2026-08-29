@@ -954,6 +954,26 @@ if [ "$FAILS" -ne 0 ]; then
 fi
 rm -rf "$DATA"
 
+# ---- behavioral-contract verification (exokit) ------------------------------
+EK="$(cd "$(dirname "$0")/.." && pwd)/exokit/build/exokit"
+if [ -x "$EK" ]; then
+    echo "=== session: exokit contract verification ==="
+    out=$("$EK" verify 2>&1)
+    echo "$out" | tail -1
+    echo "$out" | grep -q "0 fail" || FAILS=$((FAILS + 1))
+    out=$("$EK" audit 2>&1)
+    echo "audit (core): $out"
+    [ "$out" = "pass" ] || FAILS=$((FAILS + 1))
+    out=$("$EK" verify --kit exogit/kit 2>&1)
+    echo "$out" | tail -1
+    echo "$out" | grep -q "0 fail" || FAILS=$((FAILS + 1))
+    out=$("$EK" audit --kit exogit/kit 2>&1)
+    echo "audit (exogit): $out"
+    [ "$out" = "pass" ] || FAILS=$((FAILS + 1))
+else
+    echo "SKIP exokit verification (exokit not built; run 'make kit')"
+fi
+
 if [ "$FAILS" -eq 0 ]; then
     echo "ALL TESTS PASSED"
     exit 0

@@ -73,7 +73,8 @@ static void url_encode_slash(const char *in, char *out, size_t cap)
             out[w++] = '%'; out[w++] = '2'; out[w++] = 'F';
         } else {
             char tmp[8];
-            url_encode(in + i, tmp, sizeof tmp);
+            char one[2] = { in[i], 0 };
+            url_encode(one, tmp, sizeof tmp);
             size_t k = 0;
             while (tmp[k] && w + 1 < cap) out[w++] = tmp[k++];
         }
@@ -183,6 +184,16 @@ void exogit_file(dout_t *d, net_t *net, const char *query)
             buf_puts(&d->body,
                      "error: need url=<repo url> or repo=<o/r> & path=<file>\n");
             return;
+        }
+        /* repo is "<owner>/<name>" (or just "<name>" if owner supplied
+         * separately); split the owner out so the raw URL is well-formed. */
+        char *slash = strchr(repo, '/');
+        if (slash) {
+            size_t ol = (size_t)(slash - repo);
+            if (ol >= sizeof owner) ol = sizeof owner - 1;
+            memcpy(owner, repo, ol);
+            owner[ol] = 0;
+            memmove(repo, slash + 1, strlen(slash + 1) + 1);
         }
         qp(query, "branch", branch, sizeof branch);
         is_gl = strstr(repo, "gitlab") != NULL;

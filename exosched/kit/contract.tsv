@@ -1,0 +1,7 @@
+# exosched behavioral contract (curated pure functions).
+# Inventory generated with `exokit extract exosched/src`, then narrowed to
+# the deterministic, side-effect-free surface. Runners #include the REAL
+# exosched sources and dispatch the actual implementations.
+# fn	sig	pure	side_effects	notes
+parse_duration	static int parse_duration(const char **pp, const char *end, int64_t *secs, char *err, size_t errsz)	1		"<n><s|m|h|d>" -> seconds
+parse_schedule	int parse_schedule(const char *body, size_t len, int64_t *fire_epoch, int64_t *repeat_s, int64_t *until_epoch, int *receipt, char **msg, char *err, size_t errsz)	1		"in/at/every" scheduler grammar

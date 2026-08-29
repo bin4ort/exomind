@@ -155,7 +155,7 @@ size_t html_to_text(const char *html, size_t hlen, char *out, size_t cap)
         if (in_tag || in_script)
             continue;
         if (c == '&') {
-            char dec[4];
+            char dec[4] = {0};
             size_t used = html_decode_entity(html + i, hlen - i, dec);
             if (used) {
                 size_t dl = strlen(dec);

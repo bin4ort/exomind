@@ -1,0 +1,15 @@
+# fn	args	expected	desc	err(0/1)
+# args/expected are literal text; every entry has >= 1 example incl. an
+# edge/error case (rule R2). The runner dispatches the REAL exosched
+# sources (schedule.c) so this is genuine anti-drift coverage.
+parse_duration	90s	90	seconds	0
+parse_duration	10m	600	minutes	0
+parse_duration	2h	7200	hours	0
+parse_duration	3d	259200	days	0
+parse_duration	5m	300	another minute (edge)	0
+parse_duration	abc	error: bad schedule: expected a number	missing number (edge)	1
+parse_schedule	in 90s "hello"	rep=0 msg=hello	relative one-shot	0
+parse_schedule	every 10m "tick"	rep=600 msg=tick	recurring	0
+parse_schedule	in 90s "hello world"	rep=0 msg=hello world	message with space	0
+parse_schedule	in abc "x"	error: bad schedule: expected a number	bad duration (edge)	1
+parse_schedule	garbage	error: bad schedule: expected 'in <n><s|m|h|d> "msg"', 'at <epoch> "msg"' or 'every <n><s|m|h|d> "msg"'	bad grammar (edge)	1

@@ -1,0 +1,20 @@
+ver_eq	v0.4.1|0.4.1	1	stripped v equals	0
+ver_eq	0.4.1|0.4.1	1	identical	0
+ver_eq	0.4.1|0.4.2	0	diff	0
+ver_eq	V1.0|1.0	1	stripped V equals	0
+ver_eq	1.0|2.0	0	diff	0
+range_str	0 11|world|hello world	1	found	0
+range_str	0 11|xyz|hello world	0	not found	0
+range_str	0 5|hello|hello world	1	found in prefix range	0
+range_str	6 11|world|hello world	1	found at index 6	0
+range_str	0 11|orld|hello world	1	found at index 7	0
+word_char	a	1	alnum	0
+word_char	5	1	digit	0
+word_char	Z	1	upper	0
+word_char	_	0	underscore not word char	0
+word_char	 	0	space not word char	0
+word_char	.	0	dot not word char	0
+is_ws_char	 	1	space is ws	0
+is_ws_char	a	0	not ws	0
+is_ws_char	x	0	not ws	0
+is_ws_char	1	0	not ws	0

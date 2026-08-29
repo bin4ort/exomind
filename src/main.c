@@ -136,8 +136,10 @@ static void usage(const char *argv0)
              "  --serve          the only way to run the HTTP server\n"
              "                   (with --host/--port); without it the\n"
              "                   binary never binds a port\n"
-             "  --body <text>    request body for the operation, instead\n"
-             "                   of reading stdin\n"
+              "  --body <text>    request body for the operation, instead\n"
+              "                   of reading stdin\n"
+              "  --method <M>     force GET|POST|DELETE (overrides the\n"
+              "                   path-derived default for one-shot ops)\n"
              "  --help [modules] show this guide, or the whole stack's\n"
              "  --version        show version\n"
              "  --completion <prefix> tab completion support\n"
@@ -306,33 +308,36 @@ static int invoked_as_server(const char *argv0)
  * (`exomind /set?key=k`, body on `--body` or stdin), print the response
  * body, exit 0/1/2. No HTTP socket is ever opened in this mode. */
 static int console_run(const char *path, const char *body_arg,
-                       store_t *s)
+		       const char *method_override, store_t *s)
 {
-    char pathbuf[512];
-    char query[1536] = "";
-    snprintf(pathbuf, sizeof pathbuf, "%s", path);
-    char *q = strchr(pathbuf, '?');
-    if (q) {
-        *q = 0;
-        snprintf(query, sizeof query, "%s", q + 1);
-    }
-    /* modules are reachable at /exo<name> as well as at / */
-    if (!strncmp(pathbuf, "/exoexomind", 11) &&
-        (pathbuf[11] == 0 || pathbuf[11] == '/')) {
-        memmove(pathbuf, pathbuf + 11, strlen(pathbuf + 11) + 1);
-        if (!pathbuf[0])
-            snprintf(pathbuf, sizeof pathbuf, "/");
-    }
-    const char *method = "GET";
-    if (!strcmp(pathbuf, "/del"))
-        method = "DELETE";
-    else if (!strcmp(pathbuf, "/set") || !strcmp(pathbuf, "/append") ||
-             !strcmp(pathbuf, "/embed") || !strcmp(pathbuf, "/sim") ||
-             !strcmp(pathbuf, "/note") || !strcmp(pathbuf, "/batch") ||
-             !strcmp(pathbuf, "/restore") || !strcmp(pathbuf, "/backup") ||
-             !strcmp(pathbuf, "/outdate") || !strcmp(pathbuf, "/revive") ||
-             !strcmp(pathbuf, "/link") || !strcmp(pathbuf, "/mandate"))
-        method = "POST";
+	char pathbuf[512];
+	char query[1536] = "";
+	snprintf(pathbuf, sizeof pathbuf, "%s", path);
+	char *q = strchr(pathbuf, '?');
+	if (q) {
+		*q = 0;
+		snprintf(query, sizeof query, "%s", q + 1);
+	}
+	/* modules are reachable at /exo<name> as well as at / */
+	if (!strncmp(pathbuf, "/exoexomind", 11) &&
+		(pathbuf[11] == 0 || pathbuf[11] == '/')) {
+		memmove(pathbuf, pathbuf + 11, strlen(pathbuf + 11) + 1);
+		if (!pathbuf[0])
+			snprintf(pathbuf, sizeof pathbuf, "/");
+	}
+	const char *method = "GET";
+	if (!strcmp(pathbuf, "/del"))
+		method = "DELETE";
+	else if (!strcmp(pathbuf, "/set") || !strcmp(pathbuf, "/append") ||
+		 !strcmp(pathbuf, "/embed") || !strcmp(pathbuf, "/sim") ||
+		 !strcmp(pathbuf, "/note") || !strcmp(pathbuf, "/batch") ||
+		 !strcmp(pathbuf, "/restore") || !strcmp(pathbuf, "/backup") ||
+		 !strcmp(pathbuf, "/outdate") || !strcmp(pathbuf, "/revive") ||
+		 !strcmp(pathbuf, "/link") || !strcmp(pathbuf, "/mandate"))
+		method = "POST";
+	/* explicit --method overrides the path-derived default */
+	if (method_override && method_override[0])
+		method = method_override;
     char body[65536] = "";
     size_t blen = 0;
     if (body_arg[0]) {
@@ -505,6 +510,7 @@ int main(int argc, char **argv)
     int want_update = 0;
     int want_prebuilt = 0;
     const char *body_arg = "";
+    const char *method_override = NULL;
     const char *backup_dir = NULL;
     const char *project_root = NULL;
     const char *mandate_text = NULL;
@@ -577,16 +583,107 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    /* `mem` subcommand: a friendlier, positional front-end to the one-shot
+     * memory operations (no URL-encoding / quoting needed). It translates to
+     * the same internal ops the /operation console surface uses.
+     *   exomind mem set <key> <value> [--data F] [--method M]
+     *   exomind mem get <key> | del <key> | search <q> | list [prefix]
+     *   exomind mem link <from> <to> | embed <key> <text> | note <text> */
+    if (argc >= 2 && !strcmp(argv[1], "mem")) {
+        const char *sub = argc >= 3 ? argv[2] : "";
+        const char *data_mem = data;
+        const char *meth_mem = NULL;
+        char path[2048] = {0};
+        const char *body_mem = "";
+        for (int i = 3; i < argc; i++) {
+            if (!strcmp(argv[i], "--data") && i + 1 < argc)
+                data_mem = argv[++i];
+            else if (!strcmp(argv[i], "--method") && i + 1 < argc)
+                meth_mem = argv[++i];
+            else if (!strcmp(argv[i], "--project-root") && i + 1 < argc)
+                project_root = argv[++i];
+        }
+        if (!strcmp(sub, "set") && argc >= 5)
+            snprintf(path, sizeof path, "/set?key=%s", argv[3]),
+                body_mem = argv[4];
+        else if (!strcmp(sub, "get") && argc >= 4)
+            snprintf(path, sizeof path, "/get?key=%s", argv[3]);
+        else if (!strcmp(sub, "del") && argc >= 4)
+            snprintf(path, sizeof path, "/del?key=%s", argv[3]);
+        else if (!strcmp(sub, "link") && argc >= 5)
+            snprintf(path, sizeof path, "/link?from=%s&to=%s", argv[3],
+                     argv[4]);
+        else if (!strcmp(sub, "search") && argc >= 4)
+            snprintf(path, sizeof path, "/search?q=%s", argv[3]);
+        else if (!strcmp(sub, "list"))
+            snprintf(path, sizeof path, "/list%s%s", argc >= 4 ? "?prefix=" : "",
+                     argc >= 4 ? argv[3] : "");
+        else if (!strcmp(sub, "embed") && argc >= 5)
+            snprintf(path, sizeof path, "/embed?key=%s", argv[3]),
+                body_mem = argv[4];
+        else if (!strcmp(sub, "note") && argc >= 4)
+            snprintf(path, sizeof path, "/note"), body_mem = argv[3];
+        else {
+            fprintf(stderr,
+                    "exomind: mem <sub> ...\n"
+                    "  mem set <key> <value>     store a value\n"
+                    "  mem get <key>             fetch a value\n"
+                    "  mem del <key>             delete a key\n"
+                    "  mem link <from> <to>      associate two keys\n"
+                    "  mem search <q>            search by text\n"
+                    "  mem list [prefix]         list keys by prefix\n"
+                    "  mem embed <key> <text>    store a vector\n"
+                    "  mem note <text>           append a note\n"
+                    "flags: --data <file> --method GET|POST|DELETE "
+                    "--project-root <dir>\n");
+            return 1;
+        }
+        if (project_root) {
+            char prf[4128];
+            snprintf(prf, sizeof prf, "%s/.exo/project.dat", project_root);
+            store_t *proj = store_open(prf);
+            http_set_project(proj, project_root);
+        }
+        store_set_quiet(1);
+        g_store = store_open(data_mem);
+        int rc = console_run(path, body_mem, meth_mem, g_store);
+        store_close(g_store);
+        return rc;
+    }
+
     /* Check for tab completion first */
     if (exo_cli_handle_completion(argc, argv))
         return 0;
 
-    /* a leading /operation is a one-shot console op: run it directly */
-    const char *console_path = (argc >= 2 && argv[1][0] == '/') ? argv[1]
-                                                                : NULL;
+    /* a /operation anywhere on the command line is a one-shot console op,
+     * provided it is not the value of a preceding flag (e.g. --data /x). */
+    static const char *val_flags[] = {
+        "--host", "--port", "--data", "--token", "--tokens", "--keys",
+        "--backup", "--project-root", "--mandate", "--mandate-file",
+        "--rate-limit", "--replicate", "--body", "--method", "--log-level",
+        "--completion", "--tutorial", NULL
+    };
+    const char *console_path = NULL;
+    for (int i = 1; i < argc; i++) {
+        int is_val = 0;
+        for (int v = 0; val_flags[v]; v++)
+            if (!strcmp(argv[i], val_flags[v])) {
+                i++; /* skip the flag's value */
+                is_val = 1;
+                break;
+            }
+        if (is_val)
+            continue;
+        if (argv[i][0] == '/') {
+            console_path = argv[i];
+            break;
+        }
+    }
 
-    for (int i = console_path ? 2 : 1; i < argc; i++) {
+    for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
+        if (a == console_path)
+            continue; /* the one-shot operation itself */
         if (!strcmp(a, "--host") && i + 1 < argc)
             host = argv[++i];
         else if (!strcmp(a, "--port") && i + 1 < argc) {
@@ -635,6 +732,16 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(a, "--body") && i + 1 < argc)
             body_arg = argv[++i];
+        else if (!strcmp(a, "--method") && i + 1 < argc) {
+            const char *m = argv[++i];
+            if (!strcmp(m, "GET") || !strcmp(m, "POST") || !strcmp(m, "DELETE"))
+                method_override = m;
+            else {
+                fprintf(stderr,
+                        "exomind: --method must be GET|POST|DELETE\n");
+                return 1;
+            }
+        }
         else if (!strcmp(a, "--log-level") && i + 1 < argc) {
             int lv = exo_parse_log_level(argv[++i]);
             if (lv < 0) {
@@ -797,7 +904,8 @@ int main(int argc, char **argv)
             /* suppress startup chatter in console mode (FEEDBACK.md friction) */
             store_set_quiet(1);
             g_store = store_open(data);
-            int rc = console_run(console_path, body_arg, g_store);
+            int rc = console_run(console_path, body_arg, method_override,
+                                  g_store);
             store_close(g_store);
             return rc;
         }

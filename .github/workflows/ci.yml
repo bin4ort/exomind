@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl
+
+      - name: Build exomind, exokit, exogit
+        run: |
+          make
+          make exokit
+          make -C exogit all
+
+      - name: Behavioral-contract verification (exokit)
+        # Anti-drift: the runners dispatch the REAL implementation, so a
+        # green ledger means the contract matches the code.
+        run: |
+          make kit
+          make kit-exogit
+
+      - name: exomind functional suite
+        run: bash test/test.sh
+
+      - name: exogit functional suite (network-dependent)
+        continue-on-error: true
+        run: make -C exogit test

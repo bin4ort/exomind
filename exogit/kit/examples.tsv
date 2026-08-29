@@ -1,0 +1,22 @@
+# fn	args	expected	desc	err(0/1)
+# args/expected are literal text; multi-line content uses the exokit
+# escape convention \n (the runner decodes \n in args and re-escapes
+# newlines in output). Every entry has >= 1 example incl. an edge/error
+# case (rule R2). The runner dispatches the REAL exogit sources.
+qp	name|a=1&name=foo&b=2	foo	extract param	0
+qp	zzz|a=1	error: not found	missing param (edge)	1
+url_encode	a b/c	a%20b/c	space + slash kept	0
+url_encode	a#b	a%23b	hash encoded (edge)	0
+url_encode_slash	a/b c	a%2Fb%20c	slash -> %2F	0
+url_encode_slash	x/y/z	x%2Fy%2Fz	multiple slashes (edge)	0
+parse_repo_ref	https://github.com/owner/repo/blob/main/src/x.c	github.com|owner|repo|main|src/x.c|0	github blob url	0
+parse_repo_ref	https://gitlab.com/grp/proj/-/blob/dev/a.txt	gitlab.com|grp|proj|dev|a.txt|1	gitlab blob url	0
+parse_repo_ref	owner/repo	|owner|repo|||0	shorthand (edge)	0
+json_str	message|{"message":"hi"}	hi	flat value	0
+json_str	zzz|{"message":"hi"}	error: not found	missing key (edge)	1
+json_find_value	commit|{"commit":{"message":"x"}}	{"message":"x"}	nested slice	0
+match_close	{"a":1}|0	6	matching brace	0
+match_close	{"a":1}|99	error: not found	out of range (edge)	1
+html_to_text	<p>Hello &amp; <b>world</b></p>	Hello & world	entity decode	0
+html_to_text	a &lt;b&gt; c &quot;x&quot; &#65; &amp; end	a <b> c "x" A & end	mixed entities (edge)	0
+strip_diff_context	@@ -1,3 +1,3 @@\n context a\n-old line\n+new line\n context b	@@ -1,3 +1,3 @@\n-old line\n+new line\n	context stripped	0

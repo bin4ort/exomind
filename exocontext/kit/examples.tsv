@@ -1,0 +1,19 @@
+utf8_decode	A	1 41	utf8 1/2/3/4-byte + empty edge	0
+utf8_decode	é	2 e9	utf8 1/2/3/4-byte + empty edge	0
+utf8_decode	€	3 20ac	utf8 1/2/3/4-byte + empty edge	0
+utf8_decode	😀	4 1f600	utf8 1/2/3/4-byte + empty edge	0
+utf8_decode		0 0	utf8 1/2/3/4-byte + empty edge	0
+ci_prefix	Hello World|hello	1	case-insensitive prefix	0
+ci_prefix	Hello World|world	0	case-insensitive prefix	0
+ci_prefix	GET /x|get 	1	case-insensitive prefix	0
+ci_prefix	abc|xyz	0	case-insensitive prefix	0
+ci_prefix	Foo|FOO	1	case-insensitive prefix	0
+esc_line	plain	plain	line escaping	0
+esc_line	a\b	a\\b	line escaping	0
+esc_line	a\b\c	a\\b\\c	line escaping	0
+unesc_line	plain	plain	line unescaping	0
+unesc_line	a\\b	a\b	line unescaping	0
+unesc_line	a\\\b	a\\b	line unescaping	0
+json_escape	plain	plain	json escaping	0
+json_escape	a"b	a\"b	json escaping	0
+json_escape	a\b	a\\b	json escaping	0

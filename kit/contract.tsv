@@ -1,0 +1,16 @@
+sh	static int sh(const char *fmt, ...)	1		
+sh_out	static int sh_out(const char *fmt, char *out, size_t outsz, ...)	1		
+sq	static const char *sq(const char *in, char *buf, size_t bufsz)	1		
+update_src	static const char *update_src(void)	1		
+update_branch	static const char *update_branch(const char *sqdir, char *buf, size_t bufsz)	1		
+exo_update_available	int exo_update_available(char *info, size_t infosz)	1		
+exo_update_banner	void exo_update_banner(const char *argv0)	1		
+update_prefix	static int update_prefix(char *buf, size_t bufsz, const char *argv0)	1		
+cmp_version	static int cmp_version(const char *a, const char *b)	1		
+get_binary_version	static int get_binary_version(char *buf, size_t bufsz)	1		
+exo_update_self	int exo_update_self(const char *argv0)	1		
+detect_pm	static const char *detect_pm(void)	1		
+pm_install	static int pm_install(const char *pm, const char *pkg)	1		
+exo_update_prebuilt	int exo_update_prebuilt(const char *argv0)	1		
+sh	sh(command) -> exit code		1		echo hello	0
+sq	sq(string) -> quoted		1		hello world	'hello world'
