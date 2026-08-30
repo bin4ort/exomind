@@ -188,6 +188,17 @@ static int update_prefix(char *buf, size_t bufsz, const char *argv0)
     return 0;
 }
 
+/* fallback prefix detection: try common locations */
+static int update_prefix_fallback(char *buf, size_t bufsz)
+{
+    const char *home = getenv("HOME");
+    if (home) {
+        snprintf(buf, bufsz, "%s/.local", home);
+        return 0;
+    }
+    return -1;
+}
+
 static int cmp_version(const char *a, const char *b)
 {
     if (!a || !b)
@@ -312,16 +323,24 @@ int exo_update_self(const char *argv0)
             printf("exomind: cannot read binary version, rebuilding\n");
         }
     }
-    char ahead[64] = {0}, cnt[64] = {0};
+char ahead[64] = {0}, cnt[64] = {0};
     int ahead_cnt = 0;
-    int stash_ok = sh("git -C '%s' stash push --include-untracked -m exomind-update >/dev/null 2>&1",
+
+    /* only stash if there are actual local changes (including untracked) */
+    int stash_ok = 0;
+    char stash_check[128];
+    if (sh_out("git -C '%s' status --porcelain 2>/dev/null", stash_check,
+               sizeof stash_check, sqdir) == 0 && stash_check[0]) {
+        stash_ok = sh("git -C '%s' stash push --include-untracked -m exomind-update >/dev/null 2>&1",
                       sqdir) == 0;
+    }
+
     if (sh_out("git -C '%s' rev-list --count origin/%s..HEAD 2>/dev/null",
                ahead, sizeof ahead, sqdir, branch) != 0)
         ahead[0] = '\0';
     ahead_cnt = ahead[0] ? atoi(ahead) : 0;
     if (sh_out("git -C '%s' rev-list --count HEAD..origin/%s 2>/dev/null",
-                cnt, sizeof cnt, sqdir, branch) != 0)
+               cnt, sizeof cnt, sqdir, branch) != 0)
         snprintf(cnt, sizeof cnt, "?");
     int pull_rc;
     if (ahead_cnt) {
@@ -332,11 +351,17 @@ int exo_update_self(const char *argv0)
                       sqdir, branch);
     }
     if (stash_ok) {
-        if (sh("git -C '%s' stash pop --index >/dev/null 2>&1", sqdir) != 0) {
-            fprintf(stderr,
-                    "exomind: warning: could not restore stashed changes "
-                    "(conflict during pop) — run 'git stash pop' in %s to recover\n",
-                    src);
+        /* verify stash was actually created (not empty) */
+        char stash_list[64];
+        if (sh_out("git -C '%s' stash list 2>/dev/null | grep -c 'exomind-update'",
+                   stash_list, sizeof stash_list, sqdir) == 0 &&
+            stash_list[0] && atoi(stash_list) > 0) {
+            if (sh("git -C '%s' stash pop --index >/dev/null 2>&1", sqdir) != 0) {
+                fprintf(stderr,
+                        "exomind: warning: could not restore stashed changes "
+                        "(conflict during pop) — run 'git stash pop' in %s to recover\n",
+                        src);
+            }
         }
     }
     if (pull_rc != 0) {
@@ -353,11 +378,13 @@ int exo_update_self(const char *argv0)
     }
     char prefix[4096];
     if (update_prefix(prefix, sizeof prefix, argv0) != 0) {
-        fprintf(stderr,
-                "exomind: error: cannot derive install prefix from %s — "
-                "set EXO_UPDATE_PREFIX\n",
-                argv0);
-        return 1;
+        if (update_prefix_fallback(prefix, sizeof prefix) != 0) {
+            fprintf(stderr,
+                    "exomind: error: cannot derive install prefix from %s — "
+                    "set EXO_UPDATE_PREFIX\n",
+                    argv0);
+            return 1;
+        }
     }
     char sqp[4096];
     sq(prefix, sqp, sizeof sqp);
