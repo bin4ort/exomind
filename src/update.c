@@ -128,13 +128,41 @@ void exo_update_banner(const char *argv0)
     char prefix[4096];
     if (update_prefix(prefix, sizeof prefix, argv0) != 0)
         snprintf(prefix, sizeof prefix, "<install prefix>");
+
+    /* read source version from repo for accurate banner */
+    const char *src = update_src();
+    char sver[64] = {0};
+    char version_h[4096];
+    snprintf(version_h, sizeof version_h, "%s/src/version.h", src);
+    FILE *f = fopen(version_h, "r");
+    if (f) {
+        char line[256];
+        while (fgets(line, sizeof line, f)) {
+            if (strstr(line, "EXOMIND_VERSION")) {
+                char *start = strchr(line, '"');
+                if (start) {
+                    start++;
+                    char *end = strchr(start, '"');
+                    if (end) {
+                        *end = 0;
+                        snprintf(sver, sizeof sver, "%s", start);
+                    }
+                }
+                break;
+            }
+        }
+        fclose(f);
+    }
+    if (!sver[0])
+        snprintf(sver, sizeof sver, "%s", EXOMIND_VERSION);
+
     fprintf(stderr,
             "exomind-server v%s: update available (git %s -> %s, %s "
             "commit%s behind origin/%s)\n"
             "  run '%s --update' to fetch, rebuild and reinstall into "
             "%s/bin\n"
             "  (EXO_UPDATE_CHECK=0 silences this notice)\n",
-            EXOMIND_VERSION, from, to, cnt, strcmp(cnt, "1") ? "s" : "", br,
+            sver, from, to, cnt, strcmp(cnt, "1") ? "s" : "", br,
             base, prefix);
 }
 
@@ -240,20 +268,45 @@ int exo_update_self(const char *argv0)
     const char *bin = strrchr(argv0, '/');
     bin = bin ? bin + 1 : argv0;
     if (!strcmp(old, remote)) {
+        /* read source version from repo's version.h (not the running binary's) */
+        char sver[64] = {0};
+        char version_h[4096];
+        snprintf(version_h, sizeof version_h, "%s/src/version.h", src);
+        FILE *f = fopen(version_h, "r");
+        if (f) {
+            char line[256];
+            while (fgets(line, sizeof line, f)) {
+                if (strstr(line, "EXOMIND_VERSION")) {
+                    char *start = strchr(line, '"');
+                    if (start) {
+                        start++;
+                        char *end = strchr(start, '"');
+                        if (end) {
+                            *end = 0;
+                            snprintf(sver, sizeof sver, "%s", start);
+                        }
+                    }
+                    break;
+                }
+            }
+            fclose(f);
+        }
+        if (!sver[0])
+            snprintf(sver, sizeof sver, "%s", EXOMIND_VERSION); /* fallback */
+
         char bver[64] = {0};
         if (get_binary_version(bver, sizeof bver) == 0) {
-            int vcmp = cmp_version(bver, EXOMIND_VERSION);
+            int vcmp = cmp_version(bver, sver);
             if (vcmp == 0) {
-                printf("exomind: up to date (v%s at %s)\n",
-                       EXOMIND_VERSION, old);
+                printf("exomind: up to date (v%s at %s)\n", sver, old);
                 return 0;
             }
             if (vcmp < 0) {
                 printf("exomind: binary version %s < source v%s, rebuilding\n",
-                       bver, EXOMIND_VERSION);
+                       bver, sver);
             } else {
                 printf("exomind: binary version %s != source v%s, rebuilding\n",
-                       bver, EXOMIND_VERSION);
+                       bver, sver);
             }
         } else {
             printf("exomind: cannot read binary version, rebuilding\n");
