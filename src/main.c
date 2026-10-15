@@ -103,54 +103,64 @@ static void usage(const char *argv0)
     printf("exomind v" EXOMIND_VERSION
            " - external memory for AI agents\n"
            "usage: %s [options]\n"
-           "  --host <addr>    bind address (default 127.0.0.1)\n"
-           "  --port <n>       port (default 7654)\n"
-           "  --data <file>    data file (default exomind.dat)\n"
-           "  --token <t>      require 'Authorization: Bearer <t>'\n"
-           "  --tokens <file>  load extra tokens (token[:ro][:scope=<p>*])\n"
-           "  --keys <file>    key file (same format as --tokens); managed\n"
-           "                   with the `keys` subcommand\n"
-           "  --rate-limit <n> max requests/second (429 beyond)\n"
-             "  --log-level <error|warn|info|debug>\n"
-             "  --replicate <addr>  follow a primary exomind (host:port):\n"
-             "                   poll its /repl log and apply records to this\n"
-             "                   store every 2s (env EXO_REPL_POLL_MS); never\n"
-             "                   binds a port unless --serve/--port is given\n"
-             "  --mcp            serve as a stdio Model Context Protocol\n"
-              "                   server (installing as `exomind-server` does\n"
-              "                   the same)\n"
-              "  --update         fetch, rebuild and reinstall into the running\n"
-              "                   binary's own prefix (no sudo for user\n"
-              "                   installs); env EXO_UPDATE_DIR (source tree),\n"
-              "                   EXO_UPDATE_PREFIX (install prefix),\n"
-              "                   EXO_UPDATE_BRANCH, EXO_UPDATE_CHECK=0 to kill\n"
-              "                   the startup version notice (stderr only)\n"
-              "  --update-prebuilt install a pre-built package via pacman/apt/dnf\n"
-              "                   (requires sudo; env EXO_PREBUILT_PKG to name\n"
-              "                   the package, default: exomind)\n"
-              "  keys add <name[:mods]> | keys list | keys remove <name>\n"
-             "  <operation>      run ONE API operation directly, no server:\n"
-             "                   exomind /set?key=k (body = value, from\n"
-             "                   --body <text> or stdin), /get?key=k,\n"
-             "                   /search?q=..., /list?prefix=..., /note ...\n"
-             "  --serve          the only way to run the HTTP server\n"
-             "                   (with --host/--port); without it the\n"
-             "                   binary never binds a port\n"
-              "  --body <text>    request body for the operation, instead\n"
-              "                   of reading stdin\n"
-              "  --method <M>     force GET|POST|DELETE (overrides the\n"
-              "                   path-derived default for one-shot ops)\n"
-             "  --help [modules] show this guide, or the whole stack's\n"
-             "  --version        show version\n"
-             "  --completion <prefix> tab completion support\n"
-             "  --tutorial <name> show a tutorial (name: getting_started, memory_basics, workflow_basics)\n"
-             "  --getting-started  show the getting started guide\n"
-             "env: EXOMIND_TOKEN same as --token\n"
-             "tab completion: enable with `source <(exomind --completion <prefix>)`\n"
-             "command history: commands are saved to $HOME/.exomind_history\n"
-             "the daemon serves its API at / and /exoexomind on the bound\n"
-             "address; GET / is the base usage information\n",
-            argv0);
+           "  --host <addr>           bind address (default 127.0.0.1)\n"
+           "  --port <n>              port (default 7654)\n"
+           "  --data <file>           data file (default exomind.dat)\n"
+           "  --token <t>             require 'Authorization: Bearer <t>'\n"
+           "  --tokens <file>         load extra tokens (token[:ro][:scope=<p>*])\n"
+           "  --keys <file>           key file (same format as --tokens); managed\n"
+           "                          with the `keys` subcommand\n"
+           "  --rate-limit <n>        max requests/second (429 beyond)\n"
+           "  --log-level <lvl>       error|warn|info|debug\n"
+           "  --replicate <addr>      follow a primary exomind (host:port):\n"
+           "                          poll its /repl log and apply records to this\n"
+           "                          store every 2s (env EXO_REPL_POLL_MS); never\n"
+           "                          binds a port unless --serve/--port is given\n"
+           "  --mcp                   serve as a stdio Model Context Protocol\n"
+           "                          server (installing as `exomind-server` does\n"
+           "                          the same)\n"
+           "  --exclude-module <mods>  comma-separated list of modules to exclude\n"
+           "                          from MCP router (exokit,exodoc,spawn,...)\n"
+           "  --no-auto-context       disable automatic exocontext loading before\n"
+           "                          each tool call (env EXO_NO_AUTO_CONTEXT)\n"
+           "  --no-auto-store         disable automatic result storage in exomind\n"
+           "                          after each tool call (env EXO_NO_AUTO_STORE)\n"
+           "  --no-verify-claims      disable external claim verification\n"
+           "                          (env EXO_NO_VERIFY_CLAIMS)\n"
+           "  --update                fetch, rebuild and reinstall into the running\n"
+           "                          binary's own prefix (no sudo for user\n"
+           "                          installs); env EXO_UPDATE_DIR (source tree),\n"
+           "                          EXO_UPDATE_PREFIX (install prefix),\n"
+           "                          EXO_UPDATE_BRANCH, EXO_UPDATE_CHECK=0 to kill\n"
+           "                          the startup version notice (stderr only)\n"
+           "  --update-prebuilt       install a pre-built package via pacman/apt/dnf\n"
+           "                          (requires sudo; env EXO_PREBUILT_PKG to name\n"
+           "                          the package, default: exomind)\n"
+           "  keys add <name[:mods]> | keys list | keys remove <name>\n"
+           "  <operation>             run ONE API operation directly, no server:\n"
+           "                          exomind /set?key=k (body = value, from\n"
+           "                          --body <text> or stdin), /get?key=k,\n"
+           "                          /search?q=..., /list?prefix=..., /note ...\n"
+           "  --serve                 the only way to run the HTTP server\n"
+           "                          (with --host/--port); without it the\n"
+           "                          binary never binds a port\n"
+           "  --body <text>           request body for the operation, instead\n"
+           "                          of reading stdin\n"
+           "  --method <M>            force GET|POST|DELETE (overrides the\n"
+           "                          path-derived default for one-shot ops)\n"
+           "  --help [modules]        show this guide, or the whole stack's\n"
+           "  --version               show version\n"
+           "  --completion <prefix>   tab completion support\n"
+           "  --tutorial <name>       show a tutorial (getting_started,\n"
+           "                          memory_basics, workflow_basics,\n"
+           "                          qms_basics, scheduling_basics)\n"
+           "  --getting-started       show the getting started guide\n"
+           "env: EXOMIND_TOKEN same as --token\n"
+           "tab completion: enable with `source <(exomind --completion <prefix>)`\n"
+           "command history: commands are saved to $HOME/.exomind_history\n"
+           "the daemon serves its API at / and /exoexomind on the bound\n"
+           "address; GET / is the base usage information\n",
+           argv0);
 }
 
 /* whole-stack usage registry: siblings from common, own spec here */
@@ -660,7 +670,7 @@ int main(int argc, char **argv)
     static const char *val_flags[] = {
         "--host", "--port", "--data", "--token", "--tokens", "--keys",
         "--backup", "--project-root", "--mandate", "--mandate-file",
-        "--rate-limit", "--replicate", "--body", "--method", "--log-level",
+        "--rate-limit", "--replicate", "--exclude-module", "--body", "--method", "--log-level",
         "--completion", "--tutorial", NULL
     };
     const char *console_path = NULL;
@@ -723,6 +733,18 @@ int main(int argc, char **argv)
             snprintf(g_repl.primary, sizeof g_repl.primary, "%s",
                      argv[++i]);
             g_repl.enabled = 1;
+        }
+        else if (!strcmp(a, "--exclude-module") && i + 1 < argc) {
+            setenv("EXO_EXCLUDE_MODULES", argv[++i], 1);
+        }
+        else if (!strcmp(a, "--no-auto-context")) {
+            setenv("EXO_NO_AUTO_CONTEXT", "1", 1);
+        }
+        else if (!strcmp(a, "--no-auto-store")) {
+            setenv("EXO_NO_AUTO_STORE", "1", 1);
+        }
+        else if (!strcmp(a, "--no-verify-claims")) {
+            setenv("EXO_NO_VERIFY_CLAIMS", "1", 1);
         }
         else if (!strcmp(a, "--update")) {
             want_update = 1;
