@@ -829,6 +829,9 @@ static void check_rework(check_ctx_t *ctx, finding_t *f)
     size_t nchk = 0;
     int cycles = 0;
     for (size_t i = 0; i < n; i++) {
+        if (!auds[i].findings || !auds[i].findings[0]) {
+            continue;
+        }
         char *copy = xstrdup(auds[i].findings);
         char *save = NULL;
         for (char *l = strtok_r(copy, "\n", &save); l;
