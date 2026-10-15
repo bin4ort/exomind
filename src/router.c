@@ -19,6 +19,7 @@
  */
 #include "http.h"
 #include "../common/exo.h"
+#include "util.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -43,19 +44,34 @@ static const router_mod_t MODS[] = {
     {"exocontext", "exocontext"},
     {"exodoc", "exodoc"},
     {"exokit", "exokit"},
-    {"spawn", "exoflow"},  /* multi-agent spawning via exoflow */
+    {"spawn", "exoflow"},
 };
+
+static char *g_exclude_mods[16] = {0};
+static int g_exclude_count = 0;
+
+static int router_is_excluded(const char *tool)
+{
+    for (int i = 0; i < g_exclude_count; i++) {
+        if (!strcmp(tool, g_exclude_mods[i]))
+            return 1;
+    }
+    return 0;
+}
 
 /* forward declarations */
 static int run_binary(const char *binary, const char *path,
                       const char *body, char *out, size_t cap,
                       int *exit_code);
 static void router_verify_claims(const char *tool, const char *result);
+static void router_parse_excludes(const char *exclude_list);
 
 /* mandatory: query exocontext for agent state before any tool call */
 static void router_load_context(const char *agent_id)
 {
     if (!agent_id || !agent_id[0])
+        return;
+    if (getenv("EXO_NO_AUTO_CONTEXT"))
         return;
     char out[65536];
     int rc = 0;
@@ -71,6 +87,8 @@ static void router_store_result(const char *tool, const char *args,
 {
     if (!result || !result[0])
         return;
+    if (getenv("EXO_NO_AUTO_STORE"))
+        return;
     char key[512];
     snprintf(key, sizeof key, "p:tool:%s:%ld", tool, (long)time(NULL));
     char body[8192];
@@ -82,6 +100,8 @@ static void router_store_result(const char *tool, const char *args,
     run_binary("exomind", "/note", body, out, sizeof out, &rc);
     (void)rc;
 
+    if (getenv("EXO_NO_VERIFY_CLAIMS"))
+        return;
     /* MANDATORY: verify external claims in result (URLs, versions, APIs) */
     router_verify_claims(tool, result);
 }
@@ -92,6 +112,8 @@ static void router_verify_claims(const char *tool, const char *result)
 {
     (void)tool; /* available for tool-specific verification logic */
     if (!result)
+        return;
+    if (getenv("EXO_NO_VERIFY_CLAIMS"))
         return;
     char out[4096];
     int rc = 0;
@@ -210,6 +232,9 @@ static int run_binary(const char *binary, const char *path,
 int exo_router_call(const char *tool, const char *args, char *out,
                     size_t cap)
 {
+    if (router_is_excluded(tool))
+        return snprintf(out, cap, "error: module tool %s is excluded", tool), 1;
+
     /* Special handling for spawn tool: create a new exoflow sub-agent */
     if (!strcmp(tool, "spawn")) {
         char path[4096] = "";
@@ -237,6 +262,8 @@ int exo_router_call(const char *tool, const char *args, char *out,
     }
 
     for (size_t i = 0; i < sizeof MODS / sizeof MODS[0]; i++) {
+        if (router_is_excluded(MODS[i].tool))
+            continue;
         if (strcmp(tool, MODS[i].tool))
             continue;
         char path[4096] = "";
@@ -272,6 +299,24 @@ static const exo_mcp_tool_t ROUTER_TOOLS[] = {
     {"spawn", "Multi-agent spawning: spawn sub-agent for complex subtask. path examples: /spawn?task=<description>&agent=<id>&tools=exogit,exocrawl. Returns sub-agent ID and context.", "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"body\":{\"type\":\"string\"}},\"required\":[\"path\"]}"},
 };
 
+static void router_parse_excludes(const char *exclude_list)
+{
+    if (!exclude_list || !exclude_list[0])
+        return;
+    char *copy = xstrdup(exclude_list);
+    char *save = NULL;
+    char *tok = strtok_r(copy, ",", &save);
+    while (tok && g_exclude_count < 16) {
+        while (*tok == ' ') tok++;
+        char *end = tok + strlen(tok) - 1;
+        while (end > tok && *end == ' ') *end-- = 0;
+        if (tok[0])
+            g_exclude_mods[g_exclude_count++] = xstrdup(tok);
+        tok = strtok_r(NULL, ",", &save);
+    }
+    free(copy);
+}
+
 /* register the router toolset with exo_mcp_register (appends to the
  * global tool list; the caller must pass the shared dispatcher because
  * exo_mcp_register overwrites g_call) */
@@ -279,7 +324,12 @@ void exo_router_register(const char *name, const char *version,
                          int (*call)(const char *tool, const char *args,
                                      char *out, size_t cap))
 {
-    exo_mcp_register(ROUTER_TOOLS, sizeof ROUTER_TOOLS /
-                                       sizeof ROUTER_TOOLS[0],
-                     name, version, call);
+    const char *exclude = getenv("EXO_EXCLUDE_MODULES");
+    router_parse_excludes(exclude);
+
+    for (size_t i = 0; i < sizeof ROUTER_TOOLS / sizeof ROUTER_TOOLS[0]; i++) {
+        if (!router_is_excluded(ROUTER_TOOLS[i].name)) {
+            exo_mcp_register(&ROUTER_TOOLS[i], 1, name, version, call);
+        }
+    }
 }
