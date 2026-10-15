@@ -39,6 +39,8 @@ void *xrealloc(void *p, size_t n)
 
 char *xstrdup(const char *s)
 {
+    if (!s)
+        return xstrdup("");
     size_t n = strlen(s);
     char *d = xmalloc(n + 1);
     memcpy(d, s, n + 1);
