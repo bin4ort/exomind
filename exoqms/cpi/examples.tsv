@@ -1,0 +1,46 @@
+# fn<TAB>args<TAB>expected<TAB>desc<TAB>err(0/1)
+# exocpi behavioral ledger — every contract entry needs >= 1 example incl. an error case (rule R2)
+
+cpi_pdca_create	problem="high rework rate"	target="rework_rate < 5%"	metric="metric:rework_rate"	hypothesis="missing root cause analysis"	ok cpi:pdca:1788451122:abc123	Create PDCA cycle	0
+cpi_pdca_create	problem=""	target="rework_rate < 5%"	metric="metric:rework_rate"	hypothesis="test"	error: missing problem	Missing problem	1
+cpi_pdca_get	id=1788451122:abc123	plan: ... do: ... check: ... act: pending	Get PDCA status	0
+cpi_pdca_get	id=nonexistent	error: not found	Not found	1
+cpi_pdca_list		1788451122:abc123	plan	1788451123:def456	plan	List PDCA cycles	0
+
+cpi_plan	pdca_id=1788451122:abc123	problem="high rework rate"	target="rework_rate < 5%"	metric="metric:rework_rate"	hypothesis="missing root cause analysis"	ok cpi:plan:1788451122:abc123	Create plan phase	0
+cpi_do	pdca_id=1788451122:abc123	step=analyze-root-cause	ok cpi:do:1788451122:abc123	Claim exoflow step	0
+cpi_do	pdca_id=1788451122:abc123	step=nonexistent	error: step not found	Invalid step	1
+cpi_check	pdca_id=1788451122:abc123	measurement=4.8	ok cpi:check:1788451122:abc123	Check phase with measurement	0
+cpi_check	pdca_id=1788451122:abc123	measurement=invalid	error: bad measurement	Bad measurement	1
+cpi_act	pdca_id=1788451122:abc123	decision=standardize	note="Root cause analysis added to workflow"	ok cpi:act:1788451122:abc123	Standardize	0
+cpi_act	pdca_id=1788451122:abc123	decision=replan	note="Need 2 more audits"	ok cpi:act:1788451122:abc123	Replan	0
+cpi_act	pdca_id=1788451122:abc123	decision=invalid	error: bad decision	Invalid decision	1
+
+cpi_checksheet_create	template=defects	ok cpi:checksheet:defects:1788451122	Create check sheet	0
+cpi_pareto	source=nc:findings	ok component-tests=45% doc-compliance=30% code-safety=25%	Pareto of NC types	0
+cpi_fishbone	problem="high rework rate"	categories=method,material,machine,man,environment	mermaid: graph TD...\nRoot Cause --> Method\nRoot Cause --> Material\n...	Fishbone diagram	0
+cpi_histogram	metric=metric:rework_rate	ok bins: 0-1=5, 1-2=12, 2-3=8, 3-4=3	Histogram	0
+cpi_control	metric=metric:rework_rate	value=4.8	ok CL=3.2 UCL=6.8 LCL=0.0 trend=down	Control chart	0
+cpi_scatter	x_metric=wip	y_metric=cycle_time	ok r=0.72 p<0.01	Scatter correlation	0
+cpi_run_chart	metric=metric:rework_rate	ok points: 14.2, 13.8, 12.1, 10.5, 9.8, 8.2, 7.1, 5.4, 4.8, 3.9	Run chart	0
+cpi_flowchart	flow_id=feature-auth	ok mermaid: graph TD...\nBacklog --> Ready\nReady --> InProgress\nInProgress --> Review\nReview --> Done	Flowchart	0
+
+cpi_poka_register	name=exokit_verify	method=motion-step	prevention=1	desc=exokit verify prevents contract drift	ok cpi:poka:exokit_verify	Register poka-yoke	0
+cpi_poka_register	name=invalid	method=invalid	prevention=1	desc=test	error: bad method	Bad method	1
+cpi_poka_list		ok exokit_verify, exoflow_deps, exodoc_live	List poka-yokes	0
+cpi_poka_effectiveness	period=30d	ok exokit_verify: 95% catch, exoflow_deps: 100%, exodoc_live: 80%	Effectiveness report	0
+
+cpi_kanban_board_create	flow=feature-auth	columns=backlog,ready,in_progress,review	done	wip_limits=inf,5,3,2,inf	sle=in_progress=85% in 3d	ok cpi:kanban:feature-auth	Create Kanban board	0
+cpi_kanban_pull	board=feature-auth	worker=dev1	ok card=task-123 age=0	Pull work	0
+cpi_kanban_metrics	board=feature-auth	ok WIP=2/3 throughput=4/day cycle_time=2.3d age_max=1.5d	Kanban metrics	0
+
+cpi_5s_audit	agent=dev1	criteria=sort:unused_keys>30d,set_in_order:prefixes,shine:orphans,standardize:contracts,sustain:daily	ok score=85% (sort=90 set=80 shine=95 standardize=85 sustain=75)	5S audit	0
+cpi_5s_audit	agent=invalid	criteria=...	error: agent not found	Agent not found	1
+
+cpi_kaizen_suggest	agent=dev1	title=Add vector matching to exoflow	problem=Manual step assignment ignores skills	suggestion=Use exomind /sim to match workers to steps	category=process	ok cpi:kaizen:1788451122:abc123	Submit suggestion	0
+cpi_kaizen_implement	suggestion_id=1788451122:abc123	pdca_id=1788451123:def456	ok cpi:kaizen:impl:1788451123:def456	Implement via PDCA	0
+
+cpi_standard_sync	kit_path=exomind/kit	ok synced 20 functions	Sync standard work	0
+cpi_standard_drift		ok drift: exokit function parse_duration missing example	Detect drift	0
+
+cpi_report	period=monthly	ok PDCA=12/10 pass Pareto: component-tests=45%...	Management review	0

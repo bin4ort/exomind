@@ -1,0 +1,40 @@
+# fn<TAB>sig<TAB>pure(0/1)<TAB>side_effects<TAB>notes
+# exocpi — Continuous Process Improvement operators
+# every public function of the software belongs here; this
+# inventory IS the software's self-SDK surface (rule R1).
+
+cpi_pdca_create	void cpi_pdca_create(const char *problem, const char *target, const char *metric, const char *hypothesis, char *out, size_t cap)	0	creates PDCA cycle in exomind	
+cpi_pdca_get	void cpi_pdca_get(const char *id, char *out, size_t cap)	0	retrieves PDCA cycle status	
+cpi_pdca_list	void cpi_pdca_list(char *out, size_t cap)	0	lists all PDCA cycles	
+
+cpi_plan	void cpi_plan(const char *pdca_id, const char *problem, const char *target, const char *metric, const char *hypothesis, char *out, size_t cap)	0	creates plan phase record	
+cpi_do	void cpi_do(const char *pdca_id, const char *step, char *out, size_t cap)	0	executes do phase, claims exoflow step	
+cpi_check	void cpi_check(const char *pdca_id, double measurement, char *out, size_t cap)	0	executes check phase with measurement	
+cpi_act	void cpi_act(const char *pdca_id, const char *decision, const char *note, char *out, size_t cap)	0	executes act phase: standardize or replan	
+
+cpi_checksheet_create	void cpi_checksheet_create(const char *template, char *out, size_t cap)	0	creates check sheet	
+cpi_pareto	void cpi_pareto(const char *source, char *out, size_t cap)	0	Pareto analysis of findings	
+cpi_fishbone	void cpi_fishbone(const char *problem, const char *categories, char *out, size_t cap)	0	root cause diagram (Mermaid)	
+cpi_histogram	void cpi_histogram(const char *metric, char *out, size_t cap)	0	distribution analysis	
+cpi_control	void cpi_control(const char *metric, double value, char *out, size_t cap)	0	Shewhart control chart with UCL/LCL	
+cpi_scatter	void cpi_scatter(const char *x_metric, const char *y_metric, char *out, size_t cap)	0	correlation analysis	
+cpi_run_chart	void cpi_run_chart(const char *metric, char *out, size_t cap)	0	time series trend	
+cpi_flowchart	void cpi_flowchart(const char *flow_id, char *out, size_t cap)	0	process map from exoflow	
+
+cpi_poka_register	void cpi_poka_register(const char *name, const char *method, int prevention, const char *desc, char *out, size_t cap)	0	registers poka-yoke device	
+cpi_poka_list	void cpi_poka_list(char *out, size_t cap)	0	lists registered poka-yokes	
+cpi_poka_effectiveness	void cpi_poka_effectiveness(const char *period, char *out, size_t cap)	0	effectiveness report	
+
+cpi_kanban_board_create	void cpi_kanban_board_create(const char *flow, const char *columns, const char *wip_limits, const char *sle, char *out, size_t cap)	0	creates Kanban board	
+cpi_kanban_pull	void cpi_kanban_pull(const char *board, const char *worker, char *out, size_t cap)	0	pulls work item	
+cpi_kanban_metrics	void cpi_kanban_metrics(const char *board, char *out, size_t cap)	0	flow metrics (WIP, throughput, cycle time, age)	
+
+cpi_5s_audit	void cpi_5s_audit(const char *agent, const char *criteria, char *out, size_t cap)	0	5S digital workspace audit	
+
+cpi_kaizen_suggest	void cpi_kaizen_suggest(const char *agent, const char *title, const char *problem, const char *suggestion, const char *category, char *out, size_t cap)	0	submits kaizen suggestion	
+cpi_kaizen_implement	void cpi_kaizen_implement(const char *suggestion_id, const char *pdca_id, char *out, size_t cap)	0	implements suggestion via PDCA	
+
+cpi_standard_sync	void cpi_standard_sync(const char *kit_path, char *out, size_t cap)	0	syncs exokit contract as standard work	
+cpi_standard_drift	void cpi_standard_drift(char *out, size_t cap)	0	detects standard work drift	
+
+cpi_report	void cpi_report(const char *period, char *out, size_t cap)	0	management review dashboard

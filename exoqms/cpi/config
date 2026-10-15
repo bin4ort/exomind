@@ -1,0 +1,6 @@
+# exokit kit config
+# runner<TAB><command>: executed per example; reads one line
+#   `fn<TAB>args` on stdin, prints one result line on stdout
+runner	runners/c/run
+# max_examples<TAB><n>: audit cap (default 50)
+max_examples	50
