@@ -14,3 +14,7 @@ exogpl/exogpl
 
 # compiled exokit kit runners (built by make kit-*)
 **/kit/runners/c/run
+
+# installed module binaries and runtime state
+bin/
+.exo/
