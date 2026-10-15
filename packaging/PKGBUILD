@@ -4,10 +4,10 @@
 # file, or run packaging/release.sh which prepares it).
 # The build uses a glob for the extracted dir, so any tarball prefix works.
 pkgname=exomind
-pkgver=0.4.1alpha
+pkgver=0.4.2alpha
 pkgrel=1
 pkgdesc="AINSS - AI-Native Software Stack (Early Alpha): memory, scheduling, orchestration, documentation audit, QMS, research, context continuity and the behavioral development kit for AI agents"
-arch=('x86_64')
+arch=('x86_64' 'aarch64' 'armv7h')
 url="https://github.com/bin4ort/exomind"
 license=('GPL-3.0-only')
 groups=()

@@ -1,9 +1,11 @@
 pkgbase = exomind
 	pkgdesc = AINSS - AI-Native Software Stack (Early Alpha): memory, scheduling, orchestration, documentation audit, QMS, research, context continuity and the behavioral development kit for AI agents
-	pkgver = 0.4.1alpha1
+	pkgver = 0.4.2alpha1
 	pkgrel = 1
 	url = https://github.com/bin4ort/exomind
 	arch = x86_64
+	arch = aarch64
+	arch = armv7h
 	license = GPL-3.0-only
 	makedepends = make
 	makedepends = gcc
@@ -17,7 +19,7 @@ pkgbase = exomind
 	provides = exomind
 	options = !strip
 	options = !debug
-	source = exomind-0.4.1alpha1.tar.gz
-	sha256sums = da4b3444f8ee2198d40f2d3b6ca76605137caed5915dfe0973cd2972077e8922
+	source = exomind-0.4.2alpha1.tar.gz
+	sha256sums = 445a951f337c9d6eac11da979c9b28af814c4e6ec1f0c038be76e48584394a10
 
 pkgname = exomind
