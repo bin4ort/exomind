@@ -43,6 +43,7 @@ Status legend: `open` (active) · `fixed` (resolution landed on main) ·
 | ISSUE-012 | OCS-Studio: shell injection in `system()`/`popen()` paths, world-writable `/tmp`, unchecked fork/exec child | fixed | commit `2e150f7` (shell_q, ocs_tmp_dir, checked child); universal QMS audit 100% |
 | ISSUE-013 | exoflow loop feature shipped without regression tests (claim 51/51 unreproducible) | fixed | 27 regression tests added (fixer close-out); observer verifies claims with exact suite lines |
 | ISSUE-014 | Debt markers (`TODO`/`XXX`) scattered in source, untracked | fixed | `debt` check + `debt:*` exomind keys; markers converted to tracked records |
+| ISSUE-029 | `update_prefix()` derived the install prefix with `realpath(argv0)`, so it failed whenever the binary path no longer exists: the kit contract example (`update_prefix` with argv0 `/usr/bin/exomind`) passed only on hosts where exomind happens to be installed in `/usr/bin`, and the update banner printed `<install prefix>` for a moved or removed binary | fixed | `src/update.c`: when `realpath()` fails the literal `argv0` goes through the same two-component strip, so the prefix is derivable and the example is host-independent. Core kit verify 20 ok / 0 fail, audit pass; suite ALL TESTS PASSED; CI `build-exomind` green on a host with no installed exomind |
 
 ## Open (from TODO.md)
 

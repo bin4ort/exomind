@@ -174,8 +174,12 @@ static int update_prefix(char *buf, size_t bufsz, const char *argv0)
         return 0;
     }
     char rp[4096];
-    if (!realpath(argv0, rp))
-        return -1;
+    if (!realpath(argv0, rp)) {
+        /* argv0 often names a path that no longer exists (the binary was moved,
+         * removed, or is only a contract fixture): keep the literal path so the
+         * prefix stays derivable instead of failing on the host's filesystem. */
+        snprintf(rp, sizeof rp, "%s", argv0);
+    }
     char *slash = strrchr(rp, '/');
     if (!slash)
         return -1;
